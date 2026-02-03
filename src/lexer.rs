@@ -4,24 +4,24 @@ use std::{iter::Peekable, str::CharIndices};
 pub enum Token<'a> {
     Identifier(&'a str),
     Integer(i64),
-    
+
     // Keywords
     If,
     Else,
     Def,
     Return,
     Pass,
-    
+
     // Operators
     Equal, // =
     Plus,  // +
     Minus, // -
-    
+
     // Delimiters
     Colon,  // :
     LParen, // (
     RParen, // )
-    
+
     // Structural
     Newline,
     Indent,
@@ -56,7 +56,7 @@ impl<'a> Lexer<'a> {
         }
 
         if self.eof_reached {
-             return Token::EOF;
+            return Token::EOF;
         }
 
         if self.at_line_start {
@@ -108,17 +108,35 @@ impl<'a> Lexer<'a> {
                 self.at_line_start = true;
                 Token::Newline
             }
-            '=' => { self.chars.next(); Token::Equal }
-            '+' => { self.chars.next(); Token::Plus }
-            '-' => { self.chars.next(); Token::Minus }
-            ':' => { self.chars.next(); Token::Colon }
-            '(' => { self.chars.next(); Token::LParen }
-            ')' => { self.chars.next(); Token::RParen }
+            '=' => {
+                self.chars.next();
+                Token::Equal
+            }
+            '+' => {
+                self.chars.next();
+                Token::Plus
+            }
+            '-' => {
+                self.chars.next();
+                Token::Minus
+            }
+            ':' => {
+                self.chars.next();
+                Token::Colon
+            }
+            '(' => {
+                self.chars.next();
+                Token::LParen
+            }
+            ')' => {
+                self.chars.next();
+                Token::RParen
+            }
             c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
             c if c.is_digit(10) => self.read_integer(start_idx),
             _ => {
                 // Unexpected char, skip
-                self.chars.next(); 
+                self.chars.next();
                 self.next_token()
             }
         }
@@ -126,27 +144,27 @@ impl<'a> Lexer<'a> {
 
     fn count_indentation(&mut self) -> usize {
         let mut count = 0;
-        
+
         // Use clone to look ahead for empty lines check
         let mut temp_chars = self.chars.clone();
         let mut is_empty_line = false;
-        
+
         while let Some(&(_, c)) = temp_chars.peek() {
-             if c == ' ' {
+            if c == ' ' {
                 temp_chars.next();
-             } else if c == '\n' {
+            } else if c == '\n' {
                 is_empty_line = true;
                 break;
-             } else {
+            } else {
                 break;
-             }
+            }
         }
-        
+
         if is_empty_line {
-             // Return current indentation to avoid generating Indent/Dedent tokens
-             return *self.indent_stack.last().unwrap();
+            // Return current indentation to avoid generating Indent/Dedent tokens
+            return *self.indent_stack.last().unwrap();
         }
-        
+
         while let Some(&(_, c)) = self.chars.peek() {
             if c == ' ' {
                 self.chars.next();
@@ -155,7 +173,7 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        
+
         count
     }
 
@@ -178,12 +196,12 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        
+
         let end_idx = match self.chars.peek() {
             Some(&(idx, _)) => idx,
             None => self.input.len(),
         };
-        
+
         let ident = &self.input[start..end_idx];
         match ident {
             "if" => Token::If,
@@ -204,12 +222,12 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        
+
         let end_idx = match self.chars.peek() {
             Some(&(idx, _)) => idx,
             None => self.input.len(),
         };
-        
+
         let num_str = &self.input[start..end_idx];
         let num = num_str.parse::<i64>().unwrap_or(0);
         Token::Integer(num)
@@ -259,7 +277,7 @@ mod tests {
         assert_eq!(lexer.next_token(), Token::LParen);
         assert_eq!(lexer.next_token(), Token::RParen);
         assert_eq!(lexer.next_token(), Token::Newline);
-        
+
         assert_eq!(lexer.next_token(), Token::EOF);
     }
 }
