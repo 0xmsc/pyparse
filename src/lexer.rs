@@ -64,7 +64,8 @@ impl<'a> Lexer<'a> {
                 while let Some(&top) = self.indent_stack.last() {
                     if top > indent_level {
                         self.indent_stack.pop();
-                        self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+                        self.pending_tokens
+                            .push(Token::new(TokenKind::Dedent, span));
                     } else {
                         break;
                     }
@@ -93,7 +94,8 @@ impl<'a> Lexer<'a> {
                         line: self.line,
                         column: self.column,
                     };
-                    self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+                    self.pending_tokens
+                        .push(Token::new(TokenKind::Dedent, span));
                 }
                 if !self.pending_tokens.is_empty() {
                     return self.pending_tokens.pop().unwrap();
