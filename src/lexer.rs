@@ -1,33 +1,6 @@
 use std::{iter::Peekable, str::CharIndices};
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Token<'a> {
-    Identifier(&'a str),
-    Integer(i64),
-
-    // Keywords
-    If,
-    Else,
-    Def,
-    Return,
-    Pass,
-
-    // Operators
-    Equal, // =
-    Plus,  // +
-    Minus, // -
-
-    // Delimiters
-    Colon,  // :
-    LParen, // (
-    RParen, // )
-
-    // Structural
-    Newline,
-    Indent,
-    Dedent,
-    EOF,
-}
+use crate::token::{Span, Token, TokenKind};
 
 pub struct Lexer<'a> {
     input: &'a str,
@@ -36,6 +9,8 @@ pub struct Lexer<'a> {
     pending_tokens: Vec<Token<'a>>,
     at_line_start: bool,
     eof_reached: bool,
+    line: usize,
+    column: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -47,6 +22,8 @@ impl<'a> Lexer<'a> {
             pending_tokens: Vec::new(),
             at_line_start: true,
             eof_reached: false,
+            line: 1,
+            column: 0,
         }
     }
 
@@ -56,22 +33,38 @@ impl<'a> Lexer<'a> {
         }
 
         if self.eof_reached {
-            return Token::EOF;
+            let index = self.current_index();
+            return Token::new(
+                TokenKind::EOF,
+                Span {
+                    start: index,
+                    end: index,
+                    line: self.line,
+                    column: self.column,
+                },
+            );
         }
 
         if self.at_line_start {
             self.at_line_start = false;
             let indent_level = self.count_indentation();
             let current_indent = *self.indent_stack.last().unwrap();
+            let index = self.current_index();
+            let span = Span {
+                start: index,
+                end: index,
+                line: self.line,
+                column: self.column,
+            };
 
             if indent_level > current_indent {
                 self.indent_stack.push(indent_level);
-                return Token::Indent;
+                return Token::new(TokenKind::Indent, span);
             } else if indent_level < current_indent {
                 while let Some(&top) = self.indent_stack.last() {
                     if top > indent_level {
                         self.indent_stack.pop();
-                        self.pending_tokens.push(Token::Dedent);
+                        self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
                     } else {
                         break;
                     }
@@ -93,50 +86,126 @@ impl<'a> Lexer<'a> {
                 // Handle remaining dedents at EOF
                 while self.indent_stack.len() > 1 {
                     self.indent_stack.pop();
-                    self.pending_tokens.push(Token::Dedent);
+                    let index = self.current_index();
+                    let span = Span {
+                        start: index,
+                        end: index,
+                        line: self.line,
+                        column: self.column,
+                    };
+                    self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
                 }
                 if !self.pending_tokens.is_empty() {
                     return self.pending_tokens.pop().unwrap();
                 }
-                return Token::EOF;
+                let index = self.current_index();
+                return Token::new(
+                    TokenKind::EOF,
+                    Span {
+                        start: index,
+                        end: index,
+                        line: self.line,
+                        column: self.column,
+                    },
+                );
             }
         };
 
+        let start_line = self.line;
+        let start_column = self.column;
         match ch {
             '\n' => {
-                self.chars.next();
+                self.advance_char();
                 self.at_line_start = true;
-                Token::Newline
+                Token::new(
+                    TokenKind::Newline,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             '=' => {
-                self.chars.next();
-                Token::Equal
+                self.advance_char();
+                Token::new(
+                    TokenKind::Equal,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             '+' => {
-                self.chars.next();
-                Token::Plus
+                self.advance_char();
+                Token::new(
+                    TokenKind::Plus,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             '-' => {
-                self.chars.next();
-                Token::Minus
+                self.advance_char();
+                Token::new(
+                    TokenKind::Minus,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             ':' => {
-                self.chars.next();
-                Token::Colon
+                self.advance_char();
+                Token::new(
+                    TokenKind::Colon,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             '(' => {
-                self.chars.next();
-                Token::LParen
+                self.advance_char();
+                Token::new(
+                    TokenKind::LParen,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
             ')' => {
-                self.chars.next();
-                Token::RParen
+                self.advance_char();
+                Token::new(
+                    TokenKind::RParen,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
             }
-            c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
-            c if c.is_digit(10) => self.read_integer(start_idx),
+            c if c.is_alphabetic() || c == '_' => {
+                self.read_identifier(start_idx, start_line, start_column)
+            }
+            c if c.is_digit(10) => self.read_integer(start_idx, start_line, start_column),
             _ => {
                 // Unexpected char, skip
-                self.chars.next();
+                self.advance_char();
                 self.next_token()
             }
         }
@@ -167,7 +236,7 @@ impl<'a> Lexer<'a> {
 
         while let Some(&(_, c)) = self.chars.peek() {
             if c == ' ' {
-                self.chars.next();
+                self.advance_char();
                 count += 1;
             } else {
                 break;
@@ -180,18 +249,18 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace(&mut self) {
         while let Some(&(_, c)) = self.chars.peek() {
             if c == ' ' {
-                self.chars.next();
+                self.advance_char();
             } else {
                 break;
             }
         }
     }
 
-    fn read_identifier(&mut self, start: usize) -> Token<'a> {
-        self.chars.next(); // Consume first char
+    fn read_identifier(&mut self, start: usize, line: usize, column: usize) -> Token<'a> {
+        self.advance_char(); // Consume first char
         while let Some(&(_, c)) = self.chars.peek() {
             if c.is_alphanumeric() || c == '_' {
-                self.chars.next();
+                self.advance_char();
             } else {
                 break;
             }
@@ -203,21 +272,30 @@ impl<'a> Lexer<'a> {
         };
 
         let ident = &self.input[start..end_idx];
-        match ident {
-            "if" => Token::If,
-            "else" => Token::Else,
-            "def" => Token::Def,
-            "return" => Token::Return,
-            "pass" => Token::Pass,
-            _ => Token::Identifier(ident),
-        }
+        let kind = match ident {
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "def" => TokenKind::Def,
+            "return" => TokenKind::Return,
+            "pass" => TokenKind::Pass,
+            _ => TokenKind::Identifier(ident),
+        };
+        Token::new(
+            kind,
+            Span {
+                start,
+                end: end_idx,
+                line,
+                column,
+            },
+        )
     }
 
-    fn read_integer(&mut self, start: usize) -> Token<'a> {
-        self.chars.next(); // Consume first digit
+    fn read_integer(&mut self, start: usize, line: usize, column: usize) -> Token<'a> {
+        self.advance_char(); // Consume first digit
         while let Some(&(_, c)) = self.chars.peek() {
             if c.is_digit(10) {
-                self.chars.next();
+                self.advance_char();
             } else {
                 break;
             }
@@ -230,8 +308,52 @@ impl<'a> Lexer<'a> {
 
         let num_str = &self.input[start..end_idx];
         let num = num_str.parse::<i64>().unwrap_or(0);
-        Token::Integer(num)
+        Token::new(
+            TokenKind::Integer(num),
+            Span {
+                start,
+                end: end_idx,
+                line,
+                column,
+            },
+        )
     }
+}
+
+impl<'a> Lexer<'a> {
+    fn advance_char(&mut self) -> Option<(usize, char)> {
+        let next = self.chars.next();
+        if let Some((_, c)) = next {
+            if c == '\n' {
+                self.line += 1;
+                self.column = 0;
+            } else {
+                self.column += 1;
+            }
+        }
+        next
+    }
+
+    fn current_index(&mut self) -> usize {
+        self.chars
+            .peek()
+            .map(|(idx, _)| *idx)
+            .unwrap_or(self.input.len())
+    }
+}
+
+pub fn tokenize<'a>(input: &'a str) -> Vec<Token<'a>> {
+    let mut lexer = Lexer::new(input);
+    let mut tokens = Vec::new();
+    loop {
+        let token = lexer.next_token();
+        let is_eof = matches!(token.kind, TokenKind::EOF);
+        tokens.push(token);
+        if is_eof {
+            break;
+        }
+    }
+    tokens
 }
 
 #[cfg(test)]
@@ -249,35 +371,35 @@ mod tests {
         "};
         let mut lexer = Lexer::new(input);
 
-        assert_eq!(lexer.next_token(), Token::Def);
-        assert_eq!(lexer.next_token(), Token::Identifier("fn"));
-        assert_eq!(lexer.next_token(), Token::LParen);
-        assert_eq!(lexer.next_token(), Token::RParen);
-        assert_eq!(lexer.next_token(), Token::Colon);
-        assert_eq!(lexer.next_token(), Token::Newline);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Def);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Identifier("fn"));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::LParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::RParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Colon);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Newline);
 
-        assert_eq!(lexer.next_token(), Token::Indent);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Indent);
 
-        assert_eq!(lexer.next_token(), Token::Identifier("n"));
-        assert_eq!(lexer.next_token(), Token::Equal);
-        assert_eq!(lexer.next_token(), Token::Integer(4));
-        assert_eq!(lexer.next_token(), Token::Plus);
-        assert_eq!(lexer.next_token(), Token::Integer(4));
-        assert_eq!(lexer.next_token(), Token::Newline);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Identifier("n"));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Equal);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Integer(4));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Plus);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Integer(4));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Newline);
 
-        assert_eq!(lexer.next_token(), Token::Identifier("print"));
-        assert_eq!(lexer.next_token(), Token::LParen);
-        assert_eq!(lexer.next_token(), Token::Identifier("n"));
-        assert_eq!(lexer.next_token(), Token::RParen);
-        assert_eq!(lexer.next_token(), Token::Newline);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Identifier("print"));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::LParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Identifier("n"));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::RParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Newline);
 
-        assert_eq!(lexer.next_token(), Token::Dedent);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Dedent);
 
-        assert_eq!(lexer.next_token(), Token::Identifier("fn"));
-        assert_eq!(lexer.next_token(), Token::LParen);
-        assert_eq!(lexer.next_token(), Token::RParen);
-        assert_eq!(lexer.next_token(), Token::Newline);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Identifier("fn"));
+        assert_eq!(lexer.next_token().kind(), &TokenKind::LParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::RParen);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::Newline);
 
-        assert_eq!(lexer.next_token(), Token::EOF);
+        assert_eq!(lexer.next_token().kind(), &TokenKind::EOF);
     }
 }

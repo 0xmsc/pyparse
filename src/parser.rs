@@ -1,27 +1,30 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
+
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::lexer::{Lexer, Token};
+use crate::token::{Span, Token, TokenKind};
 
 pub struct Parser<'a> {
-    lexer: Lexer<'a>,
+    tokens: Vec<Token<'a>>,
+    pos: usize,
     current: Token<'a>,
-    peeked: Option<Token<'a>>,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a str) -> Self {
-        let mut lexer = Lexer::new(input);
-        let current = lexer.next_token();
+    pub fn new(mut tokens: Vec<Token<'a>>) -> Self {
+        if tokens.is_empty() {
+            tokens.push(Token::new(TokenKind::EOF, Span::default()));
+        }
+        let current = tokens[0].clone();
         Self {
-            lexer,
+            tokens,
+            pos: 0,
             current,
-            peeked: None,
         }
     }
 
     pub fn parse_program(mut self) -> Result<Program> {
         let mut statements = Vec::new();
-        while !matches!(self.current, Token::EOF) {
+        while !matches!(self.current.kind, TokenKind::EOF) {
             if self.consume_newlines() {
                 continue;
             }
@@ -31,10 +34,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement> {
-        if matches!(self.current, Token::Def) {
+        if matches!(self.current.kind, TokenKind::Def) {
             return self.parse_function_def();
         }
-        if matches!(self.current, Token::Identifier(_)) && matches!(self.peek(), Token::Equal) {
+        if matches!(self.current.kind, TokenKind::Identifier(_))
+            && matches!(self.peek_kind(), TokenKind::Equal)
+        {
             return self.parse_assignment();
         }
         let expr = self.parse_expression()?;
@@ -52,7 +57,7 @@ impl<'a> Parser<'a> {
         self.expect_indent()?;
 
         let mut body = Vec::new();
-        while !matches!(self.current, Token::Dedent | Token::EOF) {
+        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
             if self.consume_newlines() {
                 continue;
             }
@@ -74,7 +79,7 @@ impl<'a> Parser<'a> {
     fn parse_expression(&mut self) -> Result<Expression> {
         let mut expr = self.parse_call()?;
         loop {
-            if matches!(self.current, Token::Plus) {
+            if matches!(self.current.kind, TokenKind::Plus) {
                 self.advance();
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
@@ -82,7 +87,7 @@ impl<'a> Parser<'a> {
                     op: BinaryOperator::Add,
                     right: Box::new(right),
                 };
-            } else if matches!(self.current, Token::Minus) {
+            } else if matches!(self.current.kind, TokenKind::Minus) {
                 self.advance();
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
@@ -99,10 +104,10 @@ impl<'a> Parser<'a> {
 
     fn parse_call(&mut self) -> Result<Expression> {
         let mut expr = self.parse_primary()?;
-        while matches!(self.current, Token::LParen) {
+        while matches!(self.current.kind, TokenKind::LParen) {
             self.advance();
             let mut args = Vec::new();
-            if !matches!(self.current, Token::RParen) {
+            if !matches!(self.current.kind, TokenKind::RParen) {
                 args.push(self.parse_expression()?);
             }
             self.expect_rparen()?;
@@ -115,30 +120,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> Result<Expression> {
-        match &self.current {
-            Token::Integer(value) => {
+        match &self.current.kind {
+            TokenKind::Integer(value) => {
                 let value = *value;
                 self.advance();
                 Ok(Expression::Integer(value))
             }
-            Token::Identifier(name) => {
+            TokenKind::Identifier(name) => {
                 let name = name.to_string();
                 self.advance();
                 Ok(Expression::Identifier(name))
             }
-            Token::LParen => {
+            TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expression()?;
                 self.expect_rparen()?;
                 Ok(expr)
             }
-            _ => bail!("Expected expression, got {:?}", self.current),
+            _ => Err(self.error("expression")),
         }
     }
 
     fn consume_newlines(&mut self) -> bool {
         let mut consumed = false;
-        while matches!(self.current, Token::Newline) {
+        while matches!(self.current.kind, TokenKind::Newline) {
             consumed = true;
             self.advance();
         }
@@ -146,127 +151,156 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_identifier(&mut self) -> Result<String> {
-        if let Token::Identifier(name) = &self.current {
+        if let TokenKind::Identifier(name) = &self.current.kind {
             let name = name.to_string();
             self.advance();
             Ok(name)
         } else {
-            bail!("Expected identifier, got {:?}", self.current)
+            Err(self.error("identifier"))
         }
     }
 
     fn expect_def(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Def) {
+        if matches!(self.current.kind, TokenKind::Def) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected def, got {:?}", self.current)
+            Err(self.error("def"))
         }
     }
 
     fn expect_equal(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Equal) {
+        if matches!(self.current.kind, TokenKind::Equal) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected =, got {:?}", self.current)
+            Err(self.error("="))
         }
     }
 
     fn expect_lparen(&mut self) -> Result<()> {
-        if matches!(self.current, Token::LParen) {
+        if matches!(self.current.kind, TokenKind::LParen) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected (, got {:?}", self.current)
+            Err(self.error("("))
         }
     }
 
     fn expect_rparen(&mut self) -> Result<()> {
-        if matches!(self.current, Token::RParen) {
+        if matches!(self.current.kind, TokenKind::RParen) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected ), got {:?}", self.current)
+            Err(self.error(")"))
         }
     }
 
     fn expect_colon(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Colon) {
+        if matches!(self.current.kind, TokenKind::Colon) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected :, got {:?}", self.current)
+            Err(self.error(":"))
         }
     }
 
     fn expect_newline(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Newline) {
+        if matches!(self.current.kind, TokenKind::Newline) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected newline, got {:?}", self.current)
+            Err(self.error("newline"))
         }
     }
 
     fn expect_indent(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Indent) {
+        if matches!(self.current.kind, TokenKind::Indent) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected indent, got {:?}", self.current)
+            Err(self.error("indent"))
         }
     }
 
     fn expect_dedent(&mut self) -> Result<()> {
-        if matches!(self.current, Token::Dedent) {
+        if matches!(self.current.kind, TokenKind::Dedent) {
             self.advance();
             Ok(())
         } else {
-            bail!("Expected dedent, got {:?}", self.current)
+            Err(self.error("dedent"))
         }
     }
 
     fn advance(&mut self) -> Token<'a> {
-        let next = self.next_token();
+        let next = self
+            .tokens
+            .get(self.pos + 1)
+            .cloned()
+            .unwrap_or(Token::new(TokenKind::EOF, Span::default()));
+        self.pos = self.pos.saturating_add(1);
         std::mem::replace(&mut self.current, next)
     }
 
-    fn next_token(&mut self) -> Token<'a> {
-        if let Some(token) = self.peeked.take() {
-            token
-        } else {
-            self.lexer.next_token()
-        }
+    fn peek_kind(&self) -> TokenKind<'a> {
+        self.tokens
+            .get(self.pos + 1)
+            .map(|token| token.kind)
+            .unwrap_or(TokenKind::EOF)
     }
 
-    fn peek(&mut self) -> &Token<'a> {
-        if self.peeked.is_none() {
-            self.peeked = Some(self.lexer.next_token());
-        }
-        self.peeked.as_ref().expect("peeked token missing")
+    fn error(&self, expected: &str) -> anyhow::Error {
+        let span = self.current.span();
+        anyhow::anyhow!(
+            "Expected {expected}, got {:?} at line {}, column {}",
+            self.current.kind(),
+            span.line,
+            span.column
+        )
     }
-
 }
 
-pub fn parse(input: &str) -> Result<Program> {
-    Parser::new(input).parse_program()
+pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> Result<Program> {
+    Parser::new(tokens).parse_program()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use indoc::indoc;
 
     #[test]
     fn parses_simple_program() {
-        let input = indoc! {"
-            def fn():
-                n = 4 + 4
-                print(n)
-            fn()
-        "};
-        let program = parse(input).expect("parse failed");
+        fn tok<'a>(kind: TokenKind<'a>) -> Token<'a> {
+            Token::new(kind, Span::default())
+        }
+
+        let tokens = vec![
+            tok(TokenKind::Def),
+            tok(TokenKind::Identifier("fn")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Identifier("n")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(4)),
+            tok(TokenKind::Plus),
+            tok(TokenKind::Integer(4)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("n")),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Identifier("fn")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+        let program = parse_tokens(tokens).expect("parse failed");
 
         let expected = Program {
             statements: vec![

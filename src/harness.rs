@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 
-use crate::{backend, parser};
+use crate::{backend, lexer, parser};
 
 fn normalize_output(output: &str) -> String {
     output.replace("\r\n", "\n").trim_end().to_string()
@@ -37,8 +37,9 @@ fn runs_programs_across_backends() -> Result<()> {
         let expected = fs::read_to_string(&expected_path)
             .with_context(|| format!("Reading {}", expected_path.display()))?;
 
+        let tokens = lexer::tokenize(&source);
         let program =
-            parser::parse(&source).with_context(|| format!("Parsing {}", path.display()))?;
+            parser::parse_tokens(tokens).with_context(|| format!("Parsing {}", path.display()))?;
         let expected_output = normalize_output(&expected);
 
         for mut backend in backend::backends() {
