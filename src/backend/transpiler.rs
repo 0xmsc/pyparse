@@ -1,7 +1,6 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::ast::Program;
-use crate::backend::interpreter::Interpreter;
 use crate::backend::Backend;
 
 pub struct Transpiler;
@@ -17,8 +16,7 @@ impl Backend for Transpiler {
         "transpiler"
     }
 
-    fn run(&mut self, program: &Program) -> Result<String> {
-        let mut interpreter = Interpreter::new();
-        interpreter.run(program)
+    fn run(&mut self, _program: &Program) -> Result<String> {
+        bail!("Transpiler backend not implemented")
     }
 }

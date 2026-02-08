@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::ast::Program;
 
 pub mod interpreter;
-pub mod vm;
 pub mod transpiler;
+pub mod vm;
 
 pub trait Backend {
     fn name(&self) -> &'static str;
@@ -14,7 +14,7 @@ pub trait Backend {
 pub fn backends() -> Vec<Box<dyn Backend>> {
     vec![
         Box::new(interpreter::Interpreter::new()),
-        Box::new(vm::VM),
-        Box::new(transpiler::Transpiler),
+        // Box::new(vm::VM),
+        // Box::new(transpiler::Transpiler),
     ]
 }
