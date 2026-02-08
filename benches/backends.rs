@@ -3,6 +3,7 @@ use std::fs;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use pyparse::{backend, lexer, parser};
+use pyparse::backend::Backend;
 
 fn bench_backends(c: &mut Criterion) {
     let source = fs::read_to_string("tests/programs/long.py").expect("read long.py");
