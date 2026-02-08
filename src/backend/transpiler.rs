@@ -15,11 +15,18 @@ const C_HEADERS: &str = r#"#include <inttypes.h>
 
 "#;
 
-const C_VALUE_TYPES: &str = r#"typedef enum { VAL_INT, VAL_NONE } ValueTag;
-typedef struct { ValueTag tag; int64_t int_value; } Value;
+const C_VALUE_TYPES: &str = r#"typedef enum { VAL_INT, VAL_BOOL, VAL_STR, VAL_NONE } ValueTag;
+typedef struct {
+    ValueTag tag;
+    int64_t int_value;
+    int bool_value;
+    const char *str_value;
+} Value;
 
-static Value make_int(int64_t v) { Value value = { VAL_INT, v }; return value; }
-static Value make_none(void) { Value value = { VAL_NONE, 0 }; return value; }
+static Value make_int(int64_t v) { Value value = { VAL_INT, v, 0, NULL }; return value; }
+static Value make_bool(int v) { Value value = { VAL_BOOL, 0, v != 0, NULL }; return value; }
+static Value make_str(const char *v) { Value value = { VAL_STR, 0, 0, v }; return value; }
+static Value make_none(void) { Value value = { VAL_NONE, 0, 0, NULL }; return value; }
 
 "#;
 
@@ -43,9 +50,29 @@ static Value binary_sub(Value lhs, Value rhs) {
 
 "#;
 
+const C_TRUTHY: &str = r#"static int is_truthy(Value value) {
+    switch (value.tag) {
+        case VAL_INT:
+            return value.int_value != 0;
+        case VAL_BOOL:
+            return value.bool_value != 0;
+        case VAL_STR:
+            return value.str_value != NULL && value.str_value[0] != '\0';
+        case VAL_NONE:
+        default:
+            return 0;
+    }
+}
+
+"#;
+
 const C_PRINT: &str = r#"static void print_value(Value value) {
     if (value.tag == VAL_INT) {
         printf("%" PRId64, value.int_value);
+    } else if (value.tag == VAL_BOOL) {
+        printf(value.bool_value ? "True" : "False");
+    } else if (value.tag == VAL_STR) {
+        printf("%s", value.str_value ? value.str_value : "");
     } else {
         printf("None");
     }
@@ -76,6 +103,7 @@ impl Transpiler {
         output.push_str(C_VALUE_TYPES);
         output.push_str(C_EXPECT_INT);
         output.push_str(C_BINARY_OPS);
+        output.push_str(C_TRUTHY);
         output.push_str(C_PRINT);
 
         for (name, _) in &functions {
@@ -86,7 +114,7 @@ impl Transpiler {
         }
 
         for name in &globals {
-            output.push_str(&format!("static Value {name} = {{ VAL_NONE, 0 }};\n"));
+            output.push_str(&format!("static Value {name} = {{ VAL_NONE, 0, 0, NULL }};\n"));
         }
         if !globals.is_empty() {
             output.push('\n');
@@ -96,7 +124,7 @@ impl Transpiler {
             let locals = self.collect_locals(body)?;
             output.push_str(&format!("static Value {name}(void) {{\n"));
             for local in &locals {
-                output.push_str(&format!("    Value {local} = {{ VAL_NONE, 0 }};\n"));
+                output.push_str(&format!("    Value {local} = {{ VAL_NONE, 0, 0, NULL }};\n"));
             }
             if !locals.is_empty() {
                 output.push('\n');
@@ -138,9 +166,7 @@ impl Transpiler {
     fn collect_globals(&self, statements: &[&Statement]) -> HashSet<String> {
         let mut globals = HashSet::new();
         for statement in statements {
-            if let Statement::Assign { name, .. } = statement {
-                globals.insert(name.to_string());
-            }
+            self.collect_assignments(statement, &mut globals);
         }
         globals
     }
@@ -148,17 +174,59 @@ impl Transpiler {
     fn collect_locals(&self, statements: &[Statement]) -> Result<HashSet<String>> {
         let mut locals = HashSet::new();
         for statement in statements {
-            match statement {
-                Statement::Assign { name, .. } => {
-                    locals.insert(name.to_string());
-                }
-                Statement::FunctionDef { .. } => {
-                    bail!("Nested function definitions are not supported in the transpiler")
-                }
-                Statement::Expr(_) => {}
-            }
+            self.collect_assignments_in_function(statement, &mut locals)?;
         }
         Ok(locals)
+    }
+
+    fn collect_assignments(&self, statement: &Statement, names: &mut HashSet<String>) {
+        match statement {
+            Statement::Assign { name, .. } => {
+                names.insert(name.to_string());
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for stmt in then_body {
+                    self.collect_assignments(stmt, names);
+                }
+                for stmt in else_body {
+                    self.collect_assignments(stmt, names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_assignments_in_function(
+        &self,
+        statement: &Statement,
+        names: &mut HashSet<String>,
+    ) -> Result<()> {
+        match statement {
+            Statement::Assign { name, .. } => {
+                names.insert(name.to_string());
+            }
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for stmt in then_body {
+                    self.collect_assignments_in_function(stmt, names)?;
+                }
+                for stmt in else_body {
+                    self.collect_assignments_in_function(stmt, names)?;
+                }
+            }
+            Statement::FunctionDef { .. } => {
+                bail!("Nested function definitions are not supported in the transpiler")
+            }
+            Statement::Expr(_) | Statement::Return(_) | Statement::Pass => {}
+        }
+        Ok(())
     }
 
     fn emit_statement(
@@ -173,6 +241,37 @@ impl Transpiler {
                 let expr = self.emit_expression(value)?;
                 self.push_line(output, indent, &format!("{name} = {expr};"));
             }
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let condition = self.emit_expression(condition)?;
+                self.push_line(output, indent, &format!("if (is_truthy({condition})) {{"));
+                for stmt in then_body {
+                    self.emit_statement(stmt, indent + 1, output, in_function)?;
+                }
+                self.push_line(output, indent, "}");
+                if !else_body.is_empty() {
+                    self.push_line(output, indent, "else {");
+                    for stmt in else_body {
+                        self.emit_statement(stmt, indent + 1, output, in_function)?;
+                    }
+                    self.push_line(output, indent, "}");
+                }
+            }
+            Statement::Return(value) => {
+                if !in_function {
+                    bail!("Return outside of function is not supported in the transpiler");
+                }
+                let expr = if let Some(value) = value {
+                    self.emit_expression(value)?
+                } else {
+                    "make_none()".to_string()
+                };
+                self.push_line(output, indent, &format!("return {expr};"));
+            }
+            Statement::Pass => {}
             Statement::Expr(expr) => {
                 let expr = self.emit_expression(expr)?;
                 self.push_line(output, indent, &format!("{expr};"));
@@ -191,6 +290,11 @@ impl Transpiler {
     fn emit_expression(&self, expr: &Expression) -> Result<String> {
         match expr {
             Expression::Integer(value) => Ok(format!("make_int({value})")),
+            Expression::Boolean(value) => Ok(format!("make_bool({})", if *value { 1 } else { 0 })),
+            Expression::String(value) => {
+                let escaped = self.escape_c_string(value);
+                Ok(format!("make_str(\"{escaped}\")"))
+            }
             Expression::Identifier(name) => Ok(name.to_string()),
             Expression::BinaryOp { left, op, right } => {
                 let left = self.emit_expression(left)?;
@@ -231,6 +335,21 @@ impl Transpiler {
         }
         output.push_str(line);
         output.push('\n');
+    }
+
+    fn escape_c_string(&self, value: &str) -> String {
+        let mut escaped = String::new();
+        for ch in value.chars() {
+            match ch {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                _ => escaped.push(ch),
+            }
+        }
+        escaped
     }
 
     fn write_temp_file(&self, contents: &str, suffix: &str) -> Result<(PathBuf, PathBuf)> {

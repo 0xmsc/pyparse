@@ -10,6 +10,9 @@ pub struct Span {
 pub enum TokenKind<'a> {
     Identifier(&'a str),
     Integer(i64),
+    String(&'a str),
+    True,
+    False,
 
     // Keywords
     If,

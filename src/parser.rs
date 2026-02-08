@@ -37,6 +37,15 @@ impl<'a> Parser<'a> {
         if matches!(self.current.kind, TokenKind::Def) {
             return self.parse_function_def();
         }
+        if matches!(self.current.kind, TokenKind::If) {
+            return self.parse_if();
+        }
+        if matches!(self.current.kind, TokenKind::Return) {
+            return self.parse_return();
+        }
+        if matches!(self.current.kind, TokenKind::Pass) {
+            return self.parse_pass();
+        }
         if matches!(self.current.kind, TokenKind::Identifier(_))
             && matches!(self.peek_kind(), TokenKind::Equal)
         {
@@ -74,6 +83,61 @@ impl<'a> Parser<'a> {
         let value = self.parse_expression()?;
         self.expect_newline()?;
         Ok(Statement::Assign { name, value })
+    }
+
+    fn parse_if(&mut self) -> Result<Statement> {
+        self.expect_if()?;
+        let condition = self.parse_expression()?;
+        self.expect_colon()?;
+        self.expect_newline()?;
+        self.expect_indent()?;
+
+        let mut then_body = Vec::new();
+        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
+            if self.consume_newlines() {
+                continue;
+            }
+            then_body.push(self.parse_statement()?);
+        }
+        self.expect_dedent()?;
+
+        let mut else_body = Vec::new();
+        if matches!(self.current.kind, TokenKind::Else) {
+            self.expect_else()?;
+            self.expect_colon()?;
+            self.expect_newline()?;
+            self.expect_indent()?;
+            while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
+                if self.consume_newlines() {
+                    continue;
+                }
+                else_body.push(self.parse_statement()?);
+            }
+            self.expect_dedent()?;
+        }
+
+        Ok(Statement::If {
+            condition,
+            then_body,
+            else_body,
+        })
+    }
+
+    fn parse_return(&mut self) -> Result<Statement> {
+        self.expect_return()?;
+        if matches!(self.current.kind, TokenKind::Newline) {
+            self.advance();
+            return Ok(Statement::Return(None));
+        }
+        let value = self.parse_expression()?;
+        self.expect_newline()?;
+        Ok(Statement::Return(Some(value)))
+    }
+
+    fn parse_pass(&mut self) -> Result<Statement> {
+        self.expect_pass()?;
+        self.expect_newline()?;
+        Ok(Statement::Pass)
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
@@ -126,6 +190,19 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(Expression::Integer(value))
             }
+            TokenKind::True => {
+                self.advance();
+                Ok(Expression::Boolean(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Expression::Boolean(false))
+            }
+            TokenKind::String(value) => {
+                let value = value.to_string();
+                self.advance();
+                Ok(Expression::String(value))
+            }
             TokenKind::Identifier(name) => {
                 let name = name.to_string();
                 self.advance();
@@ -166,6 +243,42 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             Err(self.error("def"))
+        }
+    }
+
+    fn expect_if(&mut self) -> Result<()> {
+        if matches!(self.current.kind, TokenKind::If) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error("if"))
+        }
+    }
+
+    fn expect_else(&mut self) -> Result<()> {
+        if matches!(self.current.kind, TokenKind::Else) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error("else"))
+        }
+    }
+
+    fn expect_return(&mut self) -> Result<()> {
+        if matches!(self.current.kind, TokenKind::Return) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error("return"))
+        }
+    }
+
+    fn expect_pass(&mut self) -> Result<()> {
+        if matches!(self.current.kind, TokenKind::Pass) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error("pass"))
         }
     }
 

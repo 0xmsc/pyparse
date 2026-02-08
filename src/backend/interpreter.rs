@@ -7,6 +7,8 @@ use crate::backend::Backend;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
+    Boolean(bool),
+    String(String),
     None,
 }
 
@@ -14,14 +16,29 @@ impl Value {
     fn as_int(&self) -> Result<i64> {
         match self {
             Value::Integer(value) => Ok(*value),
-            Value::None => bail!("Expected integer, got None"),
+            Value::Boolean(_) | Value::String(_) | Value::None => {
+                bail!("Expected integer, got {self:?}")
+            }
         }
     }
 
     fn to_output(&self) -> String {
         match self {
             Value::Integer(value) => value.to_string(),
+            Value::Boolean(value) => {
+                if *value { "True".to_string() } else { "False".to_string() }
+            }
+            Value::String(value) => value.clone(),
             Value::None => "None".to_string(),
+        }
+    }
+
+    fn is_truthy(&self) -> bool {
+        match self {
+            Value::Integer(value) => *value != 0,
+            Value::Boolean(value) => *value,
+            Value::String(value) => !value.is_empty(),
+            Value::None => false,
         }
     }
 }
@@ -35,6 +52,11 @@ pub struct Interpreter {
     globals: HashMap<String, Value>,
     functions: HashMap<String, Function>,
     output: Vec<String>,
+}
+
+enum ExecResult {
+    Continue,
+    Return(Value),
 }
 
 impl Interpreter {
@@ -51,7 +73,10 @@ impl Interpreter {
         self.functions.clear();
         self.output.clear();
         for statement in &program.statements {
-            self.exec_statement(statement, None)?;
+            match self.exec_statement(statement, None)? {
+                ExecResult::Continue => {}
+                ExecResult::Return(_) => bail!("Return outside of function"),
+            }
         }
         Ok(self.output.join("\n"))
     }
@@ -60,12 +85,12 @@ impl Interpreter {
         &mut self,
         statement: &Statement,
         mut locals: Option<&mut HashMap<String, Value>>,
-    ) -> Result<()> {
+    ) -> Result<ExecResult> {
         match statement {
             Statement::FunctionDef { name, body } => {
                 self.functions
                     .insert(name.to_string(), Function { body: body.clone() });
-                Ok(())
+                Ok(ExecResult::Continue)
             }
             Statement::Assign { name, value } => {
                 let value = self.eval_expression(value, locals.as_deref_mut())?;
@@ -74,11 +99,39 @@ impl Interpreter {
                 } else {
                     self.globals.insert(name.to_string(), value);
                 }
-                Ok(())
+                Ok(ExecResult::Continue)
             }
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let condition = self.eval_expression(condition, locals.as_deref_mut())?;
+                let body = if condition.is_truthy() {
+                    then_body
+                } else {
+                    else_body
+                };
+                for stmt in body {
+                    match self.exec_statement(stmt, locals.as_deref_mut())? {
+                        ExecResult::Continue => {}
+                        ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
+                    }
+                }
+                Ok(ExecResult::Continue)
+            }
+            Statement::Return(value) => {
+                let value = if let Some(value) = value {
+                    self.eval_expression(value, locals.as_deref_mut())?
+                } else {
+                    Value::None
+                };
+                Ok(ExecResult::Return(value))
+            }
+            Statement::Pass => Ok(ExecResult::Continue),
             Statement::Expr(expr) => {
                 self.eval_expression(expr, locals.as_deref_mut())?;
-                Ok(())
+                Ok(ExecResult::Continue)
             }
         }
     }
@@ -90,6 +143,8 @@ impl Interpreter {
     ) -> Result<Value> {
         match expr {
             Expression::Integer(value) => Ok(Value::Integer(*value)),
+            Expression::Boolean(value) => Ok(Value::Boolean(*value)),
+            Expression::String(value) => Ok(Value::String(value.clone())),
             Expression::Identifier(name) => {
                 if let Some(locals) = locals.as_deref() {
                     if let Some(value) = locals.get(name) {
@@ -146,7 +201,10 @@ impl Interpreter {
                     }
                     let mut local_scope = HashMap::new();
                     for statement in &function.body {
-                        self.exec_statement(statement, Some(&mut local_scope))?;
+                        match self.exec_statement(statement, Some(&mut local_scope))? {
+                            ExecResult::Continue => {}
+                            ExecResult::Return(value) => return Ok(value),
+                        }
                     }
                     Ok(Value::None)
                 }

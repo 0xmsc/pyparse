@@ -2,6 +2,8 @@
 pub enum Expression {
     Integer(i64),
     Identifier(String),
+    Boolean(bool),
+    String(String),
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOperator,
@@ -29,6 +31,13 @@ pub enum Statement {
         name: String,
         value: Expression,
     },
+    If {
+        condition: Expression,
+        then_body: Vec<Statement>,
+        else_body: Vec<Statement>,
+    },
+    Return(Option<Expression>),
+    Pass,
     Expr(Expression),
 }
 

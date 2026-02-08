@@ -7,6 +7,8 @@ use crate::backend::Backend;
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
     Integer(i64),
+    Boolean(bool),
+    String(String),
     None,
 }
 
@@ -14,14 +16,29 @@ impl Value {
     fn as_int(&self) -> Result<i64> {
         match self {
             Value::Integer(value) => Ok(*value),
-            Value::None => bail!("Expected integer, got None"),
+            Value::Boolean(_) | Value::String(_) | Value::None => {
+                bail!("Expected integer, got {self:?}")
+            }
         }
     }
 
     fn to_output(&self) -> String {
         match self {
             Value::Integer(value) => value.to_string(),
+            Value::Boolean(value) => {
+                if *value { "True".to_string() } else { "False".to_string() }
+            }
+            Value::String(value) => value.clone(),
             Value::None => "None".to_string(),
+        }
+    }
+
+    fn is_truthy(&self) -> bool {
+        match self {
+            Value::Integer(value) => *value != 0,
+            Value::Boolean(value) => *value,
+            Value::String(value) => !value.is_empty(),
+            Value::None => false,
         }
     }
 }
@@ -29,6 +46,9 @@ impl Value {
 #[derive(Debug, Clone)]
 enum Instruction {
     PushInt(i64),
+    PushBool(bool),
+    PushString(String),
+    PushNone,
     LoadName(String),
     StoreName(String),
     Add,
@@ -36,8 +56,11 @@ enum Instruction {
     CallBuiltinPrint0,
     CallBuiltinPrint1,
     CallFunction(String),
+    JumpIfFalse(usize),
+    Jump(usize),
     Pop,
     Return,
+    ReturnValue,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +128,44 @@ impl VM {
                 self.compile_expression(value, code)?;
                 code.push(Instruction::StoreName(name.to_string()));
             }
+            Statement::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                self.compile_expression(condition, code)?;
+                let jump_if_false_pos = code.len();
+                code.push(Instruction::JumpIfFalse(0));
+                for stmt in then_body {
+                    self.compile_statement(stmt, code, in_function)?;
+                }
+                if else_body.is_empty() {
+                    let end = code.len();
+                    code[jump_if_false_pos] = Instruction::JumpIfFalse(end);
+                } else {
+                    let jump_pos = code.len();
+                    code.push(Instruction::Jump(0));
+                    let else_start = code.len();
+                    code[jump_if_false_pos] = Instruction::JumpIfFalse(else_start);
+                    for stmt in else_body {
+                        self.compile_statement(stmt, code, in_function)?;
+                    }
+                    let end = code.len();
+                    code[jump_pos] = Instruction::Jump(end);
+                }
+            }
+            Statement::Return(value) => {
+                if !in_function {
+                    bail!("Return outside of function is not supported in the VM");
+                }
+                if let Some(value) = value {
+                    self.compile_expression(value, code)?;
+                } else {
+                    code.push(Instruction::PushNone);
+                }
+                code.push(Instruction::ReturnValue);
+            }
+            Statement::Pass => {}
             Statement::Expr(expr) => {
                 self.compile_expression(expr, code)?;
                 code.push(Instruction::Pop);
@@ -124,6 +185,12 @@ impl VM {
         match expr {
             Expression::Integer(value) => {
                 code.push(Instruction::PushInt(*value));
+            }
+            Expression::Boolean(value) => {
+                code.push(Instruction::PushBool(*value));
+            }
+            Expression::String(value) => {
+                code.push(Instruction::PushString(value.clone()));
             }
             Expression::Identifier(name) => {
                 code.push(Instruction::LoadName(name.to_string()));
@@ -184,6 +251,9 @@ impl VM {
             ip += 1;
             match instruction {
                 Instruction::PushInt(value) => stack.push(Value::Integer(value)),
+                Instruction::PushBool(value) => stack.push(Value::Boolean(value)),
+                Instruction::PushString(value) => stack.push(Value::String(value)),
+                Instruction::PushNone => stack.push(Value::None),
                 Instruction::LoadName(name) => {
                     if let Some(locals) = locals.as_ref() {
                         if let Some(value) = locals.get(&name) {
@@ -254,12 +324,29 @@ impl VM {
                     )?;
                     stack.push(return_value);
                 }
+                Instruction::JumpIfFalse(target) => {
+                    let value = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    if !value.is_truthy() {
+                        ip = target;
+                    }
+                }
+                Instruction::Jump(target) => {
+                    ip = target;
+                }
                 Instruction::Pop => {
                     stack
                         .pop()
                         .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
                 }
                 Instruction::Return => return Ok(Value::None),
+                Instruction::ReturnValue => {
+                    let value = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    return Ok(value);
+                }
             }
         }
     }

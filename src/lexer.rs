@@ -199,6 +199,7 @@ impl<'a> Lexer<'a> {
                     },
                 )
             }
+            '"' => self.read_string(start_idx, start_line, start_column),
             c if c.is_alphabetic() || c == '_' => {
                 self.read_identifier(start_idx, start_line, start_column)
             }
@@ -278,6 +279,8 @@ impl<'a> Lexer<'a> {
             "def" => TokenKind::Def,
             "return" => TokenKind::Return,
             "pass" => TokenKind::Pass,
+            "True" => TokenKind::True,
+            "False" => TokenKind::False,
             _ => TokenKind::Identifier(ident),
         };
         Token::new(
@@ -313,6 +316,49 @@ impl<'a> Lexer<'a> {
             Span {
                 start,
                 end: end_idx,
+                line,
+                column,
+            },
+        )
+    }
+
+    fn read_string(&mut self, start: usize, line: usize, column: usize) -> Token<'a> {
+        self.advance_char(); // Consume opening quote
+        let content_start = (start + 1).min(self.input.len());
+        while let Some(&(idx, c)) = self.chars.peek() {
+            if c == '"' {
+                let content_end = idx;
+                self.advance_char(); // Consume closing quote
+                return Token::new(
+                    TokenKind::String(&self.input[content_start..content_end]),
+                    Span {
+                        start,
+                        end: idx + 1,
+                        line,
+                        column,
+                    },
+                );
+            }
+            if c == '\n' {
+                let content_end = idx;
+                return Token::new(
+                    TokenKind::String(&self.input[content_start..content_end]),
+                    Span {
+                        start,
+                        end: idx,
+                        line,
+                        column,
+                    },
+                );
+            }
+            self.advance_char();
+        }
+        let content_end = self.input.len();
+        Token::new(
+            TokenKind::String(&self.input[content_start..content_end]),
+            Span {
+                start,
+                end: content_end,
                 line,
                 column,
             },
