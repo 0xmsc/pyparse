@@ -1,3 +1,20 @@
+use anyhow::Result;
+
+use crate::ast::Program;
+
 pub mod interpreter;
 pub mod vm;
 pub mod transpiler;
+
+pub trait Backend {
+    fn name(&self) -> &'static str;
+    fn run(&mut self, program: &Program) -> Result<String>;
+}
+
+pub fn backends() -> Vec<Box<dyn Backend>> {
+    vec![
+        Box::new(interpreter::Interpreter::new()),
+        Box::new(vm::VM),
+        Box::new(transpiler::Transpiler),
+    ]
+}

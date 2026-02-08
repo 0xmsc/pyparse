@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
+use crate::backend::Backend;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -33,6 +34,7 @@ struct Function {
 pub struct Interpreter {
     globals: HashMap<String, Value>,
     functions: HashMap<String, Function>,
+    output: Vec<String>,
 }
 
 impl Interpreter {
@@ -40,14 +42,18 @@ impl Interpreter {
         Self {
             globals: HashMap::new(),
             functions: HashMap::new(),
+            output: Vec::new(),
         }
     }
 
-    pub fn run(&mut self, program: &Program) -> Result<()> {
+    pub fn run(&mut self, program: &Program) -> Result<String> {
+        self.globals.clear();
+        self.functions.clear();
+        self.output.clear();
         for statement in &program.statements {
             self.exec_statement(statement, None)?;
         }
-        Ok(())
+        Ok(self.output.join("\n"))
     }
 
     fn exec_statement(
@@ -126,7 +132,7 @@ impl Interpreter {
                 "print" => {
                     let outputs: Vec<String> =
                         evaluated_args.iter().map(Value::to_output).collect();
-                    println!("{}", outputs.join(" "));
+                    self.output.push(outputs.join(" "));
                     Ok(Value::None)
                 }
                 _ => {
@@ -156,6 +162,16 @@ impl Default for Interpreter {
     }
 }
 
+impl Backend for Interpreter {
+    fn name(&self) -> &'static str {
+        "interpreter"
+    }
+
+    fn run(&mut self, program: &Program) -> Result<String> {
+        Interpreter::run(self, program)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +197,8 @@ mod tests {
         };
 
         let mut interpreter = Interpreter::new();
-        interpreter.run(&program).expect("run failed");
+        let output = interpreter.run(&program).expect("run failed");
+        assert_eq!(output, "3");
         assert_eq!(interpreter.globals.get("n"), Some(&Value::Integer(3)));
     }
 }
