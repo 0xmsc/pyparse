@@ -26,7 +26,11 @@ impl Value {
         match self {
             Value::Integer(value) => value.to_string(),
             Value::Boolean(value) => {
-                if *value { "True".to_string() } else { "False".to_string() }
+                if *value {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
             }
             Value::String(value) => value.clone(),
             Value::None => "None".to_string(),
