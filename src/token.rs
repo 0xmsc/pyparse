@@ -17,6 +17,7 @@ pub enum TokenKind<'a> {
     // Keywords
     If,
     Else,
+    While,
     Def,
     Return,
     Pass,
@@ -25,6 +26,7 @@ pub enum TokenKind<'a> {
     Equal, // =
     Plus,  // +
     Minus, // -
+    Less,  // <
 
     // Delimiters
     Colon,  // :

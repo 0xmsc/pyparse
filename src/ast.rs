@@ -19,6 +19,7 @@ pub enum Expression {
 pub enum BinaryOperator {
     Add,
     Sub,
+    LessThan,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -30,6 +31,10 @@ pub enum Statement {
     Assign {
         name: String,
         value: Expression,
+    },
+    While {
+        condition: Expression,
+        body: Vec<Statement>,
     },
     If {
         condition: Expression,

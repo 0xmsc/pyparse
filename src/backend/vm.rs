@@ -57,6 +57,7 @@ enum Instruction {
     StoreName(String),
     Add,
     Sub,
+    LessThan,
     CallBuiltinPrint0,
     CallBuiltinPrint1,
     CallFunction(String),
@@ -158,6 +159,18 @@ impl VM {
                     code[jump_pos] = Instruction::Jump(end);
                 }
             }
+            Statement::While { condition, body } => {
+                let loop_start = code.len();
+                self.compile_expression(condition, code)?;
+                let jump_if_false_pos = code.len();
+                code.push(Instruction::JumpIfFalse(0));
+                for stmt in body {
+                    self.compile_statement(stmt, code, in_function)?;
+                }
+                code.push(Instruction::Jump(loop_start));
+                let loop_end = code.len();
+                code[jump_if_false_pos] = Instruction::JumpIfFalse(loop_end);
+            }
             Statement::Return(value) => {
                 if !in_function {
                     bail!("Return outside of function is not supported in the VM");
@@ -205,6 +218,7 @@ impl VM {
                 match op {
                     BinaryOperator::Add => code.push(Instruction::Add),
                     BinaryOperator::Sub => code.push(Instruction::Sub),
+                    BinaryOperator::LessThan => code.push(Instruction::LessThan),
                 }
             }
             Expression::Call { callee, args } => {
@@ -301,6 +315,16 @@ impl VM {
                         .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
                     let result = left.as_int()? - right.as_int()?;
                     stack.push(Value::Integer(result));
+                }
+                Instruction::LessThan => {
+                    let right = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let left = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let result = left.as_int()? < right.as_int()?;
+                    stack.push(Value::Boolean(result));
                 }
                 Instruction::CallBuiltinPrint0 => {
                     self.output.push(String::new());

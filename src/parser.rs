@@ -40,6 +40,9 @@ impl<'a> Parser<'a> {
         if matches!(self.current.kind, TokenKind::If) {
             return self.parse_if();
         }
+        if matches!(self.current.kind, TokenKind::While) {
+            return self.parse_while();
+        }
         if matches!(self.current.kind, TokenKind::Return) {
             return self.parse_return();
         }
@@ -123,6 +126,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_while(&mut self) -> Result<Statement> {
+        self.expect_while()?;
+        let condition = self.parse_expression()?;
+        self.expect_colon()?;
+        self.expect_newline()?;
+        self.expect_indent()?;
+
+        let mut body = Vec::new();
+        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
+            if self.consume_newlines() {
+                continue;
+            }
+            body.push(self.parse_statement()?);
+        }
+        self.expect_dedent()?;
+
+        Ok(Statement::While { condition, body })
+    }
+
     fn parse_return(&mut self) -> Result<Statement> {
         self.expect_return()?;
         if matches!(self.current.kind, TokenKind::Newline) {
@@ -141,6 +163,24 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<Expression> {
+        self.parse_comparison()
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expression> {
+        let mut expr = self.parse_additive()?;
+        while matches!(self.current.kind, TokenKind::Less) {
+            self.advance();
+            let right = self.parse_additive()?;
+            expr = Expression::BinaryOp {
+                left: Box::new(expr),
+                op: BinaryOperator::LessThan,
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn parse_additive(&mut self) -> Result<Expression> {
         let mut expr = self.parse_call()?;
         loop {
             if matches!(self.current.kind, TokenKind::Plus) {
@@ -252,6 +292,15 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             Err(self.error("if"))
+        }
+    }
+
+    fn expect_while(&mut self) -> Result<()> {
+        if matches!(self.current.kind, TokenKind::While) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error("while"))
         }
     }
 

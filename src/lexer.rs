@@ -163,6 +163,18 @@ impl<'a> Lexer<'a> {
                     },
                 )
             }
+            '<' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Less,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                        line: start_line,
+                        column: start_column,
+                    },
+                )
+            }
             ':' => {
                 self.advance_char();
                 Token::new(
@@ -276,6 +288,7 @@ impl<'a> Lexer<'a> {
         let kind = match ident {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
+            "while" => TokenKind::While,
             "def" => TokenKind::Def,
             "return" => TokenKind::Return,
             "pass" => TokenKind::Pass,

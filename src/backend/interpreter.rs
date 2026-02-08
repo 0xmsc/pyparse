@@ -120,6 +120,21 @@ impl Interpreter {
                 }
                 Ok(ExecResult::Continue)
             }
+            Statement::While { condition, body } => {
+                loop {
+                    let condition = self.eval_expression(condition, locals.as_deref_mut())?;
+                    if !condition.is_truthy() {
+                        break;
+                    }
+                    for stmt in body {
+                        match self.exec_statement(stmt, locals.as_deref_mut())? {
+                            ExecResult::Continue => {}
+                            ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
+                        }
+                    }
+                }
+                Ok(ExecResult::Continue)
+            }
             Statement::Return(value) => {
                 let value = if let Some(value) = value {
                     self.eval_expression(value, locals.as_deref_mut())?
@@ -159,11 +174,22 @@ impl Interpreter {
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, locals.as_deref_mut())?;
                 let right = self.eval_expression(right, locals.as_deref_mut())?;
-                let left = left.as_int()?;
-                let right = right.as_int()?;
                 match op {
-                    BinaryOperator::Add => Ok(Value::Integer(left + right)),
-                    BinaryOperator::Sub => Ok(Value::Integer(left - right)),
+                    BinaryOperator::Add => {
+                        let left = left.as_int()?;
+                        let right = right.as_int()?;
+                        Ok(Value::Integer(left + right))
+                    }
+                    BinaryOperator::Sub => {
+                        let left = left.as_int()?;
+                        let right = right.as_int()?;
+                        Ok(Value::Integer(left - right))
+                    }
+                    BinaryOperator::LessThan => {
+                        let left = left.as_int()?;
+                        let right = right.as_int()?;
+                        Ok(Value::Boolean(left < right))
+                    }
                 }
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, locals),

@@ -48,6 +48,10 @@ static Value binary_sub(Value lhs, Value rhs) {
     return make_int(expect_int(lhs) - expect_int(rhs));
 }
 
+static Value binary_lt(Value lhs, Value rhs) {
+    return make_bool(expect_int(lhs) < expect_int(rhs));
+}
+
 "#;
 
 const C_TRUTHY: &str = r#"static int is_truthy(Value value) {
@@ -196,6 +200,11 @@ impl Transpiler {
                     self.collect_assignments(stmt, names);
                 }
             }
+            Statement::While { body, .. } => {
+                for stmt in body {
+                    self.collect_assignments(stmt, names);
+                }
+            }
             _ => {}
         }
     }
@@ -221,6 +230,11 @@ impl Transpiler {
                     self.collect_assignments_in_function(stmt, names)?;
                 }
             }
+            Statement::While { body, .. } => {
+                for stmt in body {
+                    self.collect_assignments_in_function(stmt, names)?;
+                }
+            }
             Statement::FunctionDef { .. } => {
                 bail!("Nested function definitions are not supported in the transpiler")
             }
@@ -240,6 +254,14 @@ impl Transpiler {
             Statement::Assign { name, value } => {
                 let expr = self.emit_expression(value)?;
                 self.push_line(output, indent, &format!("{name} = {expr};"));
+            }
+            Statement::While { condition, body } => {
+                let condition = self.emit_expression(condition)?;
+                self.push_line(output, indent, &format!("while (is_truthy({condition})) {{"));
+                for stmt in body {
+                    self.emit_statement(stmt, indent + 1, output, in_function)?;
+                }
+                self.push_line(output, indent, "}");
             }
             Statement::If {
                 condition,
@@ -302,6 +324,7 @@ impl Transpiler {
                 match op {
                     BinaryOperator::Add => Ok(format!("binary_add({left}, {right})")),
                     BinaryOperator::Sub => Ok(format!("binary_sub({left}, {right})")),
+                    BinaryOperator::LessThan => Ok(format!("binary_lt({left}, {right})")),
                 }
             }
             Expression::Call { callee, args } => {
