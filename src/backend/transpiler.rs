@@ -36,6 +36,7 @@ const C_EXPECT_INT: &str = r#"static int64_t expect_int(Value value) {
 const C_BINARY_OPS: &str = r#"static Value binary_add(Value lhs, Value rhs) {
     return make_int(expect_int(lhs) + expect_int(rhs));
 }
+
 static Value binary_sub(Value lhs, Value rhs) {
     return make_int(expect_int(lhs) - expect_int(rhs));
 }
@@ -49,10 +50,12 @@ const C_PRINT: &str = r#"static void print_value(Value value) {
         printf("None");
     }
 }
+
 static Value builtin_print0(void) {
     printf("\n");
     return make_none();
 }
+
 static Value builtin_print1(Value value) {
     print_value(value);
     printf("\n");
