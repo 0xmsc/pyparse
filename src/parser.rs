@@ -1,18 +1,6 @@
+use anyhow::{bail, Result};
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use crate::lexer::{Lexer, Token};
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct ParseError {
-    pub message: String,
-}
-
-impl ParseError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
 
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -31,7 +19,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_program(mut self) -> Result<Program, ParseError> {
+    pub fn parse_program(mut self) -> Result<Program> {
         let mut statements = Vec::new();
         while !matches!(self.current, Token::EOF) {
             if self.consume_newlines() {
@@ -42,7 +30,7 @@ impl<'a> Parser<'a> {
         Ok(Program { statements })
     }
 
-    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+    fn parse_statement(&mut self) -> Result<Statement> {
         if matches!(self.current, Token::Def) {
             return self.parse_function_def();
         }
@@ -54,7 +42,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Expr(expr))
     }
 
-    fn parse_function_def(&mut self) -> Result<Statement, ParseError> {
+    fn parse_function_def(&mut self) -> Result<Statement> {
         self.expect_def()?;
         let name = self.expect_identifier()?;
         self.expect_lparen()?;
@@ -75,7 +63,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::FunctionDef { name, body })
     }
 
-    fn parse_assignment(&mut self) -> Result<Statement, ParseError> {
+    fn parse_assignment(&mut self) -> Result<Statement> {
         let name = self.expect_identifier()?;
         self.expect_equal()?;
         let value = self.parse_expression()?;
@@ -83,7 +71,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Assign { name, value })
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, ParseError> {
+    fn parse_expression(&mut self) -> Result<Expression> {
         let mut expr = self.parse_call()?;
         loop {
             if matches!(self.current, Token::Plus) {
@@ -109,7 +97,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_call(&mut self) -> Result<Expression, ParseError> {
+    fn parse_call(&mut self) -> Result<Expression> {
         let mut expr = self.parse_primary()?;
         while matches!(self.current, Token::LParen) {
             self.advance();
@@ -126,7 +114,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_primary(&mut self) -> Result<Expression, ParseError> {
+    fn parse_primary(&mut self) -> Result<Expression> {
         match &self.current {
             Token::Integer(value) => {
                 let value = *value;
@@ -144,7 +132,7 @@ impl<'a> Parser<'a> {
                 self.expect_rparen()?;
                 Ok(expr)
             }
-            _ => Err(self.error("expression")),
+            _ => bail!("Expected expression, got {:?}", self.current),
         }
     }
 
@@ -157,85 +145,85 @@ impl<'a> Parser<'a> {
         consumed
     }
 
-    fn expect_identifier(&mut self) -> Result<String, ParseError> {
+    fn expect_identifier(&mut self) -> Result<String> {
         if let Token::Identifier(name) = &self.current {
             let name = name.to_string();
             self.advance();
             Ok(name)
         } else {
-            Err(self.error("identifier"))
+            bail!("Expected identifier, got {:?}", self.current)
         }
     }
 
-    fn expect_def(&mut self) -> Result<(), ParseError> {
+    fn expect_def(&mut self) -> Result<()> {
         if matches!(self.current, Token::Def) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("def"))
+            bail!("Expected def, got {:?}", self.current)
         }
     }
 
-    fn expect_equal(&mut self) -> Result<(), ParseError> {
+    fn expect_equal(&mut self) -> Result<()> {
         if matches!(self.current, Token::Equal) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("="))
+            bail!("Expected =, got {:?}", self.current)
         }
     }
 
-    fn expect_lparen(&mut self) -> Result<(), ParseError> {
+    fn expect_lparen(&mut self) -> Result<()> {
         if matches!(self.current, Token::LParen) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("("))
+            bail!("Expected (, got {:?}", self.current)
         }
     }
 
-    fn expect_rparen(&mut self) -> Result<(), ParseError> {
+    fn expect_rparen(&mut self) -> Result<()> {
         if matches!(self.current, Token::RParen) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error(")"))
+            bail!("Expected ), got {:?}", self.current)
         }
     }
 
-    fn expect_colon(&mut self) -> Result<(), ParseError> {
+    fn expect_colon(&mut self) -> Result<()> {
         if matches!(self.current, Token::Colon) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error(":"))
+            bail!("Expected :, got {:?}", self.current)
         }
     }
 
-    fn expect_newline(&mut self) -> Result<(), ParseError> {
+    fn expect_newline(&mut self) -> Result<()> {
         if matches!(self.current, Token::Newline) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("newline"))
+            bail!("Expected newline, got {:?}", self.current)
         }
     }
 
-    fn expect_indent(&mut self) -> Result<(), ParseError> {
+    fn expect_indent(&mut self) -> Result<()> {
         if matches!(self.current, Token::Indent) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("indent"))
+            bail!("Expected indent, got {:?}", self.current)
         }
     }
 
-    fn expect_dedent(&mut self) -> Result<(), ParseError> {
+    fn expect_dedent(&mut self) -> Result<()> {
         if matches!(self.current, Token::Dedent) {
             self.advance();
             Ok(())
         } else {
-            Err(self.error("dedent"))
+            bail!("Expected dedent, got {:?}", self.current)
         }
     }
 
@@ -259,12 +247,9 @@ impl<'a> Parser<'a> {
         self.peeked.as_ref().expect("peeked token missing")
     }
 
-    fn error(&self, expected: &str) -> ParseError {
-        ParseError::new(format!("Expected {expected}, got {:?}", self.current))
-    }
 }
 
-pub fn parse(input: &str) -> Result<Program, ParseError> {
+pub fn parse(input: &str) -> Result<Program> {
     Parser::new(input).parse_program()
 }
 
