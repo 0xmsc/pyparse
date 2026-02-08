@@ -50,7 +50,7 @@ fn main() -> Result<()> {
 
     if backend_name == "transpiler" {
         let transpiler = backend::transpiler::Transpiler;
-        let output = transpiler.transpile(&program);
+        let output = transpiler.transpile(&program)?;
         if !output.is_empty() {
             print!("{output}");
         }
