@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, anyhow};
+use anyhow::{Result, anyhow, bail};
 use std::collections::{BTreeSet, VecDeque};
 
 use crate::ast::Program;
@@ -85,7 +85,11 @@ impl JIT {
         let locals = collect_store_names(code);
         let stack_size = max_stack_depth(code)?.max(1);
 
-        self.push_line(output, 0, &format!("static Value {}(void) {{", function_c_name(name)));
+        self.push_line(
+            output,
+            0,
+            &format!("static Value {}(void) {{", function_c_name(name)),
+        );
         self.push_line(output, 1, &format!("Value stack[{stack_size}];"));
         self.push_line(output, 1, "int sp = 0;");
         self.push_line(output, 1, "Value tmp;");
@@ -103,7 +107,15 @@ impl JIT {
             output.push('\n');
         }
 
-        self.emit_code(code, &locals, globals, functions, output, 1, ReturnKind::Value)?;
+        self.emit_code(
+            code,
+            &locals,
+            globals,
+            functions,
+            output,
+            1,
+            ReturnKind::Value,
+        )?;
         self.push_line(output, 1, "return make_none();");
         self.push_line(output, 0, "}");
         output.push('\n');
@@ -127,7 +139,15 @@ impl JIT {
         self.push_line(output, 1, "Value tmp2;");
 
         let locals = BTreeSet::new();
-        self.emit_code(code, &locals, globals, functions, output, 1, ReturnKind::Void)?;
+        self.emit_code(
+            code,
+            &locals,
+            globals,
+            functions,
+            output,
+            1,
+            ReturnKind::Void,
+        )?;
         self.push_line(output, 0, "}");
         output.push('\n');
 
@@ -182,10 +202,7 @@ impl JIT {
                 self.push_line(
                     output,
                     indent,
-                    &format!(
-                        "stack[sp++] = make_bool({});",
-                        if *value { 1 } else { 0 }
-                    ),
+                    &format!("stack[sp++] = make_bool({});", if *value { 1 } else { 0 }),
                 );
             }
             Instruction::PushString(value) => {
