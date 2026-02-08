@@ -202,7 +202,7 @@ impl Backend for VM {
     fn run(&mut self, program: &Program) -> Result<String> {
         self.globals.clear();
         self.output.clear();
-        let compiled = self.compile(program)?;
+        let compiled = compile(program)?;
         self.execute_program(&compiled)?;
         Ok(self.output.join("\n"))
     }

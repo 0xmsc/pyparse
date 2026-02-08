@@ -26,6 +26,14 @@ fn bench_backends(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("backend_jit", |b| {
+        b.iter(|| {
+            let mut jit = backend::jit::JIT::new();
+            let output = jit.run(black_box(&program)).expect("run");
+            black_box(output);
+        })
+    });
+
     c.bench_function("backend_transpiler", |b| {
         b.iter(|| {
             let mut transpiler = backend::transpiler::Transpiler;
