@@ -14,6 +14,7 @@ pub trait Backend {
 pub fn backends() -> Vec<Box<dyn Backend>> {
     vec![
         Box::new(interpreter::Interpreter::new()),
+        Box::new(vm::VM::new()),
         Box::new(transpiler::Transpiler),
     ]
 }

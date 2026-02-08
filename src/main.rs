@@ -58,7 +58,7 @@ fn main() -> Result<()> {
     }
 
     if backend_name == "vm" {
-        let mut vm = backend::vm::VM;
+        let mut vm = backend::vm::VM::new();
         let output = vm.run(&program)?;
         if !output.is_empty() {
             print!("{output}");
