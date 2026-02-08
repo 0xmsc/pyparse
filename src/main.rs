@@ -1,9 +1,9 @@
-mod lexer;
 mod ast;
 mod backend;
-mod parser;
 #[cfg(test)]
 mod harness;
+mod lexer;
+mod parser;
 
 fn main() {
     println!("Hello, world!");
