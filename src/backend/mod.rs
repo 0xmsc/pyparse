@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use crate::ast::Program;
 
-mod c_runtime;
 pub mod bytecode;
+mod c_runtime;
 pub mod interpreter;
 pub mod jit;
 pub mod transpiler;
