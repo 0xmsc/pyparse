@@ -15,5 +15,21 @@ indoc = "2.0.7"
 criterion = "0.5"
 
 [[bench]]
-name = "backends"
+name = "frontend"
+harness = false
+
+[[bench]]
+name = "interpreter"
+harness = false
+
+[[bench]]
+name = "vm"
+harness = false
+
+[[bench]]
+name = "jit"
+harness = false
+
+[[bench]]
+name = "transpiler"
 harness = false

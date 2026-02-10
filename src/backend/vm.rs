@@ -67,6 +67,13 @@ impl VM {
         Ok(())
     }
 
+    pub fn run_compiled(&mut self, program: &CompiledProgram) -> Result<String> {
+        self.globals.clear();
+        self.output.clear();
+        self.execute_program(program)?;
+        Ok(self.output.join("\n"))
+    }
+
     fn execute_code(
         &mut self,
         code: &[Instruction],
@@ -200,11 +207,8 @@ impl Backend for VM {
     }
 
     fn run(&mut self, program: &Program) -> Result<String> {
-        self.globals.clear();
-        self.output.clear();
         let compiled = compile(program)?;
-        self.execute_program(&compiled)?;
-        Ok(self.output.join("\n"))
+        self.run_compiled(&compiled)
     }
 }
 

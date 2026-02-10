@@ -12,6 +12,8 @@ use crate::ast::Program;
 use crate::backend::Backend;
 use crate::backend::bytecode::{Instruction, compile};
 
+type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
+
 #[derive(Debug)]
 enum RuntimeValue {
     Integer(i64),
@@ -242,24 +244,18 @@ unsafe extern "C" fn runtime_set_error(ctx: *mut Runtime, ptr: *const u8, len: i
 
 pub struct JIT;
 
+pub struct PreparedProgram {
+    _module: JITModule,
+    entry: EntryFn,
+    global_names: Vec<String>,
+}
+
 impl JIT {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl Default for JIT {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Backend for JIT {
-    fn name(&self) -> &'static str {
-        "jit"
-    }
-
-    fn run(&mut self, program: &Program) -> Result<String> {
+    pub fn prepare(&self, program: &Program) -> Result<PreparedProgram> {
         let compiled = compile(program)?;
         let globals = collect_store_names(&compiled.main);
         let mut global_names: Vec<String> = globals.iter().cloned().collect();
@@ -330,10 +326,18 @@ impl Backend for JIT {
 
         module.finalize_definitions()?;
         let entry = module.get_finalized_function(main_id);
-        let mut runtime = Runtime::new(global_names);
-        let entry_fn: extern "C" fn(*mut Runtime) -> *mut RuntimeValue =
-            unsafe { std::mem::transmute(entry) };
-        let result = entry_fn(&mut runtime as *mut Runtime);
+        let entry: EntryFn = unsafe { std::mem::transmute(entry) };
+
+        Ok(PreparedProgram {
+            _module: module,
+            entry,
+            global_names,
+        })
+    }
+
+    pub fn run_prepared(&self, prepared: &PreparedProgram) -> Result<String> {
+        let mut runtime = Runtime::new(prepared.global_names.clone());
+        let result = (prepared.entry)(&mut runtime as *mut Runtime);
         if let Some(error) = runtime.error {
             bail!("{error}");
         }
@@ -341,6 +345,23 @@ impl Backend for JIT {
             bail!("JIT execution failed");
         }
         Ok(runtime.output.join("\n"))
+    }
+}
+
+impl Default for JIT {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Backend for JIT {
+    fn name(&self) -> &'static str {
+        "jit"
+    }
+
+    fn run(&mut self, program: &Program) -> Result<String> {
+        let prepared = self.prepare(program)?;
+        self.run_prepared(&prepared)
     }
 }
 
