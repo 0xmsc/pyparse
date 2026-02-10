@@ -7,7 +7,7 @@ use pyparse::{backend, lexer, parser};
 
 fn bench_backends(c: &mut Criterion) {
     let source = fs::read_to_string("tests/programs/long.py").expect("read long.py");
-    let tokens = lexer::tokenize(&source);
+    let tokens = lexer::tokenize(&source).expect("tokenize long.py");
     let program = parser::parse_tokens(tokens).expect("parse long.py");
 
     c.bench_function("backend_interpreter", |b| {

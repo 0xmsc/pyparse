@@ -31,7 +31,9 @@ impl Transpiler {
         }
 
         for name in &globals {
-            output.push_str(&format!("static Value {name} = {{ VAL_NONE, 0, 0, NULL }};\n"));
+            output.push_str(&format!(
+                "static Value {name} = {{ VAL_NONE, 0, 0, NULL }};\n"
+            ));
         }
         if !globals.is_empty() {
             output.push('\n');
@@ -41,7 +43,9 @@ impl Transpiler {
             let locals = self.collect_locals(body)?;
             output.push_str(&format!("static Value {name}(void) {{\n"));
             for local in &locals {
-                output.push_str(&format!("    Value {local} = {{ VAL_NONE, 0, 0, NULL }};\n"));
+                output.push_str(&format!(
+                    "    Value {local} = {{ VAL_NONE, 0, 0, NULL }};\n"
+                ));
             }
             if !locals.is_empty() {
                 output.push('\n');
@@ -170,7 +174,11 @@ impl Transpiler {
             }
             Statement::While { condition, body } => {
                 let condition = self.emit_expression(condition)?;
-                self.push_line(output, indent, &format!("while (is_truthy({condition})) {{"));
+                self.push_line(
+                    output,
+                    indent,
+                    &format!("while (is_truthy({condition})) {{"),
+                );
                 for stmt in body {
                     self.emit_statement(stmt, indent + 1, output, in_function)?;
                 }
@@ -272,7 +280,6 @@ impl Transpiler {
         output.push_str(line);
         output.push('\n');
     }
-
 }
 
 impl Backend for Transpiler {
@@ -282,6 +289,11 @@ impl Backend for Transpiler {
 
     fn run(&mut self, program: &Program) -> Result<String> {
         let source = self.transpile(program)?;
-        compile_and_run(&source, "", "C compilation failed", "Transpiled program failed")
+        compile_and_run(
+            &source,
+            "",
+            "C compilation failed",
+            "Transpiled program failed",
+        )
     }
 }

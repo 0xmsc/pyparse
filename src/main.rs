@@ -45,7 +45,7 @@ fn main() -> Result<()> {
         buffer
     };
 
-    let tokens = lexer::tokenize(&source);
+    let tokens = lexer::tokenize(&source)?;
     let program = parser::parse_tokens(tokens)?;
 
     if backend_name == "transpiler" {
