@@ -7,14 +7,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pyparse::ast::Program;
 use pyparse::{lexer, parser};
 
-pub fn load_source() -> String {
-    fs::read_to_string("tests/programs/long.py").expect("read long.py")
+pub const WORKLOADS: [(&str, &str); 2] = [
+    ("long", "tests/programs/long.py"),
+    ("gcd", "tests/programs/bench_gcd.py"),
+];
+
+pub fn load_source(path: &str) -> String {
+    fs::read_to_string(path).unwrap_or_else(|err| panic!("read {path}: {err}"))
 }
 
-pub fn load_program() -> Program {
-    let source = load_source();
-    let tokens = lexer::tokenize(&source).expect("tokenize long.py");
-    parser::parse_tokens(tokens).expect("parse long.py")
+pub fn load_program(path: &str) -> Program {
+    let source = load_source(path);
+    let tokens = lexer::tokenize(&source).unwrap_or_else(|err| panic!("tokenize {path}: {err}"));
+    parser::parse_tokens(tokens).unwrap_or_else(|err| panic!("parse {path}: {err}"))
 }
 
 pub fn compile_c_binary(source: &str) -> PathBuf {

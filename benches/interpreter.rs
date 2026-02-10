@@ -4,15 +4,17 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use pyparse::backend::interpreter::Interpreter;
 
 fn bench_interpreter(c: &mut Criterion) {
-    let program = common::load_program();
+    for (label, path) in common::WORKLOADS {
+        let program = common::load_program(path);
 
-    c.bench_function("backend_interpreter_total", |b| {
-        let mut interpreter = Interpreter::new();
-        b.iter(|| {
-            let output = interpreter.run(black_box(&program)).expect("run");
-            black_box(output);
-        })
-    });
+        c.bench_function(&format!("backend_interpreter_total_{label}"), |b| {
+            let mut interpreter = Interpreter::new();
+            b.iter(|| {
+                let output = interpreter.run(black_box(&program)).expect("run");
+                black_box(output);
+            })
+        });
+    }
 }
 
 criterion_group!(benches, bench_interpreter);
