@@ -10,7 +10,7 @@ fn normalize_output(output: &str) -> String {
 }
 
 #[test]
-fn runs_programs_across_backends() -> Result<()> {
+fn slow_runs_programs_across_backends() -> Result<()> {
     let programs_dir = Path::new("tests/programs");
     let mut programs = Vec::new();
 

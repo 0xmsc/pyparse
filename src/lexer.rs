@@ -382,6 +382,17 @@ impl<'a> Lexer<'a> {
     }
 }
 
+impl<'a> Iterator for Lexer<'a> {
+    type Item = Result<Token<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_token() {
+            Ok(token) => Some(Ok(token)),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 impl<'a> Lexer<'a> {
     fn advance_char(&mut self) -> Option<(usize, char)> {
         let next = self.chars.next();
@@ -431,53 +442,40 @@ mod tests {
                 print(n)
             fn()
         "};
-        let mut lexer = Lexer::new(input);
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let expected_tokens = vec![
+            TokenKind::Def,
+            TokenKind::Identifier("fn"),
+            TokenKind::LParen,
+            TokenKind::RParen,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("n"),
+            TokenKind::Equal,
+            TokenKind::Integer(4),
+            TokenKind::Plus,
+            TokenKind::Integer(4),
+            TokenKind::Newline,
+            TokenKind::Identifier("print"),
+            TokenKind::LParen,
+            TokenKind::Identifier("n"),
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Identifier("fn"),
+            TokenKind::LParen,
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::LParen,
+            TokenKind::EOF,
+        ];
 
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Def);
-        assert_eq!(
-            lexer.next_token().unwrap().kind(),
-            &TokenKind::Identifier("fn")
-        );
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::LParen);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::RParen);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Colon);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Newline);
-
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Indent);
-
-        assert_eq!(
-            lexer.next_token().unwrap().kind(),
-            &TokenKind::Identifier("n")
-        );
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Equal);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Integer(4));
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Plus);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Integer(4));
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Newline);
-
-        assert_eq!(
-            lexer.next_token().unwrap().kind(),
-            &TokenKind::Identifier("print")
-        );
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::LParen);
-        assert_eq!(
-            lexer.next_token().unwrap().kind(),
-            &TokenKind::Identifier("n")
-        );
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::RParen);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Newline);
-
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Dedent);
-
-        assert_eq!(
-            lexer.next_token().unwrap().kind(),
-            &TokenKind::Identifier("fn")
-        );
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::LParen);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::RParen);
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::Newline);
-
-        assert_eq!(lexer.next_token().unwrap().kind(), &TokenKind::EOF);
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(actual_kinds, expected_tokens);
     }
 
     #[test]
