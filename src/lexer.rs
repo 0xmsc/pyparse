@@ -80,6 +80,12 @@ impl<'a> Lexer<'a> {
                                 },
                             ));
                         }
+                        ensure!(
+                            self.current_indent() == indent_level,
+                            "Inconsistent indentation: expected indent level {}, got {}",
+                            self.current_indent(),
+                            indent_level
+                        );
                     } else {
                     }
                 }
