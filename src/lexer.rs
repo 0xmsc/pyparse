@@ -467,7 +467,6 @@ mod tests {
             TokenKind::LParen,
             TokenKind::RParen,
             TokenKind::Newline,
-            TokenKind::LParen,
             TokenKind::EOF,
         ];
 
