@@ -414,10 +414,10 @@ impl<'a> Parser<'a> {
     fn error(&self, expected: &str) -> anyhow::Error {
         let span = self.current.span();
         anyhow::anyhow!(
-            "Expected {expected}, got {:?} at line {}, column {}",
+            "Expected {expected}, got {:?} at byte range {}..{}",
             self.current.kind(),
-            span.line,
-            span.column
+            span.start,
+            span.end
         )
     }
 }

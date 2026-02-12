@@ -41,8 +41,6 @@ impl<'a> Lexer<'a> {
                 Span {
                     start: index,
                     end: index,
-                    line: self.line,
-                    column: self.column,
                 },
             ));
         }
@@ -55,8 +53,6 @@ impl<'a> Lexer<'a> {
             let span = Span {
                 start: index,
                 end: index,
-                line: self.line,
-                column: self.column,
             };
 
             if indent_level > current_indent {
@@ -101,8 +97,6 @@ impl<'a> Lexer<'a> {
                     let span = Span {
                         start: index,
                         end: index,
-                        line: self.line,
-                        column: self.column,
                     };
                     self.pending_tokens
                         .push(Token::new(TokenKind::Dedent, span));
@@ -116,8 +110,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: index,
                         end: index,
-                        line: self.line,
-                        column: self.column,
                     },
                 ));
             }
@@ -134,8 +126,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -146,8 +136,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -158,8 +146,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -170,8 +156,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -182,8 +166,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -194,8 +176,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -206,8 +186,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
@@ -218,15 +196,11 @@ impl<'a> Lexer<'a> {
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
-                        line: start_line,
-                        column: start_column,
                     },
                 )
             }),
             '"' => self.read_string(start_idx, start_line, start_column),
-            c if c.is_alphabetic() || c == '_' => {
-                Ok(self.read_identifier(start_idx, start_line, start_column))
-            }
+            c if c.is_alphabetic() || c == '_' => Ok(self.read_identifier(start_idx)),
             c if c.is_ascii_digit() => self.read_integer(start_idx, start_line, start_column),
             _ => Err(anyhow!(
                 "Unexpected character '{}' at line {}, column {}",
@@ -288,7 +262,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_identifier(&mut self, start: usize, line: usize, column: usize) -> Token<'a> {
+    fn read_identifier(&mut self, start: usize) -> Token<'a> {
         self.advance_char(); // Consume first char
         while let Some(&(_, c)) = self.chars.peek() {
             if c.is_alphanumeric() || c == '_' {
@@ -320,8 +294,6 @@ impl<'a> Lexer<'a> {
             Span {
                 start,
                 end: end_idx,
-                line,
-                column,
             },
         )
     }
@@ -350,8 +322,6 @@ impl<'a> Lexer<'a> {
             Span {
                 start,
                 end: end_idx,
-                line,
-                column,
             },
         ))
     }
@@ -368,8 +338,6 @@ impl<'a> Lexer<'a> {
                     Span {
                         start,
                         end: idx + 1,
-                        line,
-                        column,
                     },
                 ));
             }
