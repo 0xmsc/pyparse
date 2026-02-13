@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, bail};
+use thiserror::Error;
 
 use crate::token::{Span, Token, TokenKind};
 
@@ -9,6 +9,25 @@ enum LexerState {
     EmitPending,
     EmitEof,
 }
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum LexError {
+    #[error("Invalid dedent to {indent_level} spaces at position {position}")]
+    InvalidDedent {
+        indent_level: usize,
+        position: usize,
+    },
+    #[error("Unexpected character '{character}' at position {position}")]
+    UnexpectedCharacter { character: char, position: usize },
+    #[error("Tabs are not supported for indentation at position {position}")]
+    TabIndentation { position: usize },
+    #[error("Invalid integer literal '{literal}' at position {position}")]
+    InvalidIntegerLiteral { literal: String, position: usize },
+    #[error("Unterminated string literal at position {position}")]
+    UnterminatedString { position: usize },
+}
+
+pub type LexResult<T> = Result<T, LexError>;
 
 pub struct Lexer<'a> {
     input: &'a str,
@@ -29,7 +48,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn next_token(&mut self) -> Result<Token<'a>> {
+    pub fn next_token(&mut self) -> LexResult<Token<'a>> {
         loop {
             match self.state {
                 LexerState::LineBegin => {
@@ -57,13 +76,10 @@ impl<'a> Lexer<'a> {
                             }
                         }
                         if *self.indent_stack.last().unwrap() != indent_level {
-                            let (line, column) = self.line_column_for_index(index);
-                            bail!(
-                                "Invalid dedent to {} spaces at line {}, column {}",
+                            return Err(LexError::InvalidDedent {
                                 indent_level,
-                                line,
-                                column
-                            );
+                                position: index,
+                            });
                         }
                         self.state = LexerState::EmitPending;
                         continue;
@@ -179,13 +195,10 @@ impl<'a> Lexer<'a> {
                         c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
                         c if c.is_ascii_digit() => self.read_integer(start_idx)?,
                         _ => {
-                            let (line, column) = self.line_column_for_index(start_idx);
-                            return Err(anyhow!(
-                                "Unexpected character '{}' at line {}, column {}",
-                                ch,
-                                line,
-                                column
-                            ));
+                            return Err(LexError::UnexpectedCharacter {
+                                character: ch,
+                                position: start_idx,
+                            });
                         }
                     };
                     return Ok(token);
@@ -214,18 +227,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn count_indentation(&mut self) -> Result<usize> {
+    fn count_indentation(&mut self) -> LexResult<usize> {
         let mut lookahead = self.pos;
         while let Some(c) = self.char_at(lookahead) {
             match c {
                 ' ' => lookahead += 1,
                 '\t' => {
-                    let (line, column) = self.line_column_for_index(lookahead);
-                    bail!(
-                        "Tabs are not supported for indentation at line {}, column {}",
-                        line,
-                        column
-                    );
+                    return Err(LexError::TabIndentation {
+                        position: lookahead,
+                    });
                 }
                 '\n' => {
                     return Ok(*self.indent_stack.last().unwrap());
@@ -268,14 +278,14 @@ impl<'a> Lexer<'a> {
         )
     }
 
-    fn read_integer(&mut self, start: usize) -> Result<Token<'a>> {
+    fn read_integer(&mut self, start: usize) -> LexResult<Token<'a>> {
         self.consume_until(|c| !c.is_ascii_digit());
         let end_idx = self.current_index();
 
         let num_str = &self.input[start..end_idx];
-        let (line, column) = self.line_column_for_index(start);
-        let num = num_str.parse::<i64>().map_err(|_| {
-            anyhow!("Invalid integer literal '{num_str}' at line {line}, column {column}")
+        let num = num_str.parse::<i64>().map_err(|_| LexError::InvalidIntegerLiteral {
+            literal: num_str.to_string(),
+            position: start,
         })?;
         Ok(Token::new(
             TokenKind::Integer(num),
@@ -286,10 +296,9 @@ impl<'a> Lexer<'a> {
         ))
     }
 
-    fn read_string(&mut self, start: usize) -> Result<Token<'a>> {
+    fn read_string(&mut self, start: usize) -> LexResult<Token<'a>> {
         self.advance_char(); // opening quote
         let content_start = self.current_index();
-        let (line, column) = self.line_column_for_index(start);
 
         self.consume_until(|c| c == '"' || c == '\n');
 
@@ -306,7 +315,7 @@ impl<'a> Lexer<'a> {
                 ))
             }
             Some('\n') | None => {
-                bail!("Unterminated string literal at line {line}, column {column}")
+                Err(LexError::UnterminatedString { position: start })
             }
             _ => unreachable!(),
         }
@@ -347,26 +356,10 @@ impl<'a> Lexer<'a> {
         self.pos
     }
 
-    fn line_column_for_index(&self, index: usize) -> (usize, usize) {
-        let clamped_index = index.min(self.input.len());
-        let mut line = 1;
-        let mut column = 0;
-
-        for c in self.input[..clamped_index].chars() {
-            if c == '\n' {
-                line += 1;
-                column = 0;
-            } else {
-                column += 1;
-            }
-        }
-
-        (line, column)
-    }
 }
 
 impl<'a> Iterator for Lexer<'a> {
-    type Item = Result<Token<'a>>;
+    type Item = LexResult<Token<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_token() {
@@ -376,7 +369,7 @@ impl<'a> Iterator for Lexer<'a> {
     }
 }
 
-pub fn tokenize<'a>(input: &'a str) -> Result<Vec<Token<'a>>> {
+pub fn tokenize<'a>(input: &'a str) -> LexResult<Vec<Token<'a>>> {
     let mut lexer = Lexer::new(input);
     let mut tokens = Vec::new();
     loop {
