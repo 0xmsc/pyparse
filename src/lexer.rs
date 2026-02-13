@@ -422,25 +422,35 @@ mod tests {
 
     #[test]
     fn errors_on_invalid_character() {
-        let err = tokenize("x = 1 @ 2\n").expect_err("expected lexing failure");
+        let err = tokenize(indoc! {"
+            x = 1 @ 2
+        "})
+        .expect_err("expected lexing failure");
         assert!(err.to_string().contains("Unexpected character '@'"));
     }
 
     #[test]
     fn errors_on_integer_overflow() {
-        let err = tokenize("n = 99999999999999999999999999\n").expect_err("expected overflow");
+        let err = tokenize(indoc! {"
+            n = 99999999999999999999999999
+        "})
+        .expect_err("expected overflow");
         assert!(err.to_string().contains("Invalid integer literal"));
     }
 
     #[test]
     fn errors_on_tab_indentation() {
-        let err = tokenize("\tx = 1\n").expect_err("expected tab indentation failure");
+        let err = tokenize(indoc!("\tx = 1\n")).expect_err("expected tab indentation failure");
         assert_eq!(err, LexError::TabIndentation { position: 0 });
     }
 
     #[test]
     fn errors_on_inconsistent_dedent() {
-        let input = "if True:\n    x = 1\n  y = 2\n";
+        let input = indoc! {"
+            if True:
+                x = 1
+              y = 2
+        "};
         let err = tokenize(input).expect_err("expected inconsistent dedent failure");
         assert_eq!(
             err,
@@ -453,7 +463,12 @@ mod tests {
 
     #[test]
     fn blank_line_does_not_change_indentation() {
-        let input = "if True:\n    x = 1\n\n    y = 2\n";
+        let input = indoc! {"
+            if True:
+                x = 1
+
+                y = 2
+        "};
         let tokens = tokenize(input).expect("tokenize should succeed");
         let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
 
@@ -481,7 +496,7 @@ mod tests {
 
     #[test]
     fn emits_dedent_before_eof() {
-        let input = "if True:\n    x = 1";
+        let input = indoc!("if True:\n    x = 1");
         let tokens = tokenize(input).expect("tokenize should succeed");
         let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
 
@@ -503,7 +518,10 @@ mod tests {
 
     #[test]
     fn errors_on_unterminated_string() {
-        let err = tokenize("x = \"abc\n").expect_err("expected unterminated string failure");
+        let err = tokenize(indoc! {"
+            x = \"abc
+        "})
+        .expect_err("expected unterminated string failure");
         assert_eq!(err, LexError::UnterminatedString { position: 4 });
     }
 }
