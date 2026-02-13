@@ -2,14 +2,7 @@ use std::fs;
 use std::io::{self, Read};
 
 use anyhow::{Context, Result, bail};
-
-mod ast;
-mod backend;
-#[cfg(test)]
-mod harness;
-mod lexer;
-mod parser;
-mod token;
+use pyparse::{backend, lexer, parser};
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
