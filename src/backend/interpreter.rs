@@ -60,9 +60,13 @@ pub struct PreparedInterpreter {
 }
 
 struct InterpreterRuntime<'a> {
-    globals: HashMap<String, Value>,
     functions: &'a HashMap<String, Function>,
     output: Vec<String>,
+}
+
+struct Environment<'a> {
+    globals: &'a mut HashMap<String, Value>,
+    locals: Option<&'a mut HashMap<String, Value>>,
 }
 
 enum ExecResult {
@@ -82,12 +86,13 @@ impl Interpreter {
 
 impl PreparedInterpreter {
     fn run_once(&self) -> Result<String> {
+        let mut globals = HashMap::new();
+        let mut environment = Environment::top_level(&mut globals);
         let mut runtime = InterpreterRuntime {
-            globals: HashMap::new(),
             functions: &self.functions,
             output: Vec::new(),
         };
-        match runtime.exec_block(&self.main_statements, None)? {
+        match runtime.exec_block(&self.main_statements, &mut environment)? {
             ExecResult::Continue => {}
             ExecResult::Return(_) => bail!("Return outside of function"),
         }
@@ -95,14 +100,57 @@ impl PreparedInterpreter {
     }
 }
 
+impl<'a> Environment<'a> {
+    fn top_level(globals: &'a mut HashMap<String, Value>) -> Self {
+        Self {
+            globals,
+            locals: None,
+        }
+    }
+
+    fn with_locals(
+        globals: &'a mut HashMap<String, Value>,
+        locals: &'a mut HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            globals,
+            locals: Some(locals),
+        }
+    }
+
+    fn load(&self, name: &str) -> Option<Value> {
+        if let Some(locals) = self.locals.as_deref() {
+            if let Some(value) = locals.get(name) {
+                return Some(value.clone());
+            }
+        }
+        self.globals.get(name).cloned()
+    }
+
+    fn store(&mut self, name: String, value: Value) {
+        if let Some(locals) = self.locals.as_deref_mut() {
+            locals.insert(name, value);
+        } else {
+            self.globals.insert(name, value);
+        }
+    }
+
+    fn child_with_locals<'b>(
+        &'b mut self,
+        locals: &'b mut HashMap<String, Value>,
+    ) -> Environment<'b> {
+        Environment::with_locals(self.globals, locals)
+    }
+}
+
 impl<'a> InterpreterRuntime<'a> {
     fn exec_block(
         &mut self,
         body: &[Statement],
-        mut locals: Option<&mut HashMap<String, Value>>,
+        environment: &mut Environment<'_>,
     ) -> Result<ExecResult> {
         for statement in body {
-            match self.exec_statement(statement, locals.as_deref_mut())? {
+            match self.exec_statement(statement, environment)? {
                 ExecResult::Continue => {}
                 ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
             }
@@ -113,17 +161,13 @@ impl<'a> InterpreterRuntime<'a> {
     fn exec_statement(
         &mut self,
         statement: &Statement,
-        mut locals: Option<&mut HashMap<String, Value>>,
+        environment: &mut Environment<'_>,
     ) -> Result<ExecResult> {
         match statement {
             Statement::FunctionDef { .. } => bail!("Nested function definitions are not supported"),
             Statement::Assign { name, value } => {
-                let value = self.eval_expression(value, locals.as_deref_mut())?;
-                if let Some(locals) = locals {
-                    locals.insert(name.to_string(), value);
-                } else {
-                    self.globals.insert(name.to_string(), value);
-                }
+                let value = self.eval_expression(value, environment)?;
+                environment.store(name.to_string(), value);
                 Ok(ExecResult::Continue)
             }
             Statement::If {
@@ -131,22 +175,21 @@ impl<'a> InterpreterRuntime<'a> {
                 then_body,
                 else_body,
             } => {
-                let condition = self.eval_expression(condition, locals.as_deref_mut())?;
+                let condition = self.eval_expression(condition, environment)?;
                 let body = if condition.is_truthy() {
                     then_body
                 } else {
                     else_body
                 };
-                self.exec_block(body, locals)
+                self.exec_block(body, environment)
             }
             Statement::While { condition, body } => {
                 loop {
-                    let condition = self.eval_expression(condition, locals.as_deref_mut())?;
+                    let condition = self.eval_expression(condition, environment)?;
                     if !condition.is_truthy() {
                         break;
                     }
-                    if let ExecResult::Return(value) = self.exec_block(body, locals.as_deref_mut())?
-                    {
+                    if let ExecResult::Return(value) = self.exec_block(body, environment)? {
                         return Ok(ExecResult::Return(value));
                     }
                 }
@@ -154,7 +197,7 @@ impl<'a> InterpreterRuntime<'a> {
             }
             Statement::Return(value) => {
                 let value = if let Some(value) = value {
-                    self.eval_expression(value, locals.as_deref_mut())?
+                    self.eval_expression(value, environment)?
                 } else {
                     Value::None
                 };
@@ -162,7 +205,7 @@ impl<'a> InterpreterRuntime<'a> {
             }
             Statement::Pass => Ok(ExecResult::Continue),
             Statement::Expr(expr) => {
-                self.eval_expression(expr, locals.as_deref_mut())?;
+                self.eval_expression(expr, environment)?;
                 Ok(ExecResult::Continue)
             }
         }
@@ -171,26 +214,21 @@ impl<'a> InterpreterRuntime<'a> {
     fn eval_expression(
         &mut self,
         expr: &Expression,
-        mut locals: Option<&mut HashMap<String, Value>>,
+        environment: &mut Environment<'_>,
     ) -> Result<Value> {
         match expr {
             Expression::Integer(value) => Ok(Value::Integer(*value)),
             Expression::Boolean(value) => Ok(Value::Boolean(*value)),
             Expression::String(value) => Ok(Value::String(value.clone())),
             Expression::Identifier(name) => {
-                if let Some(locals) = locals.as_deref() {
-                    if let Some(value) = locals.get(name) {
-                        return Ok(value.clone());
-                    }
-                }
-                if let Some(value) = self.globals.get(name) {
+                if let Some(value) = environment.load(name) {
                     return Ok(value.clone());
                 }
                 bail!("Undefined variable '{name}'")
             }
             Expression::BinaryOp { left, op, right } => {
-                let left = self.eval_expression(left, locals.as_deref_mut())?;
-                let right = self.eval_expression(right, locals.as_deref_mut())?;
+                let left = self.eval_expression(left, environment)?;
+                let right = self.eval_expression(right, environment)?;
                 match op {
                     BinaryOperator::Add => {
                         let left = left.as_int()?;
@@ -209,7 +247,7 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                 }
             }
-            Expression::Call { callee, args } => self.eval_call(callee, args, locals),
+            Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
     }
 
@@ -217,11 +255,11 @@ impl<'a> InterpreterRuntime<'a> {
         &mut self,
         callee: &Expression,
         args: &[Expression],
-        mut locals: Option<&mut HashMap<String, Value>>,
+        environment: &mut Environment<'_>,
     ) -> Result<Value> {
         let mut evaluated_args = Vec::with_capacity(args.len());
         for arg in args {
-            let value = self.eval_expression(arg, locals.as_deref_mut())?;
+            let value = self.eval_expression(arg, environment)?;
             evaluated_args.push(value);
         }
 
@@ -243,7 +281,8 @@ impl<'a> InterpreterRuntime<'a> {
                         bail!("Function '{name}' does not accept arguments");
                     }
                     let mut local_scope = HashMap::new();
-                    match self.exec_block(&function.body, Some(&mut local_scope))? {
+                    let mut local_environment = environment.child_with_locals(&mut local_scope);
+                    match self.exec_block(&function.body, &mut local_environment)? {
                         ExecResult::Continue => Ok(Value::None),
                         ExecResult::Return(value) => Ok(value),
                     }
@@ -398,7 +437,10 @@ mod tests {
                     name: "f".to_string(),
                     body: vec![
                         Statement::Return(Some(int(7))),
-                        Statement::Expr(call("print", vec![Expression::String("unreachable".to_string())])),
+                        Statement::Expr(call(
+                            "print",
+                            vec![Expression::String("unreachable".to_string())],
+                        )),
                     ],
                 },
                 print(vec![call("f", vec![])]),
@@ -430,7 +472,9 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let error = interpreter.run(&program).expect_err("expected undefined variable");
+        let error = interpreter
+            .run(&program)
+            .expect_err("expected undefined variable");
         assert!(error.to_string().contains("Undefined variable 'x'"));
     }
 
