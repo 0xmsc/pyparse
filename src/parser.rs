@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
 
     fn parse_comparison(&mut self) -> ParseResult<Expression> {
         // Comparison level (`<`), with additive expressions as operands.
+        // Example: `a + 1 < b - 2`.
         let mut expr = self.parse_additive()?;
         while self.try_consume(TokenKind::Less) {
             let right = self.parse_additive()?;
@@ -157,6 +158,7 @@ impl<'a> Parser<'a> {
 
     fn parse_additive(&mut self) -> ParseResult<Expression> {
         // Additive level (`+`/`-`), with call/primary expressions as operands.
+        // Example: `a + b - c`.
         let mut expr = self.parse_call()?;
         loop {
             if self.try_consume(TokenKind::Plus) {
@@ -182,6 +184,7 @@ impl<'a> Parser<'a> {
 
     fn parse_call(&mut self) -> ParseResult<Expression> {
         // Postfix call level: parse `callee(...)` chains left-to-right.
+        // Example: `foo()()`.
         let mut expr = self.parse_primary()?;
         while self.try_consume(TokenKind::LParen) {
             let mut args = Vec::new();
@@ -199,6 +202,7 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
         // Primary atoms: literals, identifiers, and parenthesized expressions.
+        // Example: `42`, `name`, or `(a + b)`.
         let expression = match self.current_kind() {
             TokenKind::Integer(value) => Expression::Integer(value),
             TokenKind::True => Expression::Boolean(true),
