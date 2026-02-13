@@ -7,7 +7,6 @@ enum LexerState {
     LineBegin,
     TokenStart,
     EmitPending,
-    EmitEof,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -54,6 +53,7 @@ impl<'a> Lexer<'a> {
         loop {
             match self.state {
                 LexerState::LineBegin => {
+                    // Compute indentation delta and produce Indent/Dedent tokens as needed.
                     let indent_level = self.count_indentation()?;
                     let current_indent = self.current_indent()?;
                     let index = self.current_index();
@@ -92,8 +92,10 @@ impl<'a> Lexer<'a> {
                 LexerState::TokenStart => {
                     self.skip_whitespace();
 
-                    let start_idx = self.current_index();
-                    let Some(ch) = self.peek_char() else {
+                    // No next character means physical EOF:
+                    // 1) flush remaining indentation as Dedent tokens
+                    // 2) switch to pending emission; EOF is returned once queue is empty
+                    if self.peek_char().is_none() {
                         while self.indent_stack.len() > 1 {
                             self.indent_stack.pop();
                             let index = self.current_index();
@@ -103,127 +105,28 @@ impl<'a> Lexer<'a> {
                             };
                             self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
                         }
-                        self.state = if self.pending_tokens.is_empty() {
-                            LexerState::EmitEof
-                        } else {
-                            LexerState::EmitPending
-                        };
+                        self.state = LexerState::EmitPending;
                         continue;
-                    };
+                    }
 
-                    let token = match ch {
-                        '\n' => {
-                            self.advance_char();
-                            self.state = LexerState::LineBegin;
-                            Token::new(
-                                TokenKind::Newline,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '=' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::Equal,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '+' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::Plus,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '-' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::Minus,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '<' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::Less,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        ':' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::Colon,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '(' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::LParen,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        ')' => {
-                            self.advance_char();
-                            Token::new(
-                                TokenKind::RParen,
-                                Span {
-                                    start: start_idx,
-                                    end: start_idx + 1,
-                                },
-                            )
-                        }
-                        '"' => self.read_string(start_idx)?,
-                        c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
-                        c if c.is_ascii_digit() => self.read_integer(start_idx)?,
-                        _ => {
-                            return Err(LexError::UnexpectedCharacter {
-                                character: ch,
-                                position: start_idx,
-                            });
-                        }
-                    };
+                    let token = self.read_token_from_current_position()?;
                     return Ok(token);
                 }
                 LexerState::EmitPending => {
                     if let Some(token) = self.pending_tokens.pop() {
                         return Ok(token);
                     }
-                    self.state = if self.peek_char().is_none() {
-                        LexerState::EmitEof
-                    } else {
-                        LexerState::TokenStart
-                    };
-                }
-                LexerState::EmitEof => {
-                    let index = self.current_index();
-                    return Ok(Token::new(
-                        TokenKind::EOF,
-                        Span {
-                            start: index,
-                            end: index,
-                        },
-                    ));
+                    if self.peek_char().is_none() {
+                        let index = self.current_index();
+                        return Ok(Token::new(
+                            TokenKind::EOF,
+                            Span {
+                                start: index,
+                                end: index,
+                            },
+                        ));
+                    }
+                    self.state = LexerState::TokenStart;
                 }
             }
         }
@@ -240,6 +143,7 @@ impl<'a> Lexer<'a> {
                     });
                 }
                 '\n' => {
+                    // Blank lines do not change indentation depth.
                     return self.current_indent();
                 }
                 _ => break,
@@ -253,6 +157,110 @@ impl<'a> Lexer<'a> {
 
     fn skip_whitespace(&mut self) {
         self.consume_until(|c| c != ' ');
+    }
+
+    fn read_token_from_current_position(&mut self) -> LexResult<Token<'a>> {
+        let start_idx = self.current_index();
+        let ch = self
+            .peek_char()
+            .ok_or(LexError::InvariantViolation {
+                message: "read_token_from_current_position called at EOF",
+            })?;
+
+        let token = match ch {
+            '\n' => {
+                self.advance_char();
+                self.state = LexerState::LineBegin;
+                Token::new(
+                    TokenKind::Newline,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '=' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Equal,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '+' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Plus,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '-' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Minus,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '<' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Less,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            ':' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::Colon,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '(' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::LParen,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            ')' => {
+                self.advance_char();
+                Token::new(
+                    TokenKind::RParen,
+                    Span {
+                        start: start_idx,
+                        end: start_idx + 1,
+                    },
+                )
+            }
+            '"' => self.read_string(start_idx)?,
+            c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
+            c if c.is_ascii_digit() => self.read_integer(start_idx)?,
+            _ => {
+                return Err(LexError::UnexpectedCharacter {
+                    character: ch,
+                    position: start_idx,
+                });
+            }
+        };
+
+        Ok(token)
     }
 
     fn read_identifier(&mut self, start: usize) -> Token<'a> {
