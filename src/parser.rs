@@ -137,6 +137,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
         // Entry point for expressions: parse the lowest-precedence level.
+        // Example: `1 + 2 < 4 - 1` parses as `(1 + 2) < (4 - 1)`.
         self.parse_comparison()
     }
 
