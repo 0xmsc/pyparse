@@ -198,35 +198,22 @@ impl<'a> Parser<'a> {
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
         // Primary atoms: literals, identifiers, and parenthesized expressions.
-        match self.current_kind() {
-            TokenKind::Integer(value) => {
-                self.advance();
-                Ok(Expression::Integer(value))
-            }
-            TokenKind::True => {
-                self.advance();
-                Ok(Expression::Boolean(true))
-            }
-            TokenKind::False => {
-                self.advance();
-                Ok(Expression::Boolean(false))
-            }
-            TokenKind::String(value) => {
-                self.advance();
-                Ok(Expression::String(value.to_string()))
-            }
-            TokenKind::Identifier(name) => {
-                self.advance();
-                Ok(Expression::Identifier(name.to_string()))
-            }
+        let expression = match self.current_kind() {
+            TokenKind::Integer(value) => Expression::Integer(value),
+            TokenKind::True => Expression::Boolean(true),
+            TokenKind::False => Expression::Boolean(false),
+            TokenKind::String(value) => Expression::String(value.to_string()),
+            TokenKind::Identifier(name) => Expression::Identifier(name.to_string()),
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expression()?;
                 self.expect_rparen()?;
-                Ok(expr)
+                return Ok(expr);
             }
-            _ => Err(self.error("expression")),
-        }
+            _ => return Err(self.error("expression")),
+        };
+        self.advance();
+        Ok(expression)
     }
 
     fn consume_newlines(&mut self) -> bool {
