@@ -25,6 +25,8 @@ pub enum LexError {
     InvalidIntegerLiteral { literal: String, position: usize },
     #[error("Unterminated string literal at position {position}")]
     UnterminatedString { position: usize },
+    #[error("Lexer invariant violated: {message}")]
+    InvariantViolation { message: &'static str },
 }
 
 pub type LexResult<T> = Result<T, LexError>;
@@ -53,7 +55,7 @@ impl<'a> Lexer<'a> {
             match self.state {
                 LexerState::LineBegin => {
                     let indent_level = self.count_indentation()?;
-                    let current_indent = *self.indent_stack.last().unwrap();
+                    let current_indent = self.current_indent()?;
                     let index = self.current_index();
                     let span = Span {
                         start: index,
@@ -75,7 +77,7 @@ impl<'a> Lexer<'a> {
                                 break;
                             }
                         }
-                        if *self.indent_stack.last().unwrap() != indent_level {
+                        if self.current_indent()? != indent_level {
                             return Err(LexError::InvalidDedent {
                                 indent_level,
                                 position: index,
@@ -238,7 +240,7 @@ impl<'a> Lexer<'a> {
                     });
                 }
                 '\n' => {
-                    return Ok(*self.indent_stack.last().unwrap());
+                    return self.current_indent();
                 }
                 _ => break,
             }
@@ -354,6 +356,15 @@ impl<'a> Lexer<'a> {
 
     fn current_index(&self) -> usize {
         self.pos
+    }
+
+    fn current_indent(&self) -> LexResult<usize> {
+        self.indent_stack
+            .last()
+            .copied()
+            .ok_or(LexError::InvariantViolation {
+                message: "indent stack is empty",
+            })
     }
 
 }
