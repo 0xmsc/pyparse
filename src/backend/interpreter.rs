@@ -87,17 +87,29 @@ impl PreparedInterpreter {
             functions: &self.functions,
             output: Vec::new(),
         };
-        for statement in &self.main_statements {
-            match runtime.exec_statement(statement, None)? {
-                ExecResult::Continue => {}
-                ExecResult::Return(_) => bail!("Return outside of function"),
-            }
+        match runtime.exec_block(&self.main_statements, None)? {
+            ExecResult::Continue => {}
+            ExecResult::Return(_) => bail!("Return outside of function"),
         }
         Ok(runtime.output.join("\n"))
     }
 }
 
 impl<'a> InterpreterRuntime<'a> {
+    fn exec_block(
+        &mut self,
+        body: &[Statement],
+        mut locals: Option<&mut HashMap<String, Value>>,
+    ) -> Result<ExecResult> {
+        for statement in body {
+            match self.exec_statement(statement, locals.as_deref_mut())? {
+                ExecResult::Continue => {}
+                ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
+            }
+        }
+        Ok(ExecResult::Continue)
+    }
+
     fn exec_statement(
         &mut self,
         statement: &Statement,
@@ -125,13 +137,7 @@ impl<'a> InterpreterRuntime<'a> {
                 } else {
                     else_body
                 };
-                for stmt in body {
-                    match self.exec_statement(stmt, locals.as_deref_mut())? {
-                        ExecResult::Continue => {}
-                        ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
-                    }
-                }
-                Ok(ExecResult::Continue)
+                self.exec_block(body, locals)
             }
             Statement::While { condition, body } => {
                 loop {
@@ -139,11 +145,9 @@ impl<'a> InterpreterRuntime<'a> {
                     if !condition.is_truthy() {
                         break;
                     }
-                    for stmt in body {
-                        match self.exec_statement(stmt, locals.as_deref_mut())? {
-                            ExecResult::Continue => {}
-                            ExecResult::Return(value) => return Ok(ExecResult::Return(value)),
-                        }
+                    if let ExecResult::Return(value) = self.exec_block(body, locals.as_deref_mut())?
+                    {
+                        return Ok(ExecResult::Return(value));
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -239,13 +243,10 @@ impl<'a> InterpreterRuntime<'a> {
                         bail!("Function '{name}' does not accept arguments");
                     }
                     let mut local_scope = HashMap::new();
-                    for statement in &function.body {
-                        match self.exec_statement(statement, Some(&mut local_scope))? {
-                            ExecResult::Continue => {}
-                            ExecResult::Return(value) => return Ok(value),
-                        }
+                    match self.exec_block(&function.body, Some(&mut local_scope))? {
+                        ExecResult::Continue => Ok(Value::None),
+                        ExecResult::Return(value) => Ok(value),
                     }
-                    Ok(Value::None)
                 }
             },
             _ => bail!("Can only call identifiers"),
