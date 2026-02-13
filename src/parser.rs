@@ -64,17 +64,17 @@ impl<'a> Parser<'a> {
             return self.parse_assignment();
         }
         let expr = self.parse_expression()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Expr(expr))
     }
 
     fn parse_function_def(&mut self) -> ParseResult<Statement> {
-        self.expect_def()?;
+        self.expect_token(TokenKind::Def, "def")?;
         let name = self.expect_identifier()?;
-        self.expect_lparen()?;
-        self.expect_rparen()?;
-        self.expect_colon()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::LParen, "(")?;
+        self.expect_token(TokenKind::RParen, ")")?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         let body = self.parse_indented_block()?;
 
         Ok(Statement::FunctionDef { name, body })
@@ -82,23 +82,23 @@ impl<'a> Parser<'a> {
 
     fn parse_assignment(&mut self) -> ParseResult<Statement> {
         let name = self.expect_identifier()?;
-        self.expect_equal()?;
+        self.expect_token(TokenKind::Equal, "=")?;
         let value = self.parse_expression()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Assign { name, value })
     }
 
     fn parse_if(&mut self) -> ParseResult<Statement> {
-        self.expect_if()?;
+        self.expect_token(TokenKind::If, "if")?;
         let condition = self.parse_expression()?;
-        self.expect_colon()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         let then_body = self.parse_indented_block()?;
 
         let mut else_body = Vec::new();
         if self.try_consume(TokenKind::Else) {
-            self.expect_colon()?;
-            self.expect_newline()?;
+            self.expect_token(TokenKind::Colon, ":")?;
+            self.expect_token(TokenKind::Newline, "newline")?;
             else_body = self.parse_indented_block()?;
         }
 
@@ -110,28 +110,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_while(&mut self) -> ParseResult<Statement> {
-        self.expect_while()?;
+        self.expect_token(TokenKind::While, "while")?;
         let condition = self.parse_expression()?;
-        self.expect_colon()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         let body = self.parse_indented_block()?;
 
         Ok(Statement::While { condition, body })
     }
 
     fn parse_return(&mut self) -> ParseResult<Statement> {
-        self.expect_return()?;
+        self.expect_token(TokenKind::Return, "return")?;
         if self.try_consume(TokenKind::Newline) {
             return Ok(Statement::Return(None));
         }
         let value = self.parse_expression()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Return(Some(value)))
     }
 
     fn parse_pass(&mut self) -> ParseResult<Statement> {
-        self.expect_pass()?;
-        self.expect_newline()?;
+        self.expect_token(TokenKind::Pass, "pass")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Pass)
     }
 
@@ -187,7 +187,7 @@ impl<'a> Parser<'a> {
             if !matches!(self.current_kind(), TokenKind::RParen) {
                 args.push(self.parse_expression()?);
             }
-            self.expect_rparen()?;
+            self.expect_token(TokenKind::RParen, ")")?;
             expr = Expression::Call {
                 callee: Box::new(expr),
                 args,
@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expression()?;
-                self.expect_rparen()?;
+                self.expect_token(TokenKind::RParen, ")")?;
                 return Ok(expr);
             }
             _ => return Err(self.error("expression")),
@@ -225,7 +225,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_indented_block(&mut self) -> ParseResult<Vec<Statement>> {
-        self.expect_indent()?;
+        self.expect_token(TokenKind::Indent, "indent")?;
 
         let mut body = Vec::new();
         while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
@@ -235,7 +235,7 @@ impl<'a> Parser<'a> {
             body.push(self.parse_statement()?);
         }
 
-        self.expect_dedent()?;
+        self.expect_token(TokenKind::Dedent, "dedent")?;
         Ok(body)
     }
     fn expect_identifier(&mut self) -> ParseResult<String> {
@@ -245,54 +245,6 @@ impl<'a> Parser<'a> {
         } else {
             Err(self.error("identifier"))
         }
-    }
-
-    fn expect_def(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Def, "def")
-    }
-
-    fn expect_if(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::If, "if")
-    }
-
-    fn expect_while(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::While, "while")
-    }
-
-    fn expect_return(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Return, "return")
-    }
-
-    fn expect_pass(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Pass, "pass")
-    }
-
-    fn expect_equal(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Equal, "=")
-    }
-
-    fn expect_lparen(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::LParen, "(")
-    }
-
-    fn expect_rparen(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::RParen, ")")
-    }
-
-    fn expect_colon(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Colon, ":")
-    }
-
-    fn expect_newline(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Newline, "newline")
-    }
-
-    fn expect_indent(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Indent, "indent")
-    }
-
-    fn expect_dedent(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Dedent, "dedent")
     }
 
     fn expect_token(
