@@ -5,6 +5,8 @@ use crate::token::{Span, Token, TokenKind};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseError {
+    #[error("Cannot create parser from an empty token stream")]
+    EmptyTokenStream,
     #[error("Expected {expected}, got {found} at byte range {start}..{end}")]
     UnexpectedToken {
         expected: &'static str,
@@ -19,26 +21,20 @@ pub type ParseResult<T> = Result<T, ParseError>;
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     pos: usize,
-    current: Token<'a>,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(mut tokens: Vec<Token<'a>>) -> Self {
+    pub fn new(tokens: Vec<Token<'a>>) -> ParseResult<Self> {
         if tokens.is_empty() {
-            tokens.push(Token::new(TokenKind::EOF, Span::default()));
+            return Err(ParseError::EmptyTokenStream);
         }
-        let current = tokens[0].clone();
-        Self {
-            tokens,
-            pos: 0,
-            current,
-        }
+        Ok(Self { tokens, pos: 0 })
     }
 
     pub fn parse_program(mut self) -> ParseResult<Program> {
         let mut statements = Vec::new();
-        while !matches!(self.current.kind, TokenKind::EOF) {
-            if self.consume_newlines() {
+        while !matches!(self.current_kind(), TokenKind::EOF) {
+            if self.skip_optional_newlines() {
                 continue;
             }
             statements.push(self.parse_statement()?);
@@ -47,22 +43,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Statement> {
-        if matches!(self.current.kind, TokenKind::Def) {
+        if matches!(self.current_kind(), TokenKind::Def) {
             return self.parse_function_def();
         }
-        if matches!(self.current.kind, TokenKind::If) {
+        if matches!(self.current_kind(), TokenKind::If) {
             return self.parse_if();
         }
-        if matches!(self.current.kind, TokenKind::While) {
+        if matches!(self.current_kind(), TokenKind::While) {
             return self.parse_while();
         }
-        if matches!(self.current.kind, TokenKind::Return) {
+        if matches!(self.current_kind(), TokenKind::Return) {
             return self.parse_return();
         }
-        if matches!(self.current.kind, TokenKind::Pass) {
+        if matches!(self.current_kind(), TokenKind::Pass) {
             return self.parse_pass();
         }
-        if matches!(self.current.kind, TokenKind::Identifier(_))
+        if matches!(self.current_kind(), TokenKind::Identifier(_))
             && matches!(self.peek_kind(), TokenKind::Equal)
         {
             return self.parse_assignment();
@@ -82,8 +78,8 @@ impl<'a> Parser<'a> {
         self.expect_indent()?;
 
         let mut body = Vec::new();
-        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
-            if self.consume_newlines() {
+        while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
+            if self.skip_optional_newlines() {
                 continue;
             }
             body.push(self.parse_statement()?);
@@ -109,8 +105,8 @@ impl<'a> Parser<'a> {
         self.expect_indent()?;
 
         let mut then_body = Vec::new();
-        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
-            if self.consume_newlines() {
+        while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
+            if self.skip_optional_newlines() {
                 continue;
             }
             then_body.push(self.parse_statement()?);
@@ -118,13 +114,13 @@ impl<'a> Parser<'a> {
         self.expect_dedent()?;
 
         let mut else_body = Vec::new();
-        if matches!(self.current.kind, TokenKind::Else) {
+        if matches!(self.current_kind(), TokenKind::Else) {
             self.expect_else()?;
             self.expect_colon()?;
             self.expect_newline()?;
             self.expect_indent()?;
-            while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
-                if self.consume_newlines() {
+            while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
+                if self.skip_optional_newlines() {
                     continue;
                 }
                 else_body.push(self.parse_statement()?);
@@ -147,8 +143,8 @@ impl<'a> Parser<'a> {
         self.expect_indent()?;
 
         let mut body = Vec::new();
-        while !matches!(self.current.kind, TokenKind::Dedent | TokenKind::EOF) {
-            if self.consume_newlines() {
+        while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
+            if self.skip_optional_newlines() {
                 continue;
             }
             body.push(self.parse_statement()?);
@@ -160,7 +156,7 @@ impl<'a> Parser<'a> {
 
     fn parse_return(&mut self) -> ParseResult<Statement> {
         self.expect_return()?;
-        if matches!(self.current.kind, TokenKind::Newline) {
+        if matches!(self.current_kind(), TokenKind::Newline) {
             self.advance();
             return Ok(Statement::Return(None));
         }
@@ -181,7 +177,7 @@ impl<'a> Parser<'a> {
 
     fn parse_comparison(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_additive()?;
-        while matches!(self.current.kind, TokenKind::Less) {
+        while matches!(self.current_kind(), TokenKind::Less) {
             self.advance();
             let right = self.parse_additive()?;
             expr = Expression::BinaryOp {
@@ -196,7 +192,7 @@ impl<'a> Parser<'a> {
     fn parse_additive(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_call()?;
         loop {
-            if matches!(self.current.kind, TokenKind::Plus) {
+            if matches!(self.current_kind(), TokenKind::Plus) {
                 self.advance();
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
@@ -204,7 +200,7 @@ impl<'a> Parser<'a> {
                     op: BinaryOperator::Add,
                     right: Box::new(right),
                 };
-            } else if matches!(self.current.kind, TokenKind::Minus) {
+            } else if matches!(self.current_kind(), TokenKind::Minus) {
                 self.advance();
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
@@ -221,10 +217,10 @@ impl<'a> Parser<'a> {
 
     fn parse_call(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
-        while matches!(self.current.kind, TokenKind::LParen) {
+        while matches!(self.current_kind(), TokenKind::LParen) {
             self.advance();
             let mut args = Vec::new();
-            if !matches!(self.current.kind, TokenKind::RParen) {
+            if !matches!(self.current_kind(), TokenKind::RParen) {
                 args.push(self.parse_expression()?);
             }
             self.expect_rparen()?;
@@ -237,9 +233,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
-        match &self.current.kind {
+        match self.current_kind() {
             TokenKind::Integer(value) => {
-                let value = *value;
                 self.advance();
                 Ok(Expression::Integer(value))
             }
@@ -252,14 +247,12 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Boolean(false))
             }
             TokenKind::String(value) => {
-                let value = value.to_string();
                 self.advance();
-                Ok(Expression::String(value))
+                Ok(Expression::String(value.to_string()))
             }
             TokenKind::Identifier(name) => {
-                let name = name.to_string();
                 self.advance();
-                Ok(Expression::Identifier(name))
+                Ok(Expression::Identifier(name.to_string()))
             }
             TokenKind::LParen => {
                 self.advance();
@@ -273,25 +266,28 @@ impl<'a> Parser<'a> {
 
     fn consume_newlines(&mut self) -> bool {
         let mut consumed = false;
-        while matches!(self.current.kind, TokenKind::Newline) {
+        while matches!(self.current_kind(), TokenKind::Newline) {
             consumed = true;
             self.advance();
         }
         consumed
     }
 
+    fn skip_optional_newlines(&mut self) -> bool {
+        self.consume_newlines()
+    }
+
     fn expect_identifier(&mut self) -> ParseResult<String> {
-        if let TokenKind::Identifier(name) = &self.current.kind {
-            let name = name.to_string();
+        if let TokenKind::Identifier(name) = self.current_kind() {
             self.advance();
-            Ok(name)
+            Ok(name.to_string())
         } else {
             Err(self.error("identifier"))
         }
     }
 
     fn expect_def(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Def) {
+        if matches!(self.current_kind(), TokenKind::Def) {
             self.advance();
             Ok(())
         } else {
@@ -300,7 +296,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_if(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::If) {
+        if matches!(self.current_kind(), TokenKind::If) {
             self.advance();
             Ok(())
         } else {
@@ -309,7 +305,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_while(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::While) {
+        if matches!(self.current_kind(), TokenKind::While) {
             self.advance();
             Ok(())
         } else {
@@ -318,7 +314,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_else(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Else) {
+        if matches!(self.current_kind(), TokenKind::Else) {
             self.advance();
             Ok(())
         } else {
@@ -327,7 +323,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_return(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Return) {
+        if matches!(self.current_kind(), TokenKind::Return) {
             self.advance();
             Ok(())
         } else {
@@ -336,7 +332,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_pass(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Pass) {
+        if matches!(self.current_kind(), TokenKind::Pass) {
             self.advance();
             Ok(())
         } else {
@@ -345,7 +341,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_equal(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Equal) {
+        if matches!(self.current_kind(), TokenKind::Equal) {
             self.advance();
             Ok(())
         } else {
@@ -354,7 +350,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_lparen(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::LParen) {
+        if matches!(self.current_kind(), TokenKind::LParen) {
             self.advance();
             Ok(())
         } else {
@@ -363,7 +359,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_rparen(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::RParen) {
+        if matches!(self.current_kind(), TokenKind::RParen) {
             self.advance();
             Ok(())
         } else {
@@ -372,7 +368,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_colon(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Colon) {
+        if matches!(self.current_kind(), TokenKind::Colon) {
             self.advance();
             Ok(())
         } else {
@@ -381,7 +377,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_newline(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Newline) {
+        if matches!(self.current_kind(), TokenKind::Newline) {
             self.advance();
             Ok(())
         } else {
@@ -390,7 +386,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_indent(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Indent) {
+        if matches!(self.current_kind(), TokenKind::Indent) {
             self.advance();
             Ok(())
         } else {
@@ -399,7 +395,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_dedent(&mut self) -> ParseResult<()> {
-        if matches!(self.current.kind, TokenKind::Dedent) {
+        if matches!(self.current_kind(), TokenKind::Dedent) {
             self.advance();
             Ok(())
         } else {
@@ -407,14 +403,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn advance(&mut self) -> Token<'a> {
-        let next = self
-            .tokens
-            .get(self.pos + 1)
-            .cloned()
-            .unwrap_or(Token::new(TokenKind::EOF, Span::default()));
-        self.pos = self.pos.saturating_add(1);
-        std::mem::replace(&mut self.current, next)
+    fn advance(&mut self) {
+        if self.pos + 1 < self.tokens.len() {
+            self.pos += 1;
+        }
+    }
+
+    fn current_kind(&self) -> TokenKind<'a> {
+        self.tokens[self.pos].kind
+    }
+
+    fn current_span(&self) -> Span {
+        self.tokens[self.pos].span
     }
 
     fn peek_kind(&self) -> TokenKind<'a> {
@@ -425,10 +425,10 @@ impl<'a> Parser<'a> {
     }
 
     fn error(&self, expected: &'static str) -> ParseError {
-        let span = self.current.span();
+        let span = self.current_span();
         ParseError::UnexpectedToken {
             expected,
-            found: format!("{:?}", self.current.kind()),
+            found: format!("{:?}", self.current_kind()),
             start: span.start,
             end: span.end,
         }
@@ -436,12 +436,13 @@ impl<'a> Parser<'a> {
 }
 
 pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> ParseResult<Program> {
-    Parser::new(tokens).parse_program()
+    Parser::new(tokens)?.parse_program()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::token::Span;
 
     #[test]
     fn parses_simple_program() {

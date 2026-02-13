@@ -48,12 +48,4 @@ impl<'a> Token<'a> {
     pub fn new(kind: TokenKind<'a>, span: Span) -> Self {
         Self { kind, span }
     }
-
-    pub fn kind(&self) -> &TokenKind<'a> {
-        &self.kind
-    }
-
-    pub fn span(&self) -> Span {
-        self.span
-    }
 }
