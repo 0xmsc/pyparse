@@ -86,6 +86,9 @@ impl Interpreter {
 
 impl PreparedInterpreter {
     fn run_once(&self) -> Result<String> {
+        // Execution pipeline:
+        // run_once -> exec_block (top-level statements) -> exec_statement
+        // -> eval_expression -> eval_call -> exec_block (function body).
         let mut globals = HashMap::new();
         let mut environment = Environment::top_level(&mut globals);
         let mut runtime = InterpreterRuntime {
@@ -149,6 +152,7 @@ impl<'a> InterpreterRuntime<'a> {
         body: &[Statement],
         environment: &mut Environment<'_>,
     ) -> Result<ExecResult> {
+        // Execute statements in order until one returns, then bubble that up.
         for statement in body {
             match self.exec_statement(statement, environment)? {
                 ExecResult::Continue => {}
@@ -216,6 +220,7 @@ impl<'a> InterpreterRuntime<'a> {
         expr: &Expression,
         environment: &mut Environment<'_>,
     ) -> Result<Value> {
+        // Expression evaluation can recurse into calls, which may execute statements.
         match expr {
             Expression::Integer(value) => Ok(Value::Integer(*value)),
             Expression::Boolean(value) => Ok(Value::Boolean(*value)),
@@ -257,6 +262,7 @@ impl<'a> InterpreterRuntime<'a> {
         args: &[Expression],
         environment: &mut Environment<'_>,
     ) -> Result<Value> {
+        // Calls evaluate argument expressions first in the caller environment.
         let mut evaluated_args = Vec::with_capacity(args.len());
         for arg in args {
             let value = self.eval_expression(arg, environment)?;
@@ -281,6 +287,7 @@ impl<'a> InterpreterRuntime<'a> {
                         bail!("Function '{name}' does not accept arguments");
                     }
                     let mut local_scope = HashMap::new();
+                    // Function calls switch from expression evaluation back to statement execution.
                     let mut local_environment = environment.child_with_locals(&mut local_scope);
                     match self.exec_block(&function.body, &mut local_environment)? {
                         ExecResult::Continue => Ok(Value::None),
