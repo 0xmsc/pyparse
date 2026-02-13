@@ -1,7 +1,20 @@
-use anyhow::Result;
+use thiserror::Error;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use crate::token::{Span, Token, TokenKind};
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ParseError {
+    #[error("Expected {expected}, got {found} at byte range {start}..{end}")]
+    UnexpectedToken {
+        expected: &'static str,
+        found: String,
+        start: usize,
+        end: usize,
+    },
+}
+
+pub type ParseResult<T> = Result<T, ParseError>;
 
 pub struct Parser<'a> {
     tokens: Vec<Token<'a>>,
@@ -22,7 +35,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_program(mut self) -> Result<Program> {
+    pub fn parse_program(mut self) -> ParseResult<Program> {
         let mut statements = Vec::new();
         while !matches!(self.current.kind, TokenKind::EOF) {
             if self.consume_newlines() {
@@ -33,7 +46,7 @@ impl<'a> Parser<'a> {
         Ok(Program { statements })
     }
 
-    fn parse_statement(&mut self) -> Result<Statement> {
+    fn parse_statement(&mut self) -> ParseResult<Statement> {
         if matches!(self.current.kind, TokenKind::Def) {
             return self.parse_function_def();
         }
@@ -59,7 +72,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Expr(expr))
     }
 
-    fn parse_function_def(&mut self) -> Result<Statement> {
+    fn parse_function_def(&mut self) -> ParseResult<Statement> {
         self.expect_def()?;
         let name = self.expect_identifier()?;
         self.expect_lparen()?;
@@ -80,7 +93,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::FunctionDef { name, body })
     }
 
-    fn parse_assignment(&mut self) -> Result<Statement> {
+    fn parse_assignment(&mut self) -> ParseResult<Statement> {
         let name = self.expect_identifier()?;
         self.expect_equal()?;
         let value = self.parse_expression()?;
@@ -88,7 +101,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Assign { name, value })
     }
 
-    fn parse_if(&mut self) -> Result<Statement> {
+    fn parse_if(&mut self) -> ParseResult<Statement> {
         self.expect_if()?;
         let condition = self.parse_expression()?;
         self.expect_colon()?;
@@ -126,7 +139,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_while(&mut self) -> Result<Statement> {
+    fn parse_while(&mut self) -> ParseResult<Statement> {
         self.expect_while()?;
         let condition = self.parse_expression()?;
         self.expect_colon()?;
@@ -145,7 +158,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::While { condition, body })
     }
 
-    fn parse_return(&mut self) -> Result<Statement> {
+    fn parse_return(&mut self) -> ParseResult<Statement> {
         self.expect_return()?;
         if matches!(self.current.kind, TokenKind::Newline) {
             self.advance();
@@ -156,17 +169,17 @@ impl<'a> Parser<'a> {
         Ok(Statement::Return(Some(value)))
     }
 
-    fn parse_pass(&mut self) -> Result<Statement> {
+    fn parse_pass(&mut self) -> ParseResult<Statement> {
         self.expect_pass()?;
         self.expect_newline()?;
         Ok(Statement::Pass)
     }
 
-    fn parse_expression(&mut self) -> Result<Expression> {
+    fn parse_expression(&mut self) -> ParseResult<Expression> {
         self.parse_comparison()
     }
 
-    fn parse_comparison(&mut self) -> Result<Expression> {
+    fn parse_comparison(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_additive()?;
         while matches!(self.current.kind, TokenKind::Less) {
             self.advance();
@@ -180,7 +193,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_additive(&mut self) -> Result<Expression> {
+    fn parse_additive(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_call()?;
         loop {
             if matches!(self.current.kind, TokenKind::Plus) {
@@ -206,7 +219,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_call(&mut self) -> Result<Expression> {
+    fn parse_call(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
         while matches!(self.current.kind, TokenKind::LParen) {
             self.advance();
@@ -223,7 +236,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_primary(&mut self) -> Result<Expression> {
+    fn parse_primary(&mut self) -> ParseResult<Expression> {
         match &self.current.kind {
             TokenKind::Integer(value) => {
                 let value = *value;
@@ -267,7 +280,7 @@ impl<'a> Parser<'a> {
         consumed
     }
 
-    fn expect_identifier(&mut self) -> Result<String> {
+    fn expect_identifier(&mut self) -> ParseResult<String> {
         if let TokenKind::Identifier(name) = &self.current.kind {
             let name = name.to_string();
             self.advance();
@@ -277,7 +290,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_def(&mut self) -> Result<()> {
+    fn expect_def(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Def) {
             self.advance();
             Ok(())
@@ -286,7 +299,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_if(&mut self) -> Result<()> {
+    fn expect_if(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::If) {
             self.advance();
             Ok(())
@@ -295,7 +308,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_while(&mut self) -> Result<()> {
+    fn expect_while(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::While) {
             self.advance();
             Ok(())
@@ -304,7 +317,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_else(&mut self) -> Result<()> {
+    fn expect_else(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Else) {
             self.advance();
             Ok(())
@@ -313,7 +326,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_return(&mut self) -> Result<()> {
+    fn expect_return(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Return) {
             self.advance();
             Ok(())
@@ -322,7 +335,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_pass(&mut self) -> Result<()> {
+    fn expect_pass(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Pass) {
             self.advance();
             Ok(())
@@ -331,7 +344,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_equal(&mut self) -> Result<()> {
+    fn expect_equal(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Equal) {
             self.advance();
             Ok(())
@@ -340,7 +353,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_lparen(&mut self) -> Result<()> {
+    fn expect_lparen(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::LParen) {
             self.advance();
             Ok(())
@@ -349,7 +362,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_rparen(&mut self) -> Result<()> {
+    fn expect_rparen(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::RParen) {
             self.advance();
             Ok(())
@@ -358,7 +371,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_colon(&mut self) -> Result<()> {
+    fn expect_colon(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Colon) {
             self.advance();
             Ok(())
@@ -367,7 +380,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_newline(&mut self) -> Result<()> {
+    fn expect_newline(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Newline) {
             self.advance();
             Ok(())
@@ -376,7 +389,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_indent(&mut self) -> Result<()> {
+    fn expect_indent(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Indent) {
             self.advance();
             Ok(())
@@ -385,7 +398,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_dedent(&mut self) -> Result<()> {
+    fn expect_dedent(&mut self) -> ParseResult<()> {
         if matches!(self.current.kind, TokenKind::Dedent) {
             self.advance();
             Ok(())
@@ -411,18 +424,18 @@ impl<'a> Parser<'a> {
             .unwrap_or(TokenKind::EOF)
     }
 
-    fn error(&self, expected: &str) -> anyhow::Error {
+    fn error(&self, expected: &'static str) -> ParseError {
         let span = self.current.span();
-        anyhow::anyhow!(
-            "Expected {expected}, got {:?} at byte range {}..{}",
-            self.current.kind(),
-            span.start,
-            span.end
-        )
+        ParseError::UnexpectedToken {
+            expected,
+            found: format!("{:?}", self.current.kind()),
+            start: span.start,
+            end: span.end,
+        }
     }
 }
 
-pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> Result<Program> {
+pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> ParseResult<Program> {
     Parser::new(tokens).parse_program()
 }
 
