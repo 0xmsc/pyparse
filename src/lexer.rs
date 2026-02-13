@@ -6,7 +6,6 @@ use crate::token::{Span, Token, TokenKind};
 enum LexerState {
     LineBegin,
     TokenStart,
-    EmitPending,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -51,83 +50,88 @@ impl<'a> Lexer<'a> {
 
     pub fn next_token(&mut self) -> LexResult<Token<'a>> {
         loop {
-            match self.state {
-                LexerState::LineBegin => {
-                    // Compute indentation delta and produce Indent/Dedent tokens as needed.
-                    let indent_level = self.count_indentation()?;
-                    let current_indent = self.current_indent()?;
-                    let index = self.current_index();
-                    let span = Span {
-                        start: index,
-                        end: index,
-                    };
+            if let Some(token) = self.pending_tokens.pop() {
+                return Ok(token);
+            }
 
-                    if indent_level > current_indent {
-                        self.indent_stack.push(indent_level);
-                        self.state = LexerState::TokenStart;
-                        return Ok(Token::new(TokenKind::Indent, span));
-                    }
+            if let Some(token) = self.step_state()? {
+                return Ok(token);
+            }
+        }
+    }
 
-                    if indent_level < current_indent {
-                        while let Some(&top) = self.indent_stack.last() {
-                            if top > indent_level {
-                                self.indent_stack.pop();
-                                self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
-                            } else {
-                                break;
-                            }
-                        }
-                        if self.current_indent()? != indent_level {
-                            return Err(LexError::InvalidDedent {
-                                indent_level,
-                                position: index,
-                            });
-                        }
-                        self.state = LexerState::EmitPending;
-                        continue;
-                    }
+    fn step_state(&mut self) -> LexResult<Option<Token<'a>>> {
+        match self.state {
+            LexerState::LineBegin => {
+                // Compute indentation delta and produce Indent/Dedent tokens as needed.
+                let indent_level = self.count_indentation()?;
+                let current_indent = self.current_indent()?;
+                let index = self.current_index();
+                let span = Span {
+                    start: index,
+                    end: index,
+                };
 
+                if indent_level > current_indent {
+                    self.indent_stack.push(indent_level);
                     self.state = LexerState::TokenStart;
+                    return Ok(Some(Token::new(TokenKind::Indent, span)));
                 }
-                LexerState::TokenStart => {
-                    self.skip_whitespace();
 
-                    // No next character means physical EOF:
-                    // 1) flush remaining indentation as Dedent tokens
-                    // 2) switch to pending emission; EOF is returned once queue is empty
-                    if self.peek_char().is_none() {
-                        while self.indent_stack.len() > 1 {
+                if indent_level < current_indent {
+                    while let Some(&top) = self.indent_stack.last() {
+                        if top > indent_level {
                             self.indent_stack.pop();
-                            let index = self.current_index();
-                            let span = Span {
-                                start: index,
-                                end: index,
-                            };
                             self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+                        } else {
+                            break;
                         }
-                        self.state = LexerState::EmitPending;
-                        continue;
                     }
-
-                    let token = self.read_token_from_current_position()?;
-                    return Ok(token);
-                }
-                LexerState::EmitPending => {
-                    if let Some(token) = self.pending_tokens.pop() {
-                        return Ok(token);
-                    }
-                    if self.peek_char().is_none() {
-                        let index = self.current_index();
-                        return Ok(Token::new(
-                            TokenKind::EOF,
-                            Span {
-                                start: index,
-                                end: index,
-                            },
-                        ));
+                    if self.current_indent()? != indent_level {
+                        return Err(LexError::InvalidDedent {
+                            indent_level,
+                            position: index,
+                        });
                     }
                     self.state = LexerState::TokenStart;
+                    return Ok(None);
                 }
+
+                self.state = LexerState::TokenStart;
+                Ok(None)
+            }
+            LexerState::TokenStart => {
+                self.skip_whitespace();
+
+                // No next character means physical EOF:
+                // 1) flush remaining indentation as Dedent tokens
+                // 2) emit EOF if nothing is pending
+                if self.peek_char().is_none() {
+                    while self.indent_stack.len() > 1 {
+                        self.indent_stack.pop();
+                        let index = self.current_index();
+                        let span = Span {
+                            start: index,
+                            end: index,
+                        };
+                        self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+                    }
+
+                    if !self.pending_tokens.is_empty() {
+                        return Ok(None);
+                    }
+
+                    let index = self.current_index();
+                    return Ok(Some(Token::new(
+                        TokenKind::EOF,
+                        Span {
+                            start: index,
+                            end: index,
+                        },
+                    )));
+                }
+
+                Ok(Some(self.read_token_from_current_position()?))
             }
         }
     }
@@ -150,13 +154,11 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let indent = lookahead - self.pos;
-        self.pos = lookahead;
-        Ok(indent)
+        Ok(self.consume_while(|c| c == ' '))
     }
 
     fn skip_whitespace(&mut self) {
-        self.consume_until(|c| c != ' ');
+        self.consume_while(|c| c == ' ');
     }
 
     fn read_token_from_current_position(&mut self) -> LexResult<Token<'a>> {
@@ -179,70 +181,10 @@ impl<'a> Lexer<'a> {
                     },
                 )
             }
-            '=' => {
+            _ if Self::single_char_token_kind(ch).is_some() => {
                 self.advance_char();
                 Token::new(
-                    TokenKind::Equal,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            '+' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::Plus,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            '-' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::Minus,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            '<' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::Less,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            ':' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::Colon,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            '(' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::LParen,
-                    Span {
-                        start: start_idx,
-                        end: start_idx + 1,
-                    },
-                )
-            }
-            ')' => {
-                self.advance_char();
-                Token::new(
-                    TokenKind::RParen,
+                    Self::single_char_token_kind(ch).unwrap(),
                     Span {
                         start: start_idx,
                         end: start_idx + 1,
@@ -263,8 +205,21 @@ impl<'a> Lexer<'a> {
         Ok(token)
     }
 
+    fn single_char_token_kind(ch: char) -> Option<TokenKind<'a>> {
+        match ch {
+            '=' => Some(TokenKind::Equal),
+            '+' => Some(TokenKind::Plus),
+            '-' => Some(TokenKind::Minus),
+            '<' => Some(TokenKind::Less),
+            ':' => Some(TokenKind::Colon),
+            '(' => Some(TokenKind::LParen),
+            ')' => Some(TokenKind::RParen),
+            _ => None,
+        }
+    }
+
     fn read_identifier(&mut self, start: usize) -> Token<'a> {
-        self.consume_until(|c| !(c.is_alphanumeric() || c == '_'));
+        self.consume_while(|c| c.is_alphanumeric() || c == '_');
         let end_idx = self.current_index();
 
         let ident = &self.input[start..end_idx];
@@ -289,7 +244,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_integer(&mut self, start: usize) -> LexResult<Token<'a>> {
-        self.consume_until(|c| !c.is_ascii_digit());
+        self.consume_while(|c| c.is_ascii_digit());
         let end_idx = self.current_index();
 
         let num_str = &self.input[start..end_idx];
@@ -310,7 +265,7 @@ impl<'a> Lexer<'a> {
         self.advance_char(); // opening quote
         let content_start = self.current_index();
 
-        self.consume_until(|c| c == '"' || c == '\n');
+        self.consume_while(|c| c != '"' && c != '\n');
 
         match self.peek_char() {
             Some('"') => {
@@ -331,17 +286,18 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn consume_until<P>(&mut self, stop_predicate: P) -> usize
+    fn consume_while<P>(&mut self, keep_predicate: P) -> usize
     where
         P: Fn(char) -> bool,
     {
+        let start = self.pos;
         while let Some(c) = self.peek_char() {
-            if stop_predicate(c) {
+            if !keep_predicate(c) {
                 break;
             }
             self.advance_char();
         }
-        self.pos
+        self.pos - start
     }
 
     fn char_at(&self, index: usize) -> Option<char> {
@@ -460,5 +416,80 @@ mod tests {
     fn errors_on_integer_overflow() {
         let err = tokenize("n = 99999999999999999999999999\n").expect_err("expected overflow");
         assert!(err.to_string().contains("Invalid integer literal"));
+    }
+
+    #[test]
+    fn errors_on_tab_indentation() {
+        let err = tokenize("\tx = 1\n").expect_err("expected tab indentation failure");
+        assert_eq!(err, LexError::TabIndentation { position: 0 });
+    }
+
+    #[test]
+    fn errors_on_inconsistent_dedent() {
+        let input = "if True:\n    x = 1\n  y = 2\n";
+        let err = tokenize(input).expect_err("expected inconsistent dedent failure");
+        assert_eq!(
+            err,
+            LexError::InvalidDedent {
+                indent_level: 2,
+                position: 21
+            }
+        );
+    }
+
+    #[test]
+    fn blank_line_does_not_change_indentation() {
+        let input = "if True:\n    x = 1\n\n    y = 2\n";
+        let tokens = tokenize(input).expect("tokenize should succeed");
+        let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
+
+        let expected = vec![
+            TokenKind::If,
+            TokenKind::True,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("x"),
+            TokenKind::Equal,
+            TokenKind::Integer(1),
+            TokenKind::Newline,
+            TokenKind::Newline,
+            TokenKind::Identifier("y"),
+            TokenKind::Equal,
+            TokenKind::Integer(2),
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::EOF,
+        ];
+
+        assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn emits_dedent_before_eof() {
+        let input = "if True:\n    x = 1";
+        let tokens = tokenize(input).expect("tokenize should succeed");
+        let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
+
+        let expected = vec![
+            TokenKind::If,
+            TokenKind::True,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("x"),
+            TokenKind::Equal,
+            TokenKind::Integer(1),
+            TokenKind::Dedent,
+            TokenKind::EOF,
+        ];
+
+        assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn errors_on_unterminated_string() {
+        let err = tokenize("x = \"abc\n").expect_err("expected unterminated string failure");
+        assert_eq!(err, LexError::UnterminatedString { position: 4 });
     }
 }
