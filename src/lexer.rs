@@ -176,47 +176,48 @@ impl<'a> Lexer<'a> {
                     },
                 )
             }
-            _ => match Self::single_char_token_kind(ch) {
-                Some(kind) => self.consume_single_char_token(kind, start_idx),
-                None => match ch {
-                    '"' => self.read_string(start_idx)?,
-                    c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
-                    c if c.is_ascii_digit() => self.read_integer(start_idx)?,
-                    _ => {
-                        return Err(LexError::UnexpectedCharacter {
-                            character: ch,
-                            position: start_idx,
-                        });
+            _ => {
+                if let Some(token) = self.try_consume_single_char_token(ch, start_idx) {
+                    token
+                } else {
+                    match ch {
+                        '"' => self.read_string(start_idx)?,
+                        c if c.is_alphabetic() || c == '_' => self.read_identifier(start_idx),
+                        c if c.is_ascii_digit() => self.read_integer(start_idx)?,
+                        _ => {
+                            return Err(LexError::UnexpectedCharacter {
+                                character: ch,
+                                position: start_idx,
+                            });
+                        }
                     }
-                },
-            },
+                }
+            }
         };
 
         Ok(token)
     }
 
-    fn consume_single_char_token(&mut self, kind: TokenKind<'a>, start: usize) -> Token<'a> {
+    fn try_consume_single_char_token(&mut self, ch: char, start: usize) -> Option<Token<'a>> {
+        let kind = match ch {
+            '=' => TokenKind::Equal,
+            '+' => TokenKind::Plus,
+            '-' => TokenKind::Minus,
+            '<' => TokenKind::Less,
+            ':' => TokenKind::Colon,
+            '(' => TokenKind::LParen,
+            ')' => TokenKind::RParen,
+            _ => return None,
+        };
+
         self.consume_char();
-        Token::new(
+        Some(Token::new(
             kind,
             Span {
                 start,
                 end: start + 1,
             },
-        )
-    }
-
-    fn single_char_token_kind(ch: char) -> Option<TokenKind<'a>> {
-        match ch {
-            '=' => Some(TokenKind::Equal),
-            '+' => Some(TokenKind::Plus),
-            '-' => Some(TokenKind::Minus),
-            '<' => Some(TokenKind::Less),
-            ':' => Some(TokenKind::Colon),
-            '(' => Some(TokenKind::LParen),
-            ')' => Some(TokenKind::RParen),
-            _ => None,
-        }
+        ))
     }
 
     fn read_identifier(&mut self, start: usize) -> Token<'a> {
