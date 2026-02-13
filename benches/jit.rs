@@ -28,7 +28,7 @@ fn bench_jit(c: &mut Criterion) {
         });
 
         c.bench_function(&format!("backend_jit_total_{label}"), |b| {
-            let mut jit = JIT::new();
+            let jit = JIT::new();
             b.iter(|| {
                 let output = jit.run(black_box(&program)).expect("run");
                 black_box(output);

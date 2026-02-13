@@ -3,8 +3,6 @@ use std::io::{self, Read};
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::Backend;
-
 mod ast;
 mod backend;
 #[cfg(test)]
@@ -57,16 +55,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if backend_name == "vm" {
-        let mut vm = backend::vm::VM::new();
-        let output = vm.run(&program)?;
-        if !output.is_empty() {
-            print!("{output}");
-        }
-        return Ok(());
-    }
-
-    for mut backend in backend::backends() {
+    for backend in backend::backends() {
         if backend.name() == backend_name {
             let output = backend.run(&program)?;
             if !output.is_empty() {

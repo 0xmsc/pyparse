@@ -50,7 +50,7 @@ fn slow_runs_programs_across_backends() -> Result<()> {
                 }
                 Ok(tokens) => match parser::parse_tokens(tokens) {
                     Ok(program) => {
-                        for mut backend in backend::backends() {
+                        for backend in backend::backends() {
                             let result = backend.run(&program);
                             ensure!(
                                 result.is_err(),
@@ -85,7 +85,7 @@ fn slow_runs_programs_across_backends() -> Result<()> {
             parser::parse_tokens(tokens).with_context(|| format!("Parsing {}", path.display()))?;
         let expected_output = normalize_output(&expected);
 
-        for mut backend in backend::backends() {
+        for backend in backend::backends() {
             let output = backend.run(&program).with_context(|| {
                 format!("Backend {} failed for {}", backend.name(), path.display())
             })?;

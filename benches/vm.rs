@@ -25,7 +25,7 @@ fn bench_vm(c: &mut Criterion) {
         });
 
         c.bench_function(&format!("backend_vm_total_{label}"), |b| {
-            let mut vm = vm::VM::new();
+            let vm = vm::VM::new();
             b.iter(|| {
                 let output = vm.run(black_box(&program)).expect("run");
                 black_box(output);

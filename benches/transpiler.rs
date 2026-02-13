@@ -21,7 +21,7 @@ fn bench_transpiler(c: &mut Criterion) {
         });
 
         c.bench_function(&format!("backend_transpiler_total_{label}"), |b| {
-            let mut transpiler = Transpiler;
+            let transpiler = Transpiler;
             b.iter(|| {
                 let output = transpiler.run(black_box(&program)).expect("run");
                 black_box(output);

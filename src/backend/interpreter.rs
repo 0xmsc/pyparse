@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::backend::Backend;
+use crate::backend::{Backend, PreparedBackend};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -52,9 +52,16 @@ struct Function {
     body: Vec<Statement>,
 }
 
-pub struct Interpreter {
-    globals: HashMap<String, Value>,
+pub struct Interpreter;
+
+pub struct PreparedInterpreter {
     functions: HashMap<String, Function>,
+    main_statements: Vec<Statement>,
+}
+
+struct InterpreterRuntime<'a> {
+    globals: HashMap<String, Value>,
+    functions: &'a HashMap<String, Function>,
     output: Vec<String>,
 }
 
@@ -65,37 +72,39 @@ enum ExecResult {
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self {
-            globals: HashMap::new(),
-            functions: HashMap::new(),
-            output: Vec::new(),
-        }
+        Self
     }
 
-    pub fn run(&mut self, program: &Program) -> Result<String> {
-        self.globals.clear();
-        self.functions.clear();
-        self.output.clear();
-        for statement in &program.statements {
-            match self.exec_statement(statement, None)? {
+    pub fn run(&self, program: &Program) -> Result<String> {
+        self.prepare(program)?.run()
+    }
+}
+
+impl PreparedInterpreter {
+    fn run_once(&self) -> Result<String> {
+        let mut runtime = InterpreterRuntime {
+            globals: HashMap::new(),
+            functions: &self.functions,
+            output: Vec::new(),
+        };
+        for statement in &self.main_statements {
+            match runtime.exec_statement(statement, None)? {
                 ExecResult::Continue => {}
                 ExecResult::Return(_) => bail!("Return outside of function"),
             }
         }
-        Ok(self.output.join("\n"))
+        Ok(runtime.output.join("\n"))
     }
+}
 
+impl<'a> InterpreterRuntime<'a> {
     fn exec_statement(
         &mut self,
         statement: &Statement,
         mut locals: Option<&mut HashMap<String, Value>>,
     ) -> Result<ExecResult> {
         match statement {
-            Statement::FunctionDef { name, body } => {
-                self.functions
-                    .insert(name.to_string(), Function { body: body.clone() });
-                Ok(ExecResult::Continue)
-            }
+            Statement::FunctionDef { .. } => bail!("Nested function definitions are not supported"),
             Statement::Assign { name, value } => {
                 let value = self.eval_expression(value, locals.as_deref_mut())?;
                 if let Some(locals) = locals {
@@ -250,13 +259,34 @@ impl Default for Interpreter {
     }
 }
 
+impl PreparedBackend for PreparedInterpreter {
+    fn run(&self) -> Result<String> {
+        self.run_once()
+    }
+}
+
 impl Backend for Interpreter {
     fn name(&self) -> &'static str {
         "interpreter"
     }
 
-    fn run(&mut self, program: &Program) -> Result<String> {
-        Interpreter::run(self, program)
+    fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
+        let mut functions = HashMap::new();
+        let mut main_statements = Vec::new();
+
+        for statement in &program.statements {
+            match statement {
+                Statement::FunctionDef { name, body } => {
+                    functions.insert(name.clone(), Function { body: body.clone() });
+                }
+                _ => main_statements.push(statement.clone()),
+            }
+        }
+
+        Ok(Box::new(PreparedInterpreter {
+            functions,
+            main_statements,
+        }))
     }
 }
 
@@ -300,10 +330,9 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&program).expect("run failed");
         assert_eq!(output, "3");
-        assert_eq!(interpreter.globals.get("n"), Some(&Value::Integer(3)));
     }
 
     #[test]
@@ -323,7 +352,7 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&program).expect("run failed");
         assert_eq!(output, "then\nelse");
     }
@@ -355,10 +384,9 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&program).expect("run failed");
         assert_eq!(output, "3");
-        assert_eq!(interpreter.globals.get("n"), Some(&Value::Integer(3)));
     }
 
     #[test]
@@ -376,7 +404,7 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&program).expect("run failed");
         assert_eq!(output, "7");
     }
@@ -400,7 +428,7 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let error = interpreter.run(&program).expect_err("expected undefined variable");
         assert!(error.to_string().contains("Undefined variable 'x'"));
     }
@@ -411,7 +439,7 @@ mod tests {
             statements: vec![Statement::Return(Some(int(1)))],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let error = interpreter
             .run(&program)
             .expect_err("expected return outside function");
@@ -427,7 +455,7 @@ mod tests {
             })],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let error = interpreter
             .run(&invalid_callee_program)
             .expect_err("expected call target error");
@@ -454,7 +482,7 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let error = interpreter
             .run(&program)
             .expect_err("expected argument mismatch");
@@ -481,7 +509,7 @@ mod tests {
             ],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&program).expect("run failed");
         assert_eq!(output, "True hello None");
     }
@@ -501,7 +529,7 @@ mod tests {
             statements: vec![print(vec![identifier("x")])],
         };
 
-        let mut interpreter = Interpreter::new();
+        let interpreter = Interpreter::new();
         let output = interpreter.run(&first_program).expect("first run failed");
         assert_eq!(output, "1");
 

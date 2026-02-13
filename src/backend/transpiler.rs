@@ -2,13 +2,17 @@ use anyhow::{Result, bail};
 use std::collections::HashSet;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::backend::Backend;
+use crate::backend::{Backend, PreparedBackend};
 use crate::backend::c_runtime::{
     C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_and_run,
     escape_c_string,
 };
 
 pub struct Transpiler;
+
+pub struct PreparedTranspiler {
+    source: String,
+}
 
 impl Transpiler {
     pub fn transpile(&self, program: &Program) -> Result<String> {
@@ -287,10 +291,16 @@ impl Backend for Transpiler {
         "transpiler"
     }
 
-    fn run(&mut self, program: &Program) -> Result<String> {
+    fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
         let source = self.transpile(program)?;
+        Ok(Box::new(PreparedTranspiler { source }))
+    }
+}
+
+impl PreparedBackend for PreparedTranspiler {
+    fn run(&self) -> Result<String> {
         compile_and_run(
-            &source,
+            &self.source,
             "",
             "C compilation failed",
             "Transpiled program failed",

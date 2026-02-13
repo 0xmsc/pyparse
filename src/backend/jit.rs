@@ -9,7 +9,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
-use crate::backend::Backend;
+use crate::backend::{Backend, PreparedBackend};
 use crate::backend::bytecode::{Instruction, compile};
 
 type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
@@ -250,6 +250,10 @@ pub struct PreparedProgram {
     global_names: Vec<String>,
 }
 
+pub struct PreparedJIT {
+    prepared: PreparedProgram,
+}
+
 impl JIT {
     pub fn new() -> Self {
         Self
@@ -359,9 +363,16 @@ impl Backend for JIT {
         "jit"
     }
 
-    fn run(&mut self, program: &Program) -> Result<String> {
-        let prepared = self.prepare(program)?;
-        self.run_prepared(&prepared)
+    fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
+        Ok(Box::new(PreparedJIT {
+            prepared: JIT::prepare(self, program)?,
+        }))
+    }
+}
+
+impl PreparedBackend for PreparedJIT {
+    fn run(&self) -> Result<String> {
+        JIT::new().run_prepared(&self.prepared)
     }
 }
 

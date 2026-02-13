@@ -8,7 +8,7 @@ fn bench_interpreter(c: &mut Criterion) {
         let program = common::load_program(path);
 
         c.bench_function(&format!("backend_interpreter_total_{label}"), |b| {
-            let mut interpreter = Interpreter::new();
+            let interpreter = Interpreter::new();
             b.iter(|| {
                 let output = interpreter.run(black_box(&program)).expect("run");
                 black_box(output);

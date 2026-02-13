@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::Program;
-use crate::backend::Backend;
+use crate::backend::{Backend, PreparedBackend};
 use crate::backend::bytecode::{CompiledProgram, Instruction, compile};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +51,10 @@ impl Value {
 pub struct VM {
     globals: HashMap<String, Value>,
     output: Vec<String>,
+}
+
+pub struct PreparedVM {
+    compiled: CompiledProgram,
 }
 
 impl VM {
@@ -206,9 +210,17 @@ impl Backend for VM {
         "vm"
     }
 
-    fn run(&mut self, program: &Program) -> Result<String> {
-        let compiled = compile(program)?;
-        self.run_compiled(&compiled)
+    fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
+        Ok(Box::new(PreparedVM {
+            compiled: compile(program)?,
+        }))
+    }
+}
+
+impl PreparedBackend for PreparedVM {
+    fn run(&self) -> Result<String> {
+        let mut vm = VM::new();
+        vm.run_compiled(&self.compiled)
     }
 }
 
