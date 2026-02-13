@@ -96,8 +96,7 @@ impl<'a> Parser<'a> {
         let then_body = self.parse_indented_block()?;
 
         let mut else_body = Vec::new();
-        if matches!(self.current_kind(), TokenKind::Else) {
-            self.expect_else()?;
+        if self.try_consume(TokenKind::Else) {
             self.expect_colon()?;
             self.expect_newline()?;
             else_body = self.parse_indented_block()?;
@@ -122,8 +121,7 @@ impl<'a> Parser<'a> {
 
     fn parse_return(&mut self) -> ParseResult<Statement> {
         self.expect_return()?;
-        if matches!(self.current_kind(), TokenKind::Newline) {
-            self.advance();
+        if self.try_consume(TokenKind::Newline) {
             return Ok(Statement::Return(None));
         }
         let value = self.parse_expression()?;
@@ -143,8 +141,7 @@ impl<'a> Parser<'a> {
 
     fn parse_comparison(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_additive()?;
-        while matches!(self.current_kind(), TokenKind::Less) {
-            self.advance();
+        while self.try_consume(TokenKind::Less) {
             let right = self.parse_additive()?;
             expr = Expression::BinaryOp {
                 left: Box::new(expr),
@@ -158,16 +155,14 @@ impl<'a> Parser<'a> {
     fn parse_additive(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_call()?;
         loop {
-            if matches!(self.current_kind(), TokenKind::Plus) {
-                self.advance();
+            if self.try_consume(TokenKind::Plus) {
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
                     left: Box::new(expr),
                     op: BinaryOperator::Add,
                     right: Box::new(right),
                 };
-            } else if matches!(self.current_kind(), TokenKind::Minus) {
-                self.advance();
+            } else if self.try_consume(TokenKind::Minus) {
                 let right = self.parse_call()?;
                 expr = Expression::BinaryOp {
                     left: Box::new(expr),
@@ -183,8 +178,7 @@ impl<'a> Parser<'a> {
 
     fn parse_call(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
-        while matches!(self.current_kind(), TokenKind::LParen) {
-            self.advance();
+        while self.try_consume(TokenKind::LParen) {
             let mut args = Vec::new();
             if !matches!(self.current_kind(), TokenKind::RParen) {
                 args.push(self.parse_expression()?);
@@ -232,9 +226,8 @@ impl<'a> Parser<'a> {
 
     fn consume_newlines(&mut self) -> bool {
         let mut consumed = false;
-        while matches!(self.current_kind(), TokenKind::Newline) {
+        while self.try_consume(TokenKind::Newline) {
             consumed = true;
-            self.advance();
         }
         consumed
     }
@@ -272,10 +265,6 @@ impl<'a> Parser<'a> {
 
     fn expect_while(&mut self) -> ParseResult<()> {
         self.expect_token(TokenKind::While, "while")
-    }
-
-    fn expect_else(&mut self) -> ParseResult<()> {
-        self.expect_token(TokenKind::Else, "else")
     }
 
     fn expect_return(&mut self) -> ParseResult<()> {
@@ -324,6 +313,15 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             Err(self.error(expected_name))
+        }
+    }
+
+    fn try_consume(&mut self, expected_kind: TokenKind<'static>) -> bool {
+        if self.current_kind() == expected_kind {
+            self.advance();
+            true
+        } else {
+            false
         }
     }
 
