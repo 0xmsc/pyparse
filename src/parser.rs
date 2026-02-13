@@ -34,7 +34,7 @@ impl<'a> Parser<'a> {
     pub fn parse_program(mut self) -> ParseResult<Program> {
         let mut statements = Vec::new();
         while !matches!(self.current_kind(), TokenKind::EOF) {
-            if self.skip_optional_newlines() {
+            if self.consume_newlines() {
                 continue;
             }
             statements.push(self.parse_statement()?);
@@ -79,7 +79,7 @@ impl<'a> Parser<'a> {
 
         let mut body = Vec::new();
         while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
-            if self.skip_optional_newlines() {
+            if self.consume_newlines() {
                 continue;
             }
             body.push(self.parse_statement()?);
@@ -106,7 +106,7 @@ impl<'a> Parser<'a> {
 
         let mut then_body = Vec::new();
         while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
-            if self.skip_optional_newlines() {
+            if self.consume_newlines() {
                 continue;
             }
             then_body.push(self.parse_statement()?);
@@ -120,7 +120,7 @@ impl<'a> Parser<'a> {
             self.expect_newline()?;
             self.expect_indent()?;
             while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
-                if self.skip_optional_newlines() {
+                if self.consume_newlines() {
                     continue;
                 }
                 else_body.push(self.parse_statement()?);
@@ -144,7 +144,7 @@ impl<'a> Parser<'a> {
 
         let mut body = Vec::new();
         while !matches!(self.current_kind(), TokenKind::Dedent | TokenKind::EOF) {
-            if self.skip_optional_newlines() {
+            if self.consume_newlines() {
                 continue;
             }
             body.push(self.parse_statement()?);
@@ -272,11 +272,6 @@ impl<'a> Parser<'a> {
         }
         consumed
     }
-
-    fn skip_optional_newlines(&mut self) -> bool {
-        self.consume_newlines()
-    }
-
     fn expect_identifier(&mut self) -> ParseResult<String> {
         if let TokenKind::Identifier(name) = self.current_kind() {
             self.advance();
@@ -444,12 +439,12 @@ mod tests {
     use super::*;
     use crate::token::Span;
 
+    fn tok<'a>(kind: TokenKind<'a>) -> Token<'a> {
+        Token::new(kind, Span::default())
+    }
+
     #[test]
     fn parses_simple_program() {
-        fn tok<'a>(kind: TokenKind<'a>) -> Token<'a> {
-            Token::new(kind, Span::default())
-        }
-
         let tokens = vec![
             tok(TokenKind::Def),
             tok(TokenKind::Identifier("fn")),
@@ -505,5 +500,103 @@ mod tests {
         };
 
         assert_eq!(program, expected);
+    }
+
+    #[test]
+    fn errors_on_empty_token_stream() {
+        let err = parse_tokens(vec![]).expect_err("expected empty token stream failure");
+        assert_eq!(err, ParseError::EmptyTokenStream);
+    }
+
+    #[test]
+    fn errors_when_newline_is_missing_after_statement() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::EOF),
+        ];
+
+        let err = parse_tokens(tokens).expect_err("expected parse failure");
+        assert_eq!(
+            err,
+            ParseError::UnexpectedToken {
+                expected: "newline",
+                found: "EOF".to_string(),
+                start: 0,
+                end: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_if_else_while_and_return() {
+        let tokens = vec![
+            tok(TokenKind::If),
+            tok(TokenKind::True),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Pass),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Else),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Return),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::While),
+            tok(TokenKind::False),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        let expected = Program {
+            statements: vec![
+                Statement::If {
+                    condition: Expression::Boolean(true),
+                    then_body: vec![Statement::Pass],
+                    else_body: vec![Statement::Return(None)],
+                },
+                Statement::While {
+                    condition: Expression::Boolean(false),
+                    body: vec![Statement::Assign {
+                        name: "x".to_string(),
+                        value: Expression::Integer(1),
+                    }],
+                },
+            ],
+        };
+
+        assert_eq!(program, expected);
+    }
+
+    #[test]
+    fn skips_leading_blank_lines() {
+        let tokens = vec![
+            tok(TokenKind::Newline),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Pass),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Pass],
+            }
+        );
     }
 }
