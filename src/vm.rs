@@ -7,7 +7,9 @@ use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::list::ListError;
-use crate::runtime::object::{ObjectKind, ObjectRef, new_list_object};
+use crate::runtime::object::{
+    AttributeError, MethodError, ObjectKind, ObjectRef, ObjectWrapper, new_list_object,
+};
 
 type VmResult<T> = std::result::Result<T, VmError>;
 
@@ -140,15 +142,6 @@ impl Value {
 
     fn list_object(values: Vec<Value>) -> Self {
         Value::Object(new_list_object(values))
-    }
-
-    fn as_list_object(&self) -> Option<ObjectRef<Value>> {
-        match self {
-            Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                Some(object.clone())
-            }
-            _ => None,
-        }
     }
 }
 
@@ -323,20 +316,16 @@ impl VmRuntime<'_> {
                     let object = self.pop_stack()?;
                     let index_raw = index_value.as_int()?;
                     let object = match object {
-                        Value::Object(object)
-                            if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                        {
-                            object
-                        }
+                        Value::Object(object) => object,
                         other => {
                             return Err(VmError::ExpectedListType {
                                 got: format!("{other:?}"),
                             });
                         }
                     };
-                    let borrowed = object.borrow();
-                    let ObjectKind::List(list) = &borrowed.kind;
-                    let value = list.__getitem__(index_raw).map_err(Self::map_list_error)?;
+                    let value = ObjectWrapper::new(object)
+                        .get_item(index_raw)
+                        .map_err(Self::map_list_error)?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
@@ -347,20 +336,15 @@ impl VmRuntime<'_> {
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
                     let object = match target {
-                        Value::Object(object)
-                            if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                        {
-                            object
-                        }
+                        Value::Object(object) => object.clone(),
                         other => {
                             return Err(VmError::ExpectedListType {
                                 got: format!("{other:?}"),
                             });
                         }
                     };
-                    let mut borrowed = object.borrow_mut();
-                    let ObjectKind::List(list) = &mut borrowed.kind;
-                    list.__setitem__(index_raw, value)
+                    ObjectWrapper::new(object)
+                        .set_item(index_raw, value)
                         .map_err(Self::map_list_error)?;
                 }
                 Instruction::Call { argc } => {
@@ -408,10 +392,13 @@ impl VmRuntime<'_> {
     }
 
     fn load_attribute(&self, object: Value, attribute: String) -> VmResult<Value> {
-        if object.as_list_object().is_some() && attribute == "append" {
+        if let Value::Object(object_ref) = &object {
+            let method = ObjectWrapper::new(object_ref.clone())
+                .get_attribute_method_name(&attribute)
+                .map_err(Self::map_attribute_error)?;
             return Ok(Value::BoundMethod {
                 receiver: Box::new(object),
-                method: attribute,
+                method,
             });
         }
         Err(VmError::UnknownAttribute {
@@ -441,13 +428,9 @@ impl VmRuntime<'_> {
                     });
                 }
                 match &args[0] {
-                    Value::Object(object)
-                        if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                    {
-                        let borrowed = object.borrow();
-                        let ObjectKind::List(list) = &borrowed.kind;
-                        Ok(Value::Integer(list.__len__() as i64))
-                    }
+                    Value::Object(object) => Ok(Value::Integer(
+                        ObjectWrapper::new(object.clone()).len() as i64,
+                    )),
                     other => Err(VmError::ExpectedListType {
                         got: format!("{other:?}"),
                     }),
@@ -478,26 +461,11 @@ impl VmRuntime<'_> {
                 result
             }
             Value::BoundMethod { receiver, method } => match *receiver {
-                Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                    match method.as_str() {
-                        "append" => {
-                            if args.len() != 1 {
-                                return Err(VmError::MethodArityMismatch {
-                                    method: "append".to_string(),
-                                    expected: 1,
-                                    found: args.len(),
-                                });
-                            }
-                            let mut borrowed = object.borrow_mut();
-                            let ObjectKind::List(list) = &mut borrowed.kind;
-                            list.append(args.into_iter().next().expect("len checked above"));
-                            Ok(Value::None)
-                        }
-                        _ => Err(VmError::UnknownMethod {
-                            method,
-                            type_name: "list".to_string(),
-                        }),
-                    }
+                Value::Object(object) => {
+                    ObjectWrapper::new(object.clone())
+                        .call_method(&method, args)
+                        .map_err(Self::map_method_error)?;
+                    Ok(Value::None)
                 }
                 other => Err(VmError::UnknownMethod {
                     method,
@@ -514,6 +482,35 @@ impl VmRuntime<'_> {
         match error {
             ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
             ListError::OutOfBounds { index, len } => VmError::ListIndexOutOfBounds { index, len },
+        }
+    }
+
+    fn map_attribute_error(error: AttributeError) -> VmError {
+        match error {
+            AttributeError::UnknownAttribute {
+                attribute,
+                type_name,
+            } => VmError::UnknownAttribute {
+                attribute,
+                type_name,
+            },
+        }
+    }
+
+    fn map_method_error(error: MethodError) -> VmError {
+        match error {
+            MethodError::ArityMismatch {
+                method,
+                expected,
+                found,
+            } => VmError::MethodArityMismatch {
+                method,
+                expected,
+                found,
+            },
+            MethodError::UnknownMethod { method, type_name } => {
+                VmError::UnknownMethod { method, type_name }
+            }
         }
     }
 }

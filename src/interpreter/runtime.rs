@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::list::ListError;
-use crate::runtime::object::ObjectKind;
+use crate::runtime::object::{AttributeError, MethodError, ObjectWrapper};
 
 use super::{Function, InterpreterError, Value};
 
@@ -116,12 +116,9 @@ impl<'a> InterpreterRuntime<'a> {
                             }
                         })?;
                         match list {
-                            Value::Object(object)
-                                if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                            {
-                                let mut borrowed = object.borrow_mut();
-                                let ObjectKind::List(list) = &mut borrowed.kind;
-                                list.__setitem__(raw_index, value)
+                            Value::Object(object) => {
+                                ObjectWrapper::new(object.clone())
+                                    .set_item(raw_index, value)
                                     .map_err(Self::map_list_error)?;
                             }
                             other => {
@@ -204,13 +201,9 @@ impl<'a> InterpreterRuntime<'a> {
                 let object = self.eval_expression(object, environment)?;
                 let raw_index = self.eval_expression(index, environment)?.as_int()?;
                 match object {
-                    Value::Object(object)
-                        if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                    {
-                        let borrowed = object.borrow();
-                        let ObjectKind::List(list) = &borrowed.kind;
-                        list.__getitem__(raw_index).map_err(Self::map_list_error)
-                    }
+                    Value::Object(object) => ObjectWrapper::new(object.clone())
+                        .get_item(raw_index)
+                        .map_err(Self::map_list_error),
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
                     }),
@@ -285,10 +278,13 @@ impl<'a> InterpreterRuntime<'a> {
         object: Value,
         attribute: String,
     ) -> std::result::Result<Value, InterpreterError> {
-        if object.as_list_object().is_some() && attribute == "append" {
+        if let Value::Object(object_ref) = &object {
+            let method = ObjectWrapper::new(object_ref.clone())
+                .get_attribute_method_name(&attribute)
+                .map_err(Self::map_attribute_error)?;
             return Ok(Value::BoundMethod {
                 receiver: Box::new(object),
-                method: attribute,
+                method,
             });
         }
         Err(InterpreterError::UnknownAttribute {
@@ -318,13 +314,9 @@ impl<'a> InterpreterRuntime<'a> {
                     });
                 }
                 match &args[0] {
-                    Value::Object(object)
-                        if matches!(object.borrow().kind, ObjectKind::List(_)) =>
-                    {
-                        let borrowed = object.borrow();
-                        let ObjectKind::List(list) = &borrowed.kind;
-                        Ok(Value::Integer(list.__len__() as i64))
-                    }
+                    Value::Object(object) => Ok(Value::Integer(
+                        ObjectWrapper::new(object.clone()).len() as i64,
+                    )),
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
                     }),
@@ -353,26 +345,11 @@ impl<'a> InterpreterRuntime<'a> {
                 }
             }
             Value::BoundMethod { receiver, method } => match *receiver {
-                Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                    match method.as_str() {
-                        "append" => {
-                            if args.len() != 1 {
-                                return Err(InterpreterError::MethodArityMismatch {
-                                    method: "append".to_string(),
-                                    expected: 1,
-                                    found: args.len(),
-                                });
-                            }
-                            let mut borrowed = object.borrow_mut();
-                            let ObjectKind::List(list) = &mut borrowed.kind;
-                            list.append(args.into_iter().next().expect("len checked above"));
-                            Ok(Value::None)
-                        }
-                        _ => Err(InterpreterError::UnknownMethod {
-                            method,
-                            type_name: "list".to_string(),
-                        }),
-                    }
+                Value::Object(object) => {
+                    ObjectWrapper::new(object.clone())
+                        .call_method(&method, args)
+                        .map_err(Self::map_method_error)?;
+                    Ok(Value::None)
                 }
                 other => Err(InterpreterError::UnknownMethod {
                     method,
@@ -390,6 +367,35 @@ impl<'a> InterpreterRuntime<'a> {
             ListError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
             ListError::OutOfBounds { index, len } => {
                 InterpreterError::ListIndexOutOfBounds { index, len }
+            }
+        }
+    }
+
+    fn map_attribute_error(error: AttributeError) -> InterpreterError {
+        match error {
+            AttributeError::UnknownAttribute {
+                attribute,
+                type_name,
+            } => InterpreterError::UnknownAttribute {
+                attribute,
+                type_name,
+            },
+        }
+    }
+
+    fn map_method_error(error: MethodError) -> InterpreterError {
+        match error {
+            MethodError::ArityMismatch {
+                method,
+                expected,
+                found,
+            } => InterpreterError::MethodArityMismatch {
+                method,
+                expected,
+                found,
+            },
+            MethodError::UnknownMethod { method, type_name } => {
+                InterpreterError::UnknownMethod { method, type_name }
             }
         }
     }

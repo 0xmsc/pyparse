@@ -92,13 +92,4 @@ impl Value {
     pub(super) fn list_object(values: Vec<Value>) -> Self {
         Value::Object(new_list_object(values))
     }
-
-    pub(super) fn as_list_object(&self) -> Option<ObjectRef<Value>> {
-        match self {
-            Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                Some(object.clone())
-            }
-            _ => None,
-        }
-    }
 }
