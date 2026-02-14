@@ -932,22 +932,18 @@ fn define_function(
                 }
             }
             Instruction::JumpIfFalse(target) => {
-                if *target >= code.len() {
-                    bail!("Invalid jump target {target} at {idx}");
-                }
+                let target_index = resolve_relative_target(idx, *target, code.len())?;
                 let value = pop_value(&mut builder);
                 let call = builder.ins().call(is_truthy, &[value]);
                 let truthy = builder.inst_results(call)[0];
                 builder
                     .ins()
-                    .brif(truthy, blocks[idx + 1], &[], blocks[*target], &[]);
+                    .brif(truthy, blocks[idx + 1], &[], blocks[target_index], &[]);
                 terminated = true;
             }
             Instruction::Jump(target) => {
-                if *target >= code.len() {
-                    bail!("Invalid jump target {target} at {idx}");
-                }
-                builder.ins().jump(blocks[*target], &[]);
+                let target_index = resolve_relative_target(idx, *target, code.len())?;
+                builder.ins().jump(blocks[target_index], &[]);
                 terminated = true;
             }
             Instruction::Pop => {
@@ -1045,10 +1041,24 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
         match instruction {
             Instruction::Return | Instruction::ReturnValue => {}
             Instruction::Jump(target) => {
-                propagate_depth(&mut depths, &mut worklist, *target, next_depth, code.len())?;
+                let target_index = resolve_relative_target(ip, *target, code.len())?;
+                propagate_depth(
+                    &mut depths,
+                    &mut worklist,
+                    target_index,
+                    next_depth,
+                    code.len(),
+                )?;
             }
             Instruction::JumpIfFalse(target) => {
-                propagate_depth(&mut depths, &mut worklist, *target, next_depth, code.len())?;
+                let target_index = resolve_relative_target(ip, *target, code.len())?;
+                propagate_depth(
+                    &mut depths,
+                    &mut worklist,
+                    target_index,
+                    next_depth,
+                    code.len(),
+                )?;
                 propagate_depth(&mut depths, &mut worklist, ip + 1, next_depth, code.len())?;
             }
             _ => {
@@ -1058,6 +1068,14 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
     }
 
     Ok(max_depth)
+}
+
+fn resolve_relative_target(ip: usize, offset: isize, code_len: usize) -> Result<usize> {
+    let target = (ip as isize) + 1 + offset;
+    if target < 0 || (target as usize) >= code_len {
+        bail!("Invalid jump target at {ip} with offset {offset}");
+    }
+    Ok(target as usize)
 }
 
 fn propagate_depth(

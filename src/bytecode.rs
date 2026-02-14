@@ -15,23 +15,25 @@ pub enum Instruction {
     Sub,
     LessThan,
     CallFunction { name: String, argc: usize },
-    JumpIfFalse(usize),
-    Jump(usize),
+    JumpIfFalse(isize),
+    Jump(isize),
     Pop,
     Return,
     ReturnValue,
 }
 
+type CompiledBlock = Vec<Instruction>;
+
 #[derive(Debug, Clone)]
 pub struct CompiledFunction {
     pub params: Vec<String>,
-    pub code: Vec<Instruction>,
+    pub code: CompiledBlock,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompiledProgram {
     pub functions: HashMap<String, CompiledFunction>,
-    pub main: Vec<Instruction>,
+    pub main: CompiledBlock,
 }
 
 pub fn compile(program: &Program) -> Result<CompiledProgram> {
@@ -47,7 +49,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                 let compiled = compile_function(params, body)?;
                 functions.insert(name.to_string(), compiled);
             }
-            _ => append_relocated(&mut main, compile_statement(statement, false)?),
+            _ => main.extend(compile_statement(statement, false)?),
         }
     }
 
@@ -64,19 +66,19 @@ fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFun
     })
 }
 
-fn compile_block(statements: &[Statement], in_function: bool) -> Result<Vec<Instruction>> {
+fn compile_block(statements: &[Statement], in_function: bool) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     for statement in statements {
-        append_relocated(&mut code, compile_statement(statement, in_function)?);
+        code.extend(compile_statement(statement, in_function)?);
     }
     Ok(code)
 }
 
-fn compile_statement(statement: &Statement, in_function: bool) -> Result<Vec<Instruction>> {
+fn compile_statement(statement: &Statement, in_function: bool) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
         Statement::Assign { name, value } => {
-            compile_expression(value, &mut code)?;
+            code.extend(compile_expression(value)?);
             code.push(Instruction::StoreName(name.to_string()));
         }
         Statement::If {
@@ -84,45 +86,43 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Vec<Ins
             then_body,
             else_body,
         } => {
-            let mut condition_code = Vec::new();
-            compile_expression(condition, &mut condition_code)?;
+            let condition_code = compile_expression(condition)?;
             let then_code = compile_block(then_body, in_function)?;
             let else_code = compile_block(else_body, in_function)?;
-            let condition_len = condition_code.len();
             let then_len = then_code.len();
             let else_len = else_code.len();
 
-            append_relocated(&mut code, condition_code);
+            code.extend(condition_code);
             if else_body.is_empty() {
-                code.push(Instruction::JumpIfFalse(condition_len + 1 + then_len));
-                append_relocated(&mut code, then_code);
+                code.push(Instruction::JumpIfFalse(then_len as isize));
+                code.extend(then_code);
             } else {
-                let else_start = condition_len + 1 + then_len + 1;
-                let end = else_start + else_len;
-                code.push(Instruction::JumpIfFalse(else_start));
-                append_relocated(&mut code, then_code);
-                code.push(Instruction::Jump(end));
-                append_relocated(&mut code, else_code);
+                let jump_to_else_offset = (then_len + 1) as isize;
+                let jump_to_end_offset = else_len as isize;
+                code.push(Instruction::JumpIfFalse(jump_to_else_offset));
+                code.extend(then_code);
+                code.push(Instruction::Jump(jump_to_end_offset));
+                code.extend(else_code);
             }
         }
         Statement::While { condition, body } => {
-            let mut condition_code = Vec::new();
-            compile_expression(condition, &mut condition_code)?;
+            let condition_code = compile_expression(condition)?;
             let body_code = compile_block(body, in_function)?;
             let condition_len = condition_code.len();
             let body_len = body_code.len();
 
-            append_relocated(&mut code, condition_code);
-            code.push(Instruction::JumpIfFalse(condition_len + 1 + body_len + 1));
-            append_relocated(&mut code, body_code);
-            code.push(Instruction::Jump(0));
+            code.extend(condition_code);
+            code.push(Instruction::JumpIfFalse((body_len + 1) as isize));
+            code.extend(body_code);
+            let jump_back_offset = -((condition_len + body_len + 2) as isize);
+            code.push(Instruction::Jump(jump_back_offset));
         }
         Statement::Return(value) => {
             if !in_function {
                 bail!("Return outside of function is not supported in the VM");
             }
             if let Some(value) = value {
-                compile_expression(value, &mut code)?;
+                code.extend(compile_expression(value)?);
             } else {
                 code.push(Instruction::PushNone);
             }
@@ -130,7 +130,7 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Vec<Ins
         }
         Statement::Pass => {}
         Statement::Expr(expr) => {
-            compile_expression(expr, &mut code)?;
+            code.extend(compile_expression(expr)?);
             code.push(Instruction::Pop);
         }
         Statement::FunctionDef { .. } => {
@@ -144,22 +144,8 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Vec<Ins
     Ok(code)
 }
 
-fn append_relocated(code: &mut Vec<Instruction>, mut fragment: Vec<Instruction>) {
-    let base = code.len();
-    if base > 0 {
-        for instruction in &mut fragment {
-            match instruction {
-                Instruction::JumpIfFalse(target) | Instruction::Jump(target) => {
-                    *target += base;
-                }
-                _ => {}
-            }
-        }
-    }
-    code.extend(fragment);
-}
-
-fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<()> {
+fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
+    let mut code = Vec::new();
     match expr {
         Expression::Integer(value) => {
             code.push(Instruction::PushInt(*value));
@@ -174,8 +160,8 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
             code.push(Instruction::LoadName(name.to_string()));
         }
         Expression::BinaryOp { left, op, right } => {
-            compile_expression(left, code)?;
-            compile_expression(right, code)?;
+            code.extend(compile_expression(left)?);
+            code.extend(compile_expression(right)?);
             match op {
                 BinaryOperator::Add => code.push(Instruction::Add),
                 BinaryOperator::Sub => code.push(Instruction::Sub),
@@ -185,7 +171,7 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
         Expression::Call { callee, args } => match callee.as_ref() {
             Expression::Identifier(name) => {
                 for arg in args {
-                    compile_expression(arg, code)?;
+                    code.extend(compile_expression(arg)?);
                 }
                 code.push(Instruction::CallFunction {
                     name: name.to_string(),
@@ -195,7 +181,7 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
             _ => bail!("Can only call identifiers in the VM"),
         },
     }
-    Ok(())
+    Ok(code)
 }
 
 #[cfg(test)]

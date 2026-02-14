@@ -206,11 +206,19 @@ impl VM {
                         .pop()
                         .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
                     if !value.is_truthy() {
-                        ip = target;
+                        let next_ip = (ip as isize) + target;
+                        if next_ip < 0 || (next_ip as usize) > code.len() {
+                            bail!("Invalid jump target");
+                        }
+                        ip = next_ip as usize;
                     }
                 }
                 Instruction::Jump(target) => {
-                    ip = target;
+                    let next_ip = (ip as isize) + target;
+                    if next_ip < 0 || (next_ip as usize) > code.len() {
+                        bail!("Invalid jump target");
+                    }
+                    ip = next_ip as usize;
                 }
                 Instruction::Pop => {
                     stack
