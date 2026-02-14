@@ -113,15 +113,6 @@ impl<'a> Environment<'a> {
         self.globals.get(name)
     }
 
-    fn load_mut(&mut self, name: &str) -> Option<&mut Value> {
-        if let Some(locals) = self.locals.as_deref_mut()
-            && locals.contains_key(name)
-        {
-            return locals.get_mut(name);
-        }
-        self.globals.get_mut(name)
-    }
-
     fn store(&mut self, name: String, value: Value) {
         if let Some(locals) = self.locals.as_deref_mut() {
             locals.insert(name, value);
@@ -251,47 +242,35 @@ impl VmRuntime<'_> {
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
                     let object_value = self.pop_stack()?;
-                    let value =
+                    let callee =
                         object_value
-                            .get_item(index_value)
+                            .get_attribute("__getitem__")
                             .map_err(|error| match error {
-                                ListError::ExpectedIntegerType { got } => {
-                                    VmError::ExpectedIntegerType { got }
-                                }
-                                ListError::ExpectedListType { got } => {
-                                    VmError::ExpectedListType { got }
-                                }
-                                ListError::NegativeIndex { index } => {
-                                    VmError::NegativeListIndex { index }
-                                }
-                                ListError::OutOfBounds { index, len } => {
-                                    VmError::ListIndexOutOfBounds { index, len }
-                                }
+                                AttributeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => VmError::ExpectedListType { got: type_name },
                             })?;
+                    let value = self.call_value(callee, vec![index_value], environment)?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
                     let target = environment
-                        .load_mut(&name)
+                        .load(&name)
+                        .cloned()
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
-                    target
-                        .set_item(index_value, value)
-                        .map_err(|error| match error {
-                            ListError::ExpectedIntegerType { got } => {
-                                VmError::ExpectedIntegerType { got }
-                            }
-                            ListError::ExpectedListType { got } => {
-                                VmError::ExpectedListType { got }
-                            }
-                            ListError::NegativeIndex { index } => {
-                                VmError::NegativeListIndex { index }
-                            }
-                            ListError::OutOfBounds { index, len } => {
-                                VmError::ListIndexOutOfBounds { index, len }
-                            }
-                        })?;
+                    let callee =
+                        target
+                            .get_attribute("__setitem__")
+                            .map_err(|error| match error {
+                                AttributeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => VmError::ExpectedListType { got: type_name },
+                            })?;
+                    self.call_value(callee, vec![index_value, value], environment)?;
                 }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
@@ -405,6 +384,16 @@ impl VmRuntime<'_> {
                         method,
                         expected,
                         found,
+                    },
+                    MethodError::ListOperation(error) => match error {
+                        ListError::ExpectedIntegerType { got } => {
+                            VmError::ExpectedIntegerType { got }
+                        }
+                        ListError::ExpectedListType { got } => VmError::ExpectedListType { got },
+                        ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+                        ListError::OutOfBounds { index, len } => {
+                            VmError::ListIndexOutOfBounds { index, len }
+                        }
                     },
                     MethodError::UnknownMethod { method, type_name } => {
                         VmError::UnknownMethod { method, type_name }

@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::builtins::BuiltinFunction;
-use crate::runtime::list::ListObject;
+use crate::runtime::list::{ListError, ListObject};
 use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,7 @@ pub(crate) enum MethodError {
         expected: usize,
         found: usize,
     },
+    ListOperation(ListError),
     UnknownMethod {
         method: String,
         type_name: String,

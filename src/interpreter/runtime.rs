@@ -385,6 +385,20 @@ impl<'a> InterpreterRuntime<'a> {
                         expected,
                         found,
                     },
+                    MethodError::ListOperation(error) => match error {
+                        ListError::ExpectedIntegerType { got } => {
+                            InterpreterError::ExpectedIntegerType { got }
+                        }
+                        ListError::ExpectedListType { got } => {
+                            InterpreterError::ExpectedListType { got }
+                        }
+                        ListError::NegativeIndex { index } => {
+                            InterpreterError::NegativeListIndex { index }
+                        }
+                        ListError::OutOfBounds { index, len } => {
+                            InterpreterError::ListIndexOutOfBounds { index, len }
+                        }
+                    },
                     MethodError::UnknownMethod { method, type_name } => {
                         InterpreterError::UnknownMethod { method, type_name }
                     }

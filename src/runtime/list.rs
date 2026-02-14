@@ -70,7 +70,7 @@ impl<Element: Clone> ListObject<Element> {
 
 impl RuntimeObject for ListObject<Value> {
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, AttributeError> {
-        if attribute == "append" {
+        if matches!(attribute, "append" | "__getitem__" | "__setitem__") {
             return Ok(Value::bound_method_object(receiver, attribute.to_string()));
         }
         Err(AttributeError::UnknownAttribute {
@@ -114,6 +114,32 @@ impl ListObject<Value> {
                     });
                 }
                 self.append(args.pop().expect("len checked above"));
+                Ok(Value::none_object())
+            }
+            "__getitem__" => {
+                if args.len() != 1 {
+                    return Err(MethodError::ArityMismatch {
+                        method: "__getitem__".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                let index = args.pop().expect("len checked above");
+                self.get_item_value(index)
+                    .map_err(MethodError::ListOperation)
+            }
+            "__setitem__" => {
+                if args.len() != 2 {
+                    return Err(MethodError::ArityMismatch {
+                        method: "__setitem__".to_string(),
+                        expected: 2,
+                        found: args.len(),
+                    });
+                }
+                let value = args.pop().expect("len checked above");
+                let index = args.pop().expect("len checked above");
+                self.set_item_value(index, value)
+                    .map_err(MethodError::ListOperation)?;
                 Ok(Value::none_object())
             }
             _ => Err(MethodError::UnknownMethod {
