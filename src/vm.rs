@@ -8,7 +8,7 @@ use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::list::ListError;
 use crate::runtime::object::{
-    AttributeError, MethodError, ObjectKind, ObjectRef, ObjectWrapper, new_list_object,
+    AttributeError, MethodError, ObjectRef, ObjectWrapper, new_list_object,
 };
 
 type VmResult<T> = std::result::Result<T, VmError>;
@@ -54,7 +54,7 @@ enum VmError {
     InvalidJumpTarget,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum Value {
     Integer(i64),
     Boolean(bool),
@@ -96,19 +96,7 @@ impl Value {
                 }
             }
             Value::String(value) => value.clone(),
-            Value::Object(object) => {
-                let borrowed = object.borrow();
-                match &borrowed.kind {
-                    ObjectKind::List(list) => {
-                        let rendered = list
-                            .iter()
-                            .map(Value::to_output)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("[{rendered}]")
-                    }
-                }
-            }
+            Value::Object(object) => object.borrow().to_output(&Value::to_output),
             Value::BuiltinFunction(_) => "<built-in function>".to_string(),
             Value::Function(name) => format!("<function {name}>"),
             Value::BoundMethod { .. } => "<bound method>".to_string(),

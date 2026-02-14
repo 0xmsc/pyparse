@@ -1,9 +1,9 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::object::{ObjectKind, ObjectRef, new_list_object};
+use crate::runtime::object::{ObjectRef, new_list_object};
 
 use super::InterpreterError;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(super) enum Value {
     Integer(i64),
     Boolean(bool),
@@ -45,19 +45,7 @@ impl Value {
                 }
             }
             Value::String(value) => value.clone(),
-            Value::Object(object) => {
-                let borrowed = object.borrow();
-                match &borrowed.kind {
-                    ObjectKind::List(list) => {
-                        let rendered = list
-                            .iter()
-                            .map(Value::to_output)
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("[{rendered}]")
-                    }
-                }
-            }
+            Value::Object(object) => object.borrow().to_output(&Value::to_output),
             Value::BuiltinFunction(_) => "<built-in function>".to_string(),
             Value::Function(name) => format!("<function {name}>"),
             Value::BoundMethod { .. } => "<bound method>".to_string(),

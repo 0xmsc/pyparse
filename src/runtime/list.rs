@@ -1,3 +1,5 @@
+use crate::runtime::object::{AttributeError, MethodError, RuntimeObject};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListError {
     NegativeIndex { index: i64 },
@@ -59,6 +61,63 @@ impl<Value: Clone> ListObject<Value> {
                 index,
                 len: self.values.len(),
             })
+    }
+}
+
+impl<Value: Clone + std::fmt::Debug> RuntimeObject<Value> for ListObject<Value> {
+    fn type_name(&self) -> &'static str {
+        "list"
+    }
+
+    fn is_truthy(&self) -> bool {
+        !self.is_empty()
+    }
+
+    fn to_output(&self, render_value: &dyn Fn(&Value) -> String) -> String {
+        let rendered = self.iter().map(render_value).collect::<Vec<_>>().join(", ");
+        format!("[{rendered}]")
+    }
+
+    fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError> {
+        if attribute == "append" {
+            return Ok(attribute.to_string());
+        }
+        Err(AttributeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "list".to_string(),
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.__len__()
+    }
+
+    fn get_item(&self, index: i64) -> Result<Value, ListError> {
+        self.__getitem__(index)
+    }
+
+    fn set_item(&mut self, index: i64, value: Value) -> Result<(), ListError> {
+        self.__setitem__(index, value)
+    }
+
+    fn call_method(&mut self, method: &str, mut args: Vec<Value>) -> Result<(), MethodError> {
+        match method {
+            "append" => {
+                if args.len() != 1 {
+                    return Err(MethodError::ArityMismatch {
+                        method: "append".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                self.append(args.pop().expect("len checked above"));
+                Ok(())
+            }
+            _ => Err(MethodError::UnknownMethod {
+                method: method.to_string(),
+                type_name: "list".to_string(),
+            }),
+        }
     }
 }
 
