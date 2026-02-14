@@ -115,6 +115,16 @@ mod tests {
         }
     }
 
+    fn method_call(receiver: &str, method: &str, args: Vec<Expression>) -> Expression {
+        Expression::Call {
+            callee: Box::new(Expression::Attribute {
+                object: Box::new(identifier(receiver)),
+                name: method.to_string(),
+            }),
+            args,
+        }
+    }
+
     fn print(args: Vec<Expression>) -> Statement {
         Statement::Expr(call("print", args))
     }
@@ -470,5 +480,23 @@ mod tests {
         let interpreter = Interpreter::new();
         let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "2");
+    }
+
+    #[test]
+    fn supports_list_append_method() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::List(vec![]),
+                },
+                Statement::Expr(method_call("values", "append", vec![int(3)])),
+                print(vec![identifier("values")]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "[3]");
     }
 }

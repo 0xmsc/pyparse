@@ -2,3 +2,4 @@
 - [x] Replace interpreter `anyhow` internals with typed error returns
 - [x] Update interpreter tests to assert error variants via downcast
 - [x] Run formatter and test suite
+- [ ] Investigate bound-method values/calls so method dispatch can be modeled without a dedicated `CallMethod` bytecode.

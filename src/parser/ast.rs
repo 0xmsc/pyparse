@@ -9,6 +9,10 @@ pub enum Expression {
         object: Box<Expression>,
         index: Box<Expression>,
     },
+    Attribute {
+        object: Box<Expression>,
+        name: String,
+    },
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOperator,

@@ -186,6 +186,7 @@ impl<'a> Lexer<'a> {
             '<' => TokenKind::Less,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
+            '.' => TokenKind::Dot,
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
             '[' => TokenKind::LBracket,
@@ -517,16 +518,24 @@ mod tests {
     #[test]
     fn tokenizes_commas_in_parameter_and_argument_lists() {
         let input = indoc! {"
-            def add(a, b):
-                return a + b
-            add(1, 2)
+            f(a, b)
         "};
         let actual_tokens = tokenize(input).expect("tokenize should succeed");
         let actual_kinds = actual_tokens
             .into_iter()
             .map(|token| token.kind)
             .collect::<Vec<_>>();
-        assert!(actual_kinds.contains(&TokenKind::Comma));
+        let expected_kinds = vec![
+            TokenKind::Identifier("f"),
+            TokenKind::LParen,
+            TokenKind::Identifier("a"),
+            TokenKind::Comma,
+            TokenKind::Identifier("b"),
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
     }
 
     #[test]
@@ -539,7 +548,40 @@ mod tests {
             .into_iter()
             .map(|token| token.kind)
             .collect::<Vec<_>>();
-        assert!(actual_kinds.contains(&TokenKind::LBracket));
-        assert!(actual_kinds.contains(&TokenKind::RBracket));
+        let expected_kinds = vec![
+            TokenKind::Identifier("values"),
+            TokenKind::Equal,
+            TokenKind::LBracket,
+            TokenKind::Integer(1),
+            TokenKind::Comma,
+            TokenKind::Integer(2),
+            TokenKind::RBracket,
+            TokenKind::Newline,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
+    }
+
+    #[test]
+    fn tokenizes_attribute_access_dot() {
+        let input = indoc! {"
+            values.append(3)
+        "};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        let expected_kinds = vec![
+            TokenKind::Identifier("values"),
+            TokenKind::Dot,
+            TokenKind::Identifier("append"),
+            TokenKind::LParen,
+            TokenKind::Integer(3),
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
     }
 }

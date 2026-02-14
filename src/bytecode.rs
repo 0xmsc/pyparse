@@ -17,7 +17,15 @@ pub enum Instruction {
     LessThan,
     LoadIndex,
     StoreIndex(String),
-    CallFunction { name: String, argc: usize },
+    CallFunction {
+        name: String,
+        argc: usize,
+    },
+    CallMethod {
+        receiver: String,
+        method: String,
+        argc: usize,
+    },
     JumpIfFalse(isize),
     Jump(isize),
     Pop,
@@ -180,6 +188,9 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
             code.extend(compile_expression(index)?);
             code.push(Instruction::LoadIndex);
         }
+        Expression::Attribute { .. } => {
+            bail!("Standalone attribute access is not supported in the VM");
+        }
         Expression::BinaryOp { left, op, right } => {
             code.extend(compile_expression(left)?);
             code.extend(compile_expression(right)?);
@@ -199,7 +210,21 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
                     argc: args.len(),
                 });
             }
-            _ => bail!("Can only call identifiers in the VM"),
+            Expression::Attribute { object, name } => {
+                let receiver = match object.as_ref() {
+                    Expression::Identifier(receiver) => receiver.to_string(),
+                    _ => bail!("Method receiver must be an identifier in the VM"),
+                };
+                for arg in args {
+                    code.extend(compile_expression(arg)?);
+                }
+                code.push(Instruction::CallMethod {
+                    receiver,
+                    method: name.to_string(),
+                    argc: args.len(),
+                });
+            }
+            _ => bail!("Can only call identifiers or attributes in the VM"),
         },
     }
     Ok(code)
@@ -221,6 +246,16 @@ mod tests {
     fn call(name: &str, args: Vec<Expression>) -> Expression {
         Expression::Call {
             callee: Box::new(Expression::Identifier(name.to_string())),
+            args,
+        }
+    }
+
+    fn method_call(receiver: &str, method: &str, args: Vec<Expression>) -> Expression {
+        Expression::Call {
+            callee: Box::new(Expression::Attribute {
+                object: Box::new(Expression::Identifier(receiver.to_string())),
+                name: method.to_string(),
+            }),
             args,
         }
     }
@@ -404,5 +439,32 @@ mod tests {
                 .iter()
                 .any(|instruction| matches!(instruction, Instruction::LoadIndex))
         );
+    }
+
+    #[test]
+    fn compiles_method_call_on_named_receiver() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::List(vec![]),
+                },
+                Statement::Expr(method_call(
+                    "values",
+                    "append",
+                    vec![Expression::Integer(3)],
+                )),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert!(compiled.main.iter().any(|instruction| matches!(
+            instruction,
+            Instruction::CallMethod {
+                receiver,
+                method,
+                argc
+            } if receiver == "values" && method == "append" && *argc == 1
+        )));
     }
 }

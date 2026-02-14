@@ -284,6 +284,9 @@ impl Transpiler {
             }
             Expression::List(_) => bail!("List literals are not supported in the transpiler"),
             Expression::Index { .. } => bail!("List indexing is not supported in the transpiler"),
+            Expression::Attribute { .. } => {
+                bail!("Attribute access is not supported in the transpiler")
+            }
             Expression::Identifier(name) => Ok(name.to_string()),
             Expression::BinaryOp { left, op, right } => {
                 let left = self.emit_expression(left)?;

@@ -246,6 +246,9 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                 }
             }
+            Expression::Attribute { .. } => {
+                Err(InterpreterError::StandaloneAttributeAccessUnsupported)
+            }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
     }
@@ -316,6 +319,57 @@ impl<'a> InterpreterRuntime<'a> {
                 match self.exec_block(&function.body, &mut local_environment)? {
                     ExecResult::Continue => Ok(Value::None),
                     ExecResult::Return(value) => Ok(value),
+                }
+            }
+            Expression::Attribute { object, name } => {
+                let receiver_name = if let Expression::Identifier(receiver_name) = object.as_ref() {
+                    receiver_name
+                } else {
+                    return Err(InterpreterError::MethodReceiverMustBeIdentifier);
+                };
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    evaluated_args.push(self.eval_expression(arg, environment)?);
+                }
+                let receiver = environment.load_mut(receiver_name).ok_or_else(|| {
+                    InterpreterError::UndefinedVariable {
+                        name: receiver_name.to_string(),
+                    }
+                })?;
+                match receiver {
+                    Value::List(values) => match name.as_str() {
+                        "append" => {
+                            if evaluated_args.len() != 1 {
+                                return Err(InterpreterError::MethodArityMismatch {
+                                    method: "append".to_string(),
+                                    expected: 1,
+                                    found: evaluated_args.len(),
+                                });
+                            }
+                            values.push(evaluated_args.pop().expect("len checked above"));
+                            Ok(Value::None)
+                        }
+                        _ => Err(InterpreterError::UnknownMethod {
+                            method: name.to_string(),
+                            type_name: "list".to_string(),
+                        }),
+                    },
+                    Value::Integer(_) => Err(InterpreterError::UnknownMethod {
+                        method: name.to_string(),
+                        type_name: "int".to_string(),
+                    }),
+                    Value::Boolean(_) => Err(InterpreterError::UnknownMethod {
+                        method: name.to_string(),
+                        type_name: "bool".to_string(),
+                    }),
+                    Value::String(_) => Err(InterpreterError::UnknownMethod {
+                        method: name.to_string(),
+                        type_name: "str".to_string(),
+                    }),
+                    Value::None => Err(InterpreterError::UnknownMethod {
+                        method: name.to_string(),
+                        type_name: "NoneType".to_string(),
+                    }),
                 }
             }
             _ => Err(InterpreterError::NonIdentifierCallTarget),

@@ -23,8 +23,20 @@ pub enum InterpreterError {
         expected: usize,
         found: usize,
     },
-    #[error("Can only call identifiers")]
+    #[error("Attribute access is only supported in method calls")]
+    StandaloneAttributeAccessUnsupported,
+    #[error("Can only call identifiers or attributes")]
     NonIdentifierCallTarget,
+    #[error("Method '{method}' expected {expected} arguments, got {found}")]
+    MethodArityMismatch {
+        method: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("Unknown method '{method}' for type {type_name}")]
+    UnknownMethod { method: String, type_name: String },
+    #[error("Method receiver must be an identifier")]
+    MethodReceiverMustBeIdentifier,
     #[error("Return outside of function")]
     ReturnOutsideFunction,
 }

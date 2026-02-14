@@ -232,8 +232,8 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    /// Parse postfix chains of calls and indexing.
-    /// Example: `foo()[0](1)`.
+    /// Parse postfix chains of calls, indexing, and attribute access.
+    /// Example: `obj.method(1)[0]`.
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
         let mut expr = self.parse_primary()?;
         loop {
@@ -250,6 +250,12 @@ impl<'a> Parser<'a> {
                 expr = Expression::Index {
                     object: Box::new(expr),
                     index: Box::new(index),
+                };
+            } else if self.try_consume(TokenKind::Dot) {
+                let name = self.expect_identifier()?;
+                expr = Expression::Attribute {
+                    object: Box::new(expr),
+                    name,
                 };
             } else {
                 break;
@@ -707,6 +713,34 @@ mod tests {
                         }],
                     }),
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_method_call_expression_statement() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("values")),
+            tok(TokenKind::Dot),
+            tok(TokenKind::Identifier("append")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Integer(3)),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Expr(Expression::Call {
+                    callee: Box::new(Expression::Attribute {
+                        object: Box::new(Expression::Identifier("values".to_string())),
+                        name: "append".to_string(),
+                    }),
+                    args: vec![Expression::Integer(3)],
+                })],
             }
         );
     }

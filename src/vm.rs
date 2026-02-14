@@ -299,6 +299,46 @@ impl VM {
                     )?;
                     stack.push(return_value);
                 }
+                Instruction::CallMethod {
+                    receiver,
+                    method,
+                    argc,
+                } => {
+                    let mut args = Vec::with_capacity(argc);
+                    for _ in 0..argc {
+                        let value = stack
+                            .pop()
+                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        args.push(value);
+                    }
+                    args.reverse();
+                    let target = if let Some(locals) = locals.as_mut() {
+                        if locals.contains_key(&receiver) {
+                            locals.get_mut(&receiver)
+                        } else {
+                            self.globals.get_mut(&receiver)
+                        }
+                    } else {
+                        self.globals.get_mut(&receiver)
+                    }
+                    .ok_or_else(|| anyhow::anyhow!("Undefined variable '{receiver}'"))?;
+                    match target {
+                        Value::List(values) => match method.as_str() {
+                            "append" => {
+                                if argc != 1 {
+                                    bail!("Method 'append' expected 1 arguments, got {argc}");
+                                }
+                                values.push(args.pop().expect("argc checked above"));
+                                stack.push(Value::None);
+                            }
+                            _ => bail!("Unknown method '{method}' for type list"),
+                        },
+                        Value::Integer(_) => bail!("Unknown method '{method}' for type int"),
+                        Value::Boolean(_) => bail!("Unknown method '{method}' for type bool"),
+                        Value::String(_) => bail!("Unknown method '{method}' for type str"),
+                        Value::None => bail!("Unknown method '{method}' for type NoneType"),
+                    }
+                }
                 Instruction::JumpIfFalse(target) => {
                     let value = stack
                         .pop()

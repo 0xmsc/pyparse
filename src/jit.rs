@@ -943,6 +943,9 @@ fn define_function(
                     terminated = true;
                 }
             }
+            Instruction::CallMethod { .. } => {
+                bail!("Method calls are not supported in the JIT backend");
+            }
             Instruction::JumpIfFalse(target) => {
                 let target_index = resolve_relative_target(idx, *target, code.len())?;
                 let value = pop_value(&mut builder);
@@ -1120,6 +1123,7 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::LoadName(_) => 1,
         Instruction::BuildList(count) => 1 - (*count as i32),
         Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
+        Instruction::CallMethod { argc, .. } => 1 - (*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::LoadIndex => -1,
         Instruction::StoreIndex(_) => -2,
