@@ -6,6 +6,7 @@ use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
+use crate::runtime::int::downcast_i64;
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, CallTarget, MethodError};
 use crate::runtime::value::Value;
@@ -248,11 +249,9 @@ impl VmRuntime<'_> {
                     let index_value = self.pop_stack()?;
                     let object_value = self.pop_stack()?;
                     let index_raw =
-                        index_value
-                            .as_i64()
-                            .ok_or_else(|| VmError::ExpectedIntegerType {
-                                got: format!("{index_value:?}"),
-                            })?;
+                        downcast_i64(&index_value).ok_or_else(|| VmError::ExpectedIntegerType {
+                            got: format!("{index_value:?}"),
+                        })?;
                     let object_ref = object_value.object_ref();
                     if object_ref.borrow().type_name() != "list" {
                         return Err(VmError::ExpectedListType {
@@ -277,11 +276,9 @@ impl VmRuntime<'_> {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
                     let index_raw =
-                        index_value
-                            .as_i64()
-                            .ok_or_else(|| VmError::ExpectedIntegerType {
-                                got: format!("{index_value:?}"),
-                            })?;
+                        downcast_i64(&index_value).ok_or_else(|| VmError::ExpectedIntegerType {
+                            got: format!("{index_value:?}"),
+                        })?;
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;

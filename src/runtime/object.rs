@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -39,6 +40,7 @@ pub(crate) enum CallTarget {
 }
 
 pub(crate) trait RuntimeObject: std::fmt::Debug {
+    fn as_any(&self) -> &dyn Any;
     fn type_name(&self) -> &'static str;
     fn is_truthy(&self) -> bool;
     fn to_output(&self, render_value: &dyn Fn(&Value) -> String) -> String;
@@ -50,9 +52,6 @@ pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
     fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
     fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
-    fn as_i64(&self) -> Option<i64> {
-        None
-    }
     fn call_target(&self) -> Option<CallTarget> {
         None
     }

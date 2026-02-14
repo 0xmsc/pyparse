@@ -1,5 +1,6 @@
 use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListError {
@@ -66,6 +67,10 @@ impl<Element: Clone> ListObject<Element> {
 }
 
 impl RuntimeObject for ListObject<Value> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn type_name(&self) -> &'static str {
         "list"
     }

@@ -1,6 +1,7 @@
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IntObject {
@@ -11,9 +12,26 @@ impl IntObject {
     pub(crate) fn new(value: i64) -> Self {
         Self { value }
     }
+
+    pub(crate) fn value(&self) -> i64 {
+        self.value
+    }
+}
+
+pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
+    let object_ref = value.object_ref();
+    let object = object_ref.borrow();
+    object
+        .as_any()
+        .downcast_ref::<IntObject>()
+        .map(IntObject::value)
 }
 
 impl RuntimeObject for IntObject {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn type_name(&self) -> &'static str {
         "int"
     }
@@ -53,7 +71,7 @@ impl RuntimeObject for IntObject {
     }
 
     fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = rhs.as_i64() {
+        if let Some(rhs_int) = downcast_i64(rhs) {
             Ok(Value::int_object(self.value + rhs_int))
         } else {
             Err(BinaryOpError::ExpectedIntegerType {
@@ -63,7 +81,7 @@ impl RuntimeObject for IntObject {
     }
 
     fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = rhs.as_i64() {
+        if let Some(rhs_int) = downcast_i64(rhs) {
             Ok(Value::int_object(self.value - rhs_int))
         } else {
             Err(BinaryOpError::ExpectedIntegerType {
@@ -73,16 +91,12 @@ impl RuntimeObject for IntObject {
     }
 
     fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = rhs.as_i64() {
+        if let Some(rhs_int) = downcast_i64(rhs) {
             Ok(Value::bool_object(self.value < rhs_int))
         } else {
             Err(BinaryOpError::ExpectedIntegerType {
                 got: format!("{rhs:?}"),
             })
         }
-    }
-
-    fn as_i64(&self) -> Option<i64> {
-        Some(self.value)
     }
 }

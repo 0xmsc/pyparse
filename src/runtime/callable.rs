@@ -4,6 +4,7 @@ use crate::runtime::object::{
     AttributeError, BinaryOpError, CallTarget, MethodError, ObjectRef, RuntimeObject,
 };
 use crate::runtime::value::Value;
+use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BuiltinFunctionObject {
@@ -41,6 +42,10 @@ impl BoundMethodObject {
 
 macro_rules! impl_callable_runtime_object {
     ($type_name:expr, $call_target:expr, $to_output:expr) => {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
         fn type_name(&self) -> &'static str {
             $type_name
         }

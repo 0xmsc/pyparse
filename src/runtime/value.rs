@@ -71,8 +71,4 @@ impl Value {
     pub(crate) fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
         self.0.borrow().lt(rhs)
     }
-
-    pub(crate) fn as_i64(&self) -> Option<i64> {
-        self.0.borrow().as_i64()
-    }
 }

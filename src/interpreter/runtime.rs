@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
+use crate::runtime::int::downcast_i64;
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, CallTarget, MethodError};
 
@@ -110,7 +111,7 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                     AssignTarget::Index { name, index } => {
                         let index_value = self.eval_expression(index, environment)?;
-                        let raw_index = index_value.as_i64().ok_or_else(|| {
+                        let raw_index = downcast_i64(&index_value).ok_or_else(|| {
                             InterpreterError::ExpectedIntegerType {
                                 got: format!("{index_value:?}"),
                             }
@@ -210,12 +211,11 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Index { object, index } => {
                 let object_value = self.eval_expression(object, environment)?;
                 let index_value = self.eval_expression(index, environment)?;
-                let raw_index =
-                    index_value
-                        .as_i64()
-                        .ok_or_else(|| InterpreterError::ExpectedIntegerType {
-                            got: format!("{index_value:?}"),
-                        })?;
+                let raw_index = downcast_i64(&index_value).ok_or_else(|| {
+                    InterpreterError::ExpectedIntegerType {
+                        got: format!("{index_value:?}"),
+                    }
+                })?;
                 let object_ref = object_value.object_ref();
                 if object_ref.borrow().type_name() != "list" {
                     return Err(InterpreterError::ExpectedListType {

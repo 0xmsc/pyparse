@@ -1,6 +1,7 @@
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NoneObject;
@@ -12,6 +13,10 @@ impl NoneObject {
 }
 
 impl RuntimeObject for NoneObject {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn type_name(&self) -> &'static str {
         "NoneType"
     }
