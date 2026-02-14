@@ -198,7 +198,7 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let Value::Object(object_ref) = object;
+                    let object_ref = object.object_ref();
                     let method = ObjectWrapper::new(object_ref.clone())
                         .get_attribute_method_name(&attribute)
                         .map_err(|error| match error {
@@ -252,11 +252,10 @@ impl VmRuntime<'_> {
                             .ok_or_else(|| VmError::ExpectedIntegerType {
                                 got: format!("{index_value:?}"),
                             })?;
-                    let Value::Object(object) = object_value;
-                    let wrapper = ObjectWrapper::new(object);
+                    let wrapper = ObjectWrapper::new(object_value.object_ref());
                     if wrapper.type_name() != "list" {
                         return Err(VmError::ExpectedListType {
-                            got: format!("{wrapper:?}"),
+                            got: format!("{object_value:?}"),
                         });
                     }
                     let value = wrapper.get_item(index_raw).map_err(|error| match error {
@@ -279,8 +278,7 @@ impl VmRuntime<'_> {
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
-                    let Value::Object(object) = target;
-                    let wrapper = ObjectWrapper::new(object.clone());
+                    let wrapper = ObjectWrapper::new(target.object_ref());
                     if wrapper.type_name() != "list" {
                         return Err(VmError::ExpectedListType {
                             got: format!("{target:?}"),
@@ -347,8 +345,7 @@ impl VmRuntime<'_> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> VmResult<Value> {
-        let Value::Object(callee_object) = callee;
-        let wrapper = ObjectWrapper::new(callee_object.clone());
+        let wrapper = ObjectWrapper::new(callee.object_ref());
         let call_target = wrapper
             .call_target()
             .ok_or_else(|| VmError::ObjectNotCallable {
@@ -368,8 +365,7 @@ impl VmRuntime<'_> {
                         found: args.len(),
                     });
                 }
-                let Value::Object(object) = &args[0];
-                let wrapper = ObjectWrapper::new(object.clone());
+                let wrapper = ObjectWrapper::new(args[0].object_ref());
                 if wrapper.type_name() != "list" {
                     return Err(VmError::ExpectedListType {
                         got: format!("{:?}", &args[0]),

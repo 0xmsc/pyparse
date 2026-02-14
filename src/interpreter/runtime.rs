@@ -120,8 +120,7 @@ impl<'a> InterpreterRuntime<'a> {
                                 name: name.to_string(),
                             }
                         })?;
-                        let Value::Object(object) = list;
-                        let wrapper = ObjectWrapper::new(object.clone());
+                        let wrapper = ObjectWrapper::new(list.object_ref());
                         if wrapper.type_name() != "list" {
                             return Err(InterpreterError::ExpectedListType {
                                 got: format!("{list:?}"),
@@ -216,11 +215,10 @@ impl<'a> InterpreterRuntime<'a> {
                         .ok_or_else(|| InterpreterError::ExpectedIntegerType {
                             got: format!("{index_value:?}"),
                         })?;
-                let Value::Object(object) = object_value;
-                let wrapper = ObjectWrapper::new(object.clone());
+                let wrapper = ObjectWrapper::new(object_value.object_ref());
                 if wrapper.type_name() != "list" {
                     return Err(InterpreterError::ExpectedListType {
-                        got: format!("{wrapper:?}"),
+                        got: format!("{object_value:?}"),
                     });
                 }
                 wrapper.get_item(raw_index).map_err(|error| match error {
@@ -256,7 +254,7 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
                 let attribute = name.to_string();
-                let Value::Object(object_ref) = object;
+                let object_ref = object.object_ref();
                 let method = ObjectWrapper::new(object_ref.clone())
                     .get_attribute_method_name(&attribute)
                     .map_err(|error| match error {
@@ -316,8 +314,7 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        let Value::Object(callee_object) = callee;
-        let wrapper = ObjectWrapper::new(callee_object.clone());
+        let wrapper = ObjectWrapper::new(callee.object_ref());
         let call_target =
             wrapper
                 .call_target()
@@ -338,8 +335,7 @@ impl<'a> InterpreterRuntime<'a> {
                         found: args.len(),
                     });
                 }
-                let Value::Object(object) = &args[0];
-                let wrapper = ObjectWrapper::new(object.clone());
+                let wrapper = ObjectWrapper::new(args[0].object_ref());
                 if wrapper.type_name() != "list" {
                     return Err(InterpreterError::ExpectedListType {
                         got: format!("{:?}", &args[0]),
