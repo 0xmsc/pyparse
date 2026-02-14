@@ -88,7 +88,8 @@ impl<'a> Lexer<'a> {
                     while let Some(&top) = self.indent_stack.last() {
                         if top > indent_level {
                             self.indent_stack.pop();
-                            self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+                            self.pending_tokens
+                                .push(Token::new(TokenKind::Dedent, span));
                         } else {
                             break;
                         }
@@ -158,11 +159,9 @@ impl<'a> Lexer<'a> {
 
     fn read_token_from_current_position(&mut self) -> LexResult<Token<'a>> {
         let start_idx = self.current_index();
-        let ch = self
-            .peek_char()
-            .ok_or(LexError::InvariantViolation {
-                message: "read_token_from_current_position called at EOF",
-            })?;
+        let ch = self.peek_char().ok_or(LexError::InvariantViolation {
+            message: "read_token_from_current_position called at EOF",
+        })?;
 
         let token = match ch {
             '\n' => {
@@ -250,10 +249,12 @@ impl<'a> Lexer<'a> {
         let end_idx = self.current_index();
 
         let num_str = &self.input[start..end_idx];
-        let num = num_str.parse::<i64>().map_err(|_| LexError::InvalidIntegerLiteral {
-            literal: num_str.to_string(),
-            position: start,
-        })?;
+        let num = num_str
+            .parse::<i64>()
+            .map_err(|_| LexError::InvalidIntegerLiteral {
+                literal: num_str.to_string(),
+                position: start,
+            })?;
         Ok(Token::new(
             TokenKind::Integer(num),
             Span {
@@ -281,9 +282,7 @@ impl<'a> Lexer<'a> {
                     },
                 ))
             }
-            Some('\n') | None => {
-                Err(LexError::UnterminatedString { position: start })
-            }
+            Some('\n') | None => Err(LexError::UnterminatedString { position: start }),
             _ => unreachable!(),
         }
     }
@@ -341,10 +340,10 @@ impl<'a> Lexer<'a> {
                 start: index,
                 end: index,
             };
-            self.pending_tokens.push(Token::new(TokenKind::Dedent, span));
+            self.pending_tokens
+                .push(Token::new(TokenKind::Dedent, span));
         }
     }
-
 }
 
 impl<'a> Iterator for Lexer<'a> {
@@ -470,7 +469,10 @@ mod tests {
                 y = 2
         "};
         let tokens = tokenize(input).expect("tokenize should succeed");
-        let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
+        let kinds = tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             TokenKind::If,
@@ -498,7 +500,10 @@ mod tests {
     fn emits_dedent_before_eof() {
         let input = indoc!("if True:\n    x = 1");
         let tokens = tokenize(input).expect("tokenize should succeed");
-        let kinds = tokens.into_iter().map(|token| token.kind).collect::<Vec<_>>();
+        let kinds = tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
 
         let expected = vec![
             TokenKind::If,

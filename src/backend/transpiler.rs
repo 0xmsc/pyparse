@@ -2,11 +2,11 @@ use anyhow::{Result, bail};
 use std::collections::HashSet;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::backend::{Backend, PreparedBackend};
 use crate::backend::c_runtime::{
     C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_and_run,
     escape_c_string,
 };
+use crate::backend::{Backend, PreparedBackend};
 
 pub struct Transpiler;
 

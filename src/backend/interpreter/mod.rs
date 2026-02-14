@@ -24,10 +24,6 @@ impl Interpreter {
     pub fn new() -> Self {
         Self
     }
-
-    pub fn run(&self, program: &Program) -> Result<String> {
-        self.prepare(program)?.run()
-    }
 }
 
 /// Prepared executable program for the tree-walking interpreter.
@@ -116,6 +112,10 @@ mod tests {
         Statement::Expr(call("print", args))
     }
 
+    fn run_program(interpreter: &Interpreter, program: &Program) -> anyhow::Result<String> {
+        interpreter.prepare(program)?.run()
+    }
+
     fn expect_interpreter_error(error: anyhow::Error) -> InterpreterError {
         error
             .downcast::<InterpreterError>()
@@ -139,7 +139,7 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&program).expect("run failed");
+        let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "3");
     }
 
@@ -161,7 +161,7 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&program).expect("run failed");
+        let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "then\nelse");
     }
 
@@ -193,7 +193,7 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&program).expect("run failed");
+        let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "3");
     }
 
@@ -216,7 +216,7 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&program).expect("run failed");
+        let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "7");
     }
 
@@ -241,9 +241,7 @@ mod tests {
 
         let interpreter = Interpreter::new();
         let error = expect_interpreter_error(
-            interpreter
-                .run(&program)
-                .expect_err("expected undefined variable"),
+            run_program(&interpreter, &program).expect_err("expected undefined variable"),
         );
         assert_eq!(
             error,
@@ -261,9 +259,7 @@ mod tests {
 
         let interpreter = Interpreter::new();
         let error = expect_interpreter_error(
-            interpreter
-                .run(&program)
-                .expect_err("expected return outside function"),
+            run_program(&interpreter, &program).expect_err("expected return outside function"),
         );
         assert_eq!(error, InterpreterError::ReturnOutsideFunction);
     }
@@ -279,8 +275,7 @@ mod tests {
 
         let interpreter = Interpreter::new();
         let error = expect_interpreter_error(
-            interpreter
-                .run(&invalid_callee_program)
+            run_program(&interpreter, &invalid_callee_program)
                 .expect_err("expected call target error"),
         );
         assert_eq!(error, InterpreterError::NonIdentifierCallTarget);
@@ -289,8 +284,7 @@ mod tests {
             statements: vec![Statement::Expr(call("missing", vec![]))],
         };
         let error = expect_interpreter_error(
-            interpreter
-                .run(&undefined_function_program)
+            run_program(&interpreter, &undefined_function_program)
                 .expect_err("expected undefined function error"),
         );
         assert_eq!(
@@ -315,9 +309,7 @@ mod tests {
 
         let interpreter = Interpreter::new();
         let error = expect_interpreter_error(
-            interpreter
-                .run(&program)
-                .expect_err("expected argument mismatch"),
+            run_program(&interpreter, &program).expect_err("expected argument mismatch"),
         );
         assert_eq!(
             error,
@@ -344,7 +336,7 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&program).expect("run failed");
+        let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "True hello None");
     }
 
@@ -364,12 +356,11 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let output = interpreter.run(&first_program).expect("first run failed");
+        let output = run_program(&interpreter, &first_program).expect("first run failed");
         assert_eq!(output, "1");
 
         let error = expect_interpreter_error(
-            interpreter
-                .run(&second_program)
+            run_program(&interpreter, &second_program)
                 .expect_err("expected globals to be cleared between runs"),
         );
         assert_eq!(

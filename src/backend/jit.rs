@@ -9,8 +9,8 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
-use crate::backend::{Backend, PreparedBackend};
 use crate::backend::bytecode::{Instruction, compile};
+use crate::backend::{Backend, PreparedBackend};
 
 type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
 
