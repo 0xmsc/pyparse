@@ -4,6 +4,7 @@ pub enum Expression {
     Identifier(String),
     Boolean(bool),
     String(String),
+    List(Vec<Expression>),
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOperator,

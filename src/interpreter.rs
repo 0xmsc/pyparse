@@ -405,4 +405,25 @@ mod tests {
         let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "9");
     }
+
+    #[test]
+    fn supports_list_literals_and_truthiness() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    name: "values".to_string(),
+                    value: Expression::List(vec![int(1), int(2)]),
+                },
+                Statement::If {
+                    condition: identifier("values"),
+                    then_body: vec![print(vec![identifier("values")])],
+                    else_body: vec![print(vec![Expression::String("empty".to_string())])],
+                },
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "[1, 2]");
+    }
 }

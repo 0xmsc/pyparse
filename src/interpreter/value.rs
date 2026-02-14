@@ -6,6 +6,7 @@ pub(super) enum Value {
     Integer(i64),
     Boolean(bool),
     String(String),
+    List(Vec<Value>),
     None,
 }
 
@@ -13,7 +14,7 @@ impl Value {
     pub(super) fn as_int(&self) -> std::result::Result<i64, InterpreterError> {
         match self {
             Value::Integer(value) => Ok(*value),
-            Value::Boolean(_) | Value::String(_) | Value::None => {
+            Value::Boolean(_) | Value::String(_) | Value::List(_) | Value::None => {
                 Err(InterpreterError::ExpectedIntegerType {
                     got: format!("{self:?}"),
                 })
@@ -32,6 +33,14 @@ impl Value {
                 }
             }
             Value::String(value) => value.clone(),
+            Value::List(values) => {
+                let rendered = values
+                    .iter()
+                    .map(Value::to_output)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{rendered}]")
+            }
             Value::None => "None".to_string(),
         }
     }
@@ -41,6 +50,7 @@ impl Value {
             Value::Integer(value) => *value != 0,
             Value::Boolean(value) => *value,
             Value::String(value) => !value.is_empty(),
+            Value::List(values) => !values.is_empty(),
             Value::None => false,
         }
     }

@@ -27,10 +27,12 @@ pub enum TokenKind<'a> {
     Less,  // <
 
     // Delimiters
-    Colon,  // :
-    Comma,  // ,
-    LParen, // (
-    RParen, // )
+    Colon,    // :
+    Comma,    // ,
+    LParen,   // (
+    RParen,   // )
+    LBracket, // [
+    RBracket, // ]
 
     // Structural
     Newline,

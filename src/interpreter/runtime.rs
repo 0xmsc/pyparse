@@ -147,6 +147,13 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Integer(value) => Ok(Value::Integer(*value)),
             Expression::Boolean(value) => Ok(Value::Boolean(*value)),
             Expression::String(value) => Ok(Value::String(value.clone())),
+            Expression::List(elements) => {
+                let mut values = Vec::with_capacity(elements.len());
+                for element in elements {
+                    values.push(self.eval_expression(element, environment)?);
+                }
+                Ok(Value::List(values))
+            }
             Expression::Identifier(name) => {
                 if let Some(value) = environment.load(name) {
                     return Ok(value.clone());

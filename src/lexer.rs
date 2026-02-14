@@ -188,6 +188,8 @@ impl<'a> Lexer<'a> {
             ',' => TokenKind::Comma,
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
+            '[' => TokenKind::LBracket,
+            ']' => TokenKind::RBracket,
             _ => return None,
         };
 
@@ -525,5 +527,19 @@ mod tests {
             .map(|token| token.kind)
             .collect::<Vec<_>>();
         assert!(actual_kinds.contains(&TokenKind::Comma));
+    }
+
+    #[test]
+    fn tokenizes_list_brackets() {
+        let input = indoc! {"
+            values = [1, 2]
+        "};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert!(actual_kinds.contains(&TokenKind::LBracket));
+        assert!(actual_kinds.contains(&TokenKind::RBracket));
     }
 }

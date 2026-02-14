@@ -11,6 +11,7 @@ enum Value {
     Integer(i64),
     Boolean(bool),
     String(String),
+    List(Vec<Value>),
     None,
 }
 
@@ -18,7 +19,7 @@ impl Value {
     fn as_int(&self) -> Result<i64> {
         match self {
             Value::Integer(value) => Ok(*value),
-            Value::Boolean(_) | Value::String(_) | Value::None => {
+            Value::Boolean(_) | Value::String(_) | Value::List(_) | Value::None => {
                 bail!("Expected integer, got {self:?}")
             }
         }
@@ -35,6 +36,14 @@ impl Value {
                 }
             }
             Value::String(value) => value.clone(),
+            Value::List(values) => {
+                let rendered = values
+                    .iter()
+                    .map(Value::to_output)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{rendered}]")
+            }
             Value::None => "None".to_string(),
         }
     }
@@ -44,6 +53,7 @@ impl Value {
             Value::Integer(value) => *value != 0,
             Value::Boolean(value) => *value,
             Value::String(value) => !value.is_empty(),
+            Value::List(values) => !values.is_empty(),
             Value::None => false,
         }
     }
@@ -97,6 +107,17 @@ impl VM {
                 Instruction::PushInt(value) => stack.push(Value::Integer(value)),
                 Instruction::PushBool(value) => stack.push(Value::Boolean(value)),
                 Instruction::PushString(value) => stack.push(Value::String(value)),
+                Instruction::BuildList(count) => {
+                    let mut values = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let value = stack
+                            .pop()
+                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        values.push(value);
+                    }
+                    values.reverse();
+                    stack.push(Value::List(values));
+                }
                 Instruction::PushNone => stack.push(Value::None),
                 Instruction::LoadName(name) => {
                     if let Some(locals) = locals.as_ref()

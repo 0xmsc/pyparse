@@ -243,6 +243,12 @@ impl<'a> Parser<'a> {
             TokenKind::False => Expression::Boolean(false),
             TokenKind::String(value) => Expression::String(value.to_string()),
             TokenKind::Identifier(name) => Expression::Identifier(name.to_string()),
+            TokenKind::LBracket => {
+                self.advance();
+                let elements = self.parse_expression_list(TokenKind::RBracket)?;
+                self.expect_token(TokenKind::RBracket, "]")?;
+                return Ok(Expression::List(elements));
+            }
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expression()?;
@@ -559,6 +565,36 @@ mod tests {
                         args: vec![Expression::Integer(1), Expression::Integer(2)],
                     }),
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_list_literal() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::LBracket),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Integer(2)),
+            tok(TokenKind::RBracket),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Expr(Expression::Call {
+                    callee: Box::new(Expression::Identifier("print".to_string())),
+                    args: vec![Expression::List(vec![
+                        Expression::Integer(1),
+                        Expression::Integer(2),
+                    ])],
+                })],
             }
         );
     }

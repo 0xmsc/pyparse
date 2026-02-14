@@ -1,0 +1,9 @@
+class: runtime_success
+parity: false
+unsupported_backends: [jit, transpiler]
+bench:
+  enabled: false
+  tags: []
+expected:
+  exit_code: 0
+  stdout_file: stdout.txt

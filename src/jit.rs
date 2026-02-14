@@ -717,6 +717,9 @@ fn define_function(
                 let result = builder.inst_results(call)[0];
                 push_value(&mut builder, result);
             }
+            Instruction::BuildList(_) => {
+                bail!("List literals are not supported in the JIT backend");
+            }
             Instruction::PushNone => {
                 let call = builder.ins().call(make_none, &[ctx_param]);
                 let result = builder.inst_results(call)[0];
@@ -1106,6 +1109,7 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::PushString(_)
         | Instruction::PushNone
         | Instruction::LoadName(_) => 1,
+        Instruction::BuildList(count) => 1 - (*count as i32),
         Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,

@@ -263,6 +263,7 @@ impl Transpiler {
                 let escaped = escape_c_string(value);
                 Ok(format!("make_str(\"{escaped}\")"))
             }
+            Expression::List(_) => bail!("List literals are not supported in the transpiler"),
             Expression::Identifier(name) => Ok(name.to_string()),
             Expression::BinaryOp { left, op, right } => {
                 let left = self.emit_expression(left)?;

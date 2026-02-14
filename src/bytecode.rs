@@ -8,6 +8,7 @@ pub enum Instruction {
     PushInt(i64),
     PushBool(bool),
     PushString(String),
+    BuildList(usize),
     PushNone,
     LoadName(String),
     StoreName(String),
@@ -155,6 +156,12 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
         }
         Expression::String(value) => {
             code.push(Instruction::PushString(value.clone()));
+        }
+        Expression::List(elements) => {
+            for element in elements {
+                code.extend(compile_expression(element)?);
+            }
+            code.push(Instruction::BuildList(elements.len()));
         }
         Expression::Identifier(name) => {
             code.push(Instruction::LoadName(name.to_string()));
@@ -323,6 +330,28 @@ mod tests {
         assert!(matches!(
             compiled.main[2],
             Instruction::CallFunction { ref name, argc } if name == "sum2" && argc == 2
+        ));
+    }
+
+    #[test]
+    fn compiles_list_literal_expression() {
+        let program = Program {
+            statements: vec![Statement::Expr(call(
+                "print",
+                vec![Expression::List(vec![
+                    Expression::Integer(1),
+                    Expression::Integer(2),
+                ])],
+            ))],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert!(matches!(compiled.main[0], Instruction::PushInt(1)));
+        assert!(matches!(compiled.main[1], Instruction::PushInt(2)));
+        assert!(matches!(compiled.main[2], Instruction::BuildList(2)));
+        assert!(matches!(
+            compiled.main[3],
+            Instruction::CallFunction { ref name, argc } if name == "print" && argc == 1
         ));
     }
 }
