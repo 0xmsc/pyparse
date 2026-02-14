@@ -63,3 +63,41 @@ pub fn compile_c_binary(source: &str) -> PathBuf {
     assert!(status.success(), "failed to compile benchmark C source");
     binary_path
 }
+
+pub fn detect_python_interpreter() -> Option<String> {
+    if let Ok(python) = std::env::var("PYTHON") {
+        let status = Command::new(&python).arg("--version").status().ok()?;
+        if status.success() {
+            return Some(python);
+        }
+    }
+
+    let status = Command::new("python3").arg("--version").status().ok()?;
+    if status.success() {
+        return Some("python3".to_string());
+    }
+
+    None
+}
+
+pub fn run_python_file(interpreter: &str, path: &str) -> String {
+    let output = Command::new(interpreter)
+        .arg(path)
+        .output()
+        .unwrap_or_else(|err| panic!("run python file {path}: {err}"));
+    assert!(
+        output.status.success(),
+        "python failed for {path}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf8 python stdout")
+}
+
+pub fn run_python_startup(interpreter: &str) {
+    let status = Command::new(interpreter)
+        .arg("-c")
+        .arg("pass")
+        .status()
+        .expect("run python startup");
+    assert!(status.success(), "python startup command failed");
+}

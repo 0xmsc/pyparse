@@ -1,49 +1,60 @@
 mod common;
 
-use std::process::Command;
-
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use pyparse::backend::Backend;
 use pyparse::backend::transpiler::Transpiler;
+use pyparse::{lexer, parser};
 
 fn bench_transpiler(c: &mut Criterion) {
     for (label, path) in common::workloads() {
+        let source = common::load_source(&path);
         let program = common::load_program(&path);
-
-        c.bench_function(&format!("backend_transpiler_codegen_only_{label}"), |b| {
-            let transpiler = Transpiler;
-            b.iter(|| {
-                let source = transpiler
-                    .transpile(black_box(&program))
-                    .expect("transpile");
-                black_box(source);
-            })
-        });
-
-        c.bench_function(&format!("backend_transpiler_total_{label}"), |b| {
-            let transpiler = Transpiler;
-            b.iter(|| {
-                let output = transpiler.run(black_box(&program)).expect("run");
-                black_box(output);
-            })
-        });
-
         let transpiler = Transpiler;
-        let c_source = transpiler.transpile(&program).expect("transpile C source");
-        let c_binary = common::compile_c_binary(&c_source);
+
+        c.bench_function(&format!("backend_transpiler_prepare_only_{label}"), |b| {
+            b.iter(|| {
+                let prepared = transpiler.prepare(black_box(&program)).expect("prepare");
+                black_box(prepared);
+            })
+        });
+
         c.bench_function(
-            &format!("backend_transpiler_precompiled_exec_only_{label}"),
+            &format!("backend_transpiler_run_prepared_only_{label}"),
             |b| {
+                let prepared = transpiler.prepare(&program).expect("prepare");
                 b.iter(|| {
-                    let output = Command::new(black_box(&c_binary))
-                        .output()
-                        .expect("run precompiled C");
-                    assert!(output.status.success(), "precompiled C failed");
-                    let output = String::from_utf8(output.stdout).expect("utf8 output");
+                    let output = prepared.run().expect("run prepared");
                     black_box(output);
                 })
             },
         );
+
+        c.bench_function(
+            &format!("backend_transpiler_prepare_plus_run_{label}"),
+            |b| {
+                b.iter(|| {
+                    let output = transpiler
+                        .prepare(black_box(&program))
+                        .expect("prepare")
+                        .run()
+                        .expect("run");
+                    black_box(output);
+                })
+            },
+        );
+
+        c.bench_function(&format!("backend_transpiler_full_pipeline_{label}"), |b| {
+            b.iter(|| {
+                let tokens = lexer::tokenize(black_box(&source)).expect("tokenize");
+                let parsed_program = parser::parse_tokens(tokens).expect("parse");
+                let output = transpiler
+                    .prepare(black_box(&parsed_program))
+                    .expect("prepare")
+                    .run()
+                    .expect("run");
+                black_box(output);
+            })
+        });
     }
 }
 
