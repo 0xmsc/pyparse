@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, MethodError, ObjectWrapper};
+use crate::runtime::object::{AttributeError, CallTarget, MethodError, ObjectWrapper};
 
 use super::{Function, InterpreterError, Value};
 
@@ -120,25 +120,23 @@ impl<'a> InterpreterRuntime<'a> {
                                 name: name.to_string(),
                             }
                         })?;
-                        match list {
-                            Value::Object(object) => {
-                                ObjectWrapper::new(object.clone())
-                                    .set_item(raw_index, value)
-                                    .map_err(|error| match error {
-                                        ListError::NegativeIndex { index } => {
-                                            InterpreterError::NegativeListIndex { index }
-                                        }
-                                        ListError::OutOfBounds { index, len } => {
-                                            InterpreterError::ListIndexOutOfBounds { index, len }
-                                        }
-                                    })?;
-                            }
-                            other => {
-                                return Err(InterpreterError::ExpectedListType {
-                                    got: format!("{other:?}"),
-                                });
-                            }
+                        let Value::Object(object) = list;
+                        let wrapper = ObjectWrapper::new(object.clone());
+                        if wrapper.type_name() != "list" {
+                            return Err(InterpreterError::ExpectedListType {
+                                got: format!("{list:?}"),
+                            });
                         }
+                        wrapper
+                            .set_item(raw_index, value)
+                            .map_err(|error| match error {
+                                ListError::NegativeIndex { index } => {
+                                    InterpreterError::NegativeListIndex { index }
+                                }
+                                ListError::OutOfBounds { index, len } => {
+                                    InterpreterError::ListIndexOutOfBounds { index, len }
+                                }
+                            })?;
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -172,7 +170,7 @@ impl<'a> InterpreterRuntime<'a> {
                 let value = if let Some(value) = value {
                     self.eval_expression(value, environment)?
                 } else {
-                    Value::None
+                    Value::none_object()
                 };
                 Ok(ExecResult::Return(value))
             }
@@ -192,8 +190,8 @@ impl<'a> InterpreterRuntime<'a> {
         // Expression evaluation can recurse into calls, which may execute statements.
         match expr {
             Expression::Integer(value) => Ok(Value::int_object(*value)),
-            Expression::Boolean(value) => Ok(Value::Boolean(*value)),
-            Expression::String(value) => Ok(Value::String(value.clone())),
+            Expression::Boolean(value) => Ok(Value::bool_object(*value)),
+            Expression::String(value) => Ok(Value::string_object(value.clone())),
             Expression::List(elements) => {
                 let mut values = Vec::with_capacity(elements.len());
                 for element in elements {
@@ -210,7 +208,7 @@ impl<'a> InterpreterRuntime<'a> {
                 })
             }
             Expression::Index { object, index } => {
-                let object = self.eval_expression(object, environment)?;
+                let object_value = self.eval_expression(object, environment)?;
                 let index_value = self.eval_expression(index, environment)?;
                 let raw_index =
                     index_value
@@ -218,21 +216,21 @@ impl<'a> InterpreterRuntime<'a> {
                         .ok_or_else(|| InterpreterError::ExpectedIntegerType {
                             got: format!("{index_value:?}"),
                         })?;
-                match object {
-                    Value::Object(object) => ObjectWrapper::new(object.clone())
-                        .get_item(raw_index)
-                        .map_err(|error| match error {
-                            ListError::NegativeIndex { index } => {
-                                InterpreterError::NegativeListIndex { index }
-                            }
-                            ListError::OutOfBounds { index, len } => {
-                                InterpreterError::ListIndexOutOfBounds { index, len }
-                            }
-                        }),
-                    other => Err(InterpreterError::ExpectedListType {
-                        got: format!("{other:?}"),
-                    }),
+                let Value::Object(object) = object_value;
+                let wrapper = ObjectWrapper::new(object.clone());
+                if wrapper.type_name() != "list" {
+                    return Err(InterpreterError::ExpectedListType {
+                        got: format!("{wrapper:?}"),
+                    });
                 }
+                wrapper.get_item(raw_index).map_err(|error| match error {
+                    ListError::NegativeIndex { index } => {
+                        InterpreterError::NegativeListIndex { index }
+                    }
+                    ListError::OutOfBounds { index, len } => {
+                        InterpreterError::ListIndexOutOfBounds { index, len }
+                    }
+                })
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -258,28 +256,19 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
                 let attribute = name.to_string();
-                if let Value::Object(object_ref) = &object {
-                    let method = ObjectWrapper::new(object_ref.clone())
-                        .get_attribute_method_name(&attribute)
-                        .map_err(|error| match error {
-                            AttributeError::UnknownAttribute {
-                                attribute,
-                                type_name,
-                            } => InterpreterError::UnknownAttribute {
-                                attribute,
-                                type_name,
-                            },
-                        })?;
-                    Ok(Value::BoundMethod {
-                        receiver: Box::new(object),
-                        method,
-                    })
-                } else {
-                    Err(InterpreterError::UnknownAttribute {
-                        attribute,
-                        type_name: object.type_name().to_string(),
-                    })
-                }
+                let Value::Object(object_ref) = object;
+                let method = ObjectWrapper::new(object_ref.clone())
+                    .get_attribute_method_name(&attribute)
+                    .map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute,
+                            type_name,
+                        } => InterpreterError::UnknownAttribute {
+                            attribute,
+                            type_name,
+                        },
+                    })?;
+                Ok(Value::bound_method_object(object_ref.clone(), method))
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -309,10 +298,10 @@ impl<'a> InterpreterRuntime<'a> {
                 return Ok(value);
             }
             if let Some(builtin) = BuiltinFunction::from_name(name) {
-                return Ok(Value::BuiltinFunction(builtin));
+                return Ok(Value::builtin_function_object(builtin));
             }
             if self.functions.contains_key(name) {
-                return Ok(Value::Function(name.to_string()));
+                return Ok(Value::function_object(name.to_string()));
             }
             return Err(InterpreterError::UndefinedFunction {
                 name: name.to_string(),
@@ -327,13 +316,21 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        match callee {
-            Value::BuiltinFunction(BuiltinFunction::Print) => {
+        let Value::Object(callee_object) = callee;
+        let wrapper = ObjectWrapper::new(callee_object.clone());
+        let call_target =
+            wrapper
+                .call_target()
+                .ok_or_else(|| InterpreterError::ObjectNotCallable {
+                    type_name: wrapper.type_name().to_string(),
+                })?;
+        match call_target {
+            CallTarget::Builtin(BuiltinFunction::Print) => {
                 let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
                 self.output.push(outputs.join(" "));
-                Ok(Value::None)
+                Ok(Value::none_object())
             }
-            Value::BuiltinFunction(BuiltinFunction::Len) => {
+            CallTarget::Builtin(BuiltinFunction::Len) => {
                 if args.len() != 1 {
                     return Err(InterpreterError::FunctionArityMismatch {
                         name: "len".to_string(),
@@ -341,16 +338,16 @@ impl<'a> InterpreterRuntime<'a> {
                         found: args.len(),
                     });
                 }
-                match &args[0] {
-                    Value::Object(object) => Ok(Value::int_object(
-                        ObjectWrapper::new(object.clone()).len() as i64,
-                    )),
-                    other => Err(InterpreterError::ExpectedListType {
-                        got: format!("{other:?}"),
-                    }),
+                let Value::Object(object) = &args[0];
+                let wrapper = ObjectWrapper::new(object.clone());
+                if wrapper.type_name() != "list" {
+                    return Err(InterpreterError::ExpectedListType {
+                        got: format!("{:?}", &args[0]),
+                    });
                 }
+                Ok(Value::int_object(wrapper.len() as i64))
             }
-            Value::Function(name) => {
+            CallTarget::Function(name) => {
                 let function =
                     self.functions.get(&name).cloned().ok_or_else(|| {
                         InterpreterError::UndefinedFunction { name: name.clone() }
@@ -368,38 +365,29 @@ impl<'a> InterpreterRuntime<'a> {
                 }
                 let mut local_environment = environment.child_with_locals(&mut local_scope);
                 match self.exec_block(&function.body, &mut local_environment)? {
-                    ExecResult::Continue => Ok(Value::None),
+                    ExecResult::Continue => Ok(Value::none_object()),
                     ExecResult::Return(value) => Ok(value),
                 }
             }
-            Value::BoundMethod { receiver, method } => match *receiver {
-                Value::Object(object) => {
-                    ObjectWrapper::new(object.clone())
-                        .call_method(&method, args)
-                        .map_err(|error| match error {
-                            MethodError::ArityMismatch {
-                                method,
-                                expected,
-                                found,
-                            } => InterpreterError::MethodArityMismatch {
-                                method,
-                                expected,
-                                found,
-                            },
-                            MethodError::UnknownMethod { method, type_name } => {
-                                InterpreterError::UnknownMethod { method, type_name }
-                            }
-                        })?;
-                    Ok(Value::None)
-                }
-                other => Err(InterpreterError::UnknownMethod {
-                    method,
-                    type_name: other.type_name().to_string(),
-                }),
-            },
-            other => Err(InterpreterError::ObjectNotCallable {
-                type_name: other.type_name().to_string(),
-            }),
+            CallTarget::BoundMethod { receiver, method } => {
+                ObjectWrapper::new(receiver)
+                    .call_method(&method, args)
+                    .map_err(|error| match error {
+                        MethodError::ArityMismatch {
+                            method,
+                            expected,
+                            found,
+                        } => InterpreterError::MethodArityMismatch {
+                            method,
+                            expected,
+                            found,
+                        },
+                        MethodError::UnknownMethod { method, type_name } => {
+                            InterpreterError::UnknownMethod { method, type_name }
+                        }
+                    })?;
+                Ok(Value::none_object())
+            }
         }
     }
 }

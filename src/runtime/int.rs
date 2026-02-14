@@ -53,53 +53,32 @@ impl RuntimeObject for IntObject {
     }
 
     fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        match rhs {
-            Value::Object(object) => {
-                if let Some(rhs_int) = object.borrow().as_i64() {
-                    Ok(Value::int_object(self.value + rhs_int))
-                } else {
-                    Err(BinaryOpError::ExpectedIntegerType {
-                        got: format!("{rhs:?}"),
-                    })
-                }
-            }
-            _ => Err(BinaryOpError::ExpectedIntegerType {
+        if let Some(rhs_int) = rhs.as_i64() {
+            Ok(Value::int_object(self.value + rhs_int))
+        } else {
+            Err(BinaryOpError::ExpectedIntegerType {
                 got: format!("{rhs:?}"),
-            }),
+            })
         }
     }
 
     fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        match rhs {
-            Value::Object(object) => {
-                if let Some(rhs_int) = object.borrow().as_i64() {
-                    Ok(Value::int_object(self.value - rhs_int))
-                } else {
-                    Err(BinaryOpError::ExpectedIntegerType {
-                        got: format!("{rhs:?}"),
-                    })
-                }
-            }
-            _ => Err(BinaryOpError::ExpectedIntegerType {
+        if let Some(rhs_int) = rhs.as_i64() {
+            Ok(Value::int_object(self.value - rhs_int))
+        } else {
+            Err(BinaryOpError::ExpectedIntegerType {
                 got: format!("{rhs:?}"),
-            }),
+            })
         }
     }
 
     fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        match rhs {
-            Value::Object(object) => {
-                if let Some(rhs_int) = object.borrow().as_i64() {
-                    Ok(Value::Boolean(self.value < rhs_int))
-                } else {
-                    Err(BinaryOpError::ExpectedIntegerType {
-                        got: format!("{rhs:?}"),
-                    })
-                }
-            }
-            _ => Err(BinaryOpError::ExpectedIntegerType {
+        if let Some(rhs_int) = rhs.as_i64() {
+            Ok(Value::bool_object(self.value < rhs_int))
+        } else {
+            Err(BinaryOpError::ExpectedIntegerType {
                 got: format!("{rhs:?}"),
-            }),
+            })
         }
     }
 

@@ -7,7 +7,7 @@ use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, MethodError, ObjectWrapper};
+use crate::runtime::object::{AttributeError, CallTarget, MethodError, ObjectWrapper};
 use crate::runtime::value::Value;
 
 type VmResult<T> = std::result::Result<T, VmError>;
@@ -163,13 +163,13 @@ impl VmRuntime<'_> {
         loop {
             let instruction = match code.get(ip) {
                 Some(instruction) => instruction.clone(),
-                None => return Ok(Value::None),
+                None => return Ok(Value::none_object()),
             };
             ip += 1;
             match instruction {
                 Instruction::PushInt(value) => self.stack.push(Value::int_object(value)),
-                Instruction::PushBool(value) => self.stack.push(Value::Boolean(value)),
-                Instruction::PushString(value) => self.stack.push(Value::String(value)),
+                Instruction::PushBool(value) => self.stack.push(Value::bool_object(value)),
+                Instruction::PushString(value) => self.stack.push(Value::string_object(value)),
                 Instruction::BuildList(count) => {
                     let mut values = Vec::with_capacity(count);
                     for _ in 0..count {
@@ -179,14 +179,14 @@ impl VmRuntime<'_> {
                     values.reverse();
                     self.stack.push(Value::list_object(values));
                 }
-                Instruction::PushNone => self.stack.push(Value::None),
+                Instruction::PushNone => self.stack.push(Value::none_object()),
                 Instruction::LoadName(name) => {
                     let value = if let Some(value) = environment.load(&name).cloned() {
                         value
                     } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
-                        Value::BuiltinFunction(builtin)
+                        Value::builtin_function_object(builtin)
                     } else if self.program.functions.contains_key(&name) {
-                        Value::Function(name.clone())
+                        Value::function_object(name.clone())
                     } else {
                         return Err(VmError::UndefinedVariable { name: name.clone() });
                     };
@@ -198,28 +198,20 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    if let Value::Object(object_ref) = &object {
-                        let method = ObjectWrapper::new(object_ref.clone())
-                            .get_attribute_method_name(&attribute)
-                            .map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
-                                    attribute,
-                                    type_name,
-                                } => VmError::UnknownAttribute {
-                                    attribute,
-                                    type_name,
-                                },
-                            })?;
-                        self.stack.push(Value::BoundMethod {
-                            receiver: Box::new(object),
-                            method,
-                        });
-                    } else {
-                        return Err(VmError::UnknownAttribute {
-                            attribute,
-                            type_name: object.type_name().to_string(),
-                        });
-                    }
+                    let Value::Object(object_ref) = object;
+                    let method = ObjectWrapper::new(object_ref.clone())
+                        .get_attribute_method_name(&attribute)
+                        .map_err(|error| match error {
+                            AttributeError::UnknownAttribute {
+                                attribute,
+                                type_name,
+                            } => VmError::UnknownAttribute {
+                                attribute,
+                                type_name,
+                            },
+                        })?;
+                    self.stack
+                        .push(Value::bound_method_object(object_ref.clone(), method));
                 }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
@@ -253,31 +245,26 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
-                    let object = self.pop_stack()?;
+                    let object_value = self.pop_stack()?;
                     let index_raw =
                         index_value
                             .as_i64()
                             .ok_or_else(|| VmError::ExpectedIntegerType {
                                 got: format!("{index_value:?}"),
                             })?;
-                    let object = match object {
-                        Value::Object(object) => object,
-                        other => {
-                            return Err(VmError::ExpectedListType {
-                                got: format!("{other:?}"),
-                            });
+                    let Value::Object(object) = object_value;
+                    let wrapper = ObjectWrapper::new(object);
+                    if wrapper.type_name() != "list" {
+                        return Err(VmError::ExpectedListType {
+                            got: format!("{wrapper:?}"),
+                        });
+                    }
+                    let value = wrapper.get_item(index_raw).map_err(|error| match error {
+                        ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+                        ListError::OutOfBounds { index, len } => {
+                            VmError::ListIndexOutOfBounds { index, len }
                         }
-                    };
-                    let value = ObjectWrapper::new(object).get_item(index_raw).map_err(
-                        |error| match error {
-                            ListError::NegativeIndex { index } => {
-                                VmError::NegativeListIndex { index }
-                            }
-                            ListError::OutOfBounds { index, len } => {
-                                VmError::ListIndexOutOfBounds { index, len }
-                            }
-                        },
-                    )?;
+                    })?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
@@ -292,15 +279,14 @@ impl VmRuntime<'_> {
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
-                    let object = match target {
-                        Value::Object(object) => object.clone(),
-                        other => {
-                            return Err(VmError::ExpectedListType {
-                                got: format!("{other:?}"),
-                            });
-                        }
-                    };
-                    ObjectWrapper::new(object)
+                    let Value::Object(object) = target;
+                    let wrapper = ObjectWrapper::new(object.clone());
+                    if wrapper.type_name() != "list" {
+                        return Err(VmError::ExpectedListType {
+                            got: format!("{target:?}"),
+                        });
+                    }
+                    wrapper
                         .set_item(index_raw, value)
                         .map_err(|error| match error {
                             ListError::NegativeIndex { index } => {
@@ -342,7 +328,7 @@ impl VmRuntime<'_> {
                 Instruction::Pop => {
                     self.pop_stack()?;
                 }
-                Instruction::Return => return Ok(Value::None),
+                Instruction::Return => return Ok(Value::none_object()),
                 Instruction::ReturnValue => {
                     let value = self.pop_stack()?;
                     return Ok(value);
@@ -361,13 +347,20 @@ impl VmRuntime<'_> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> VmResult<Value> {
-        match callee {
-            Value::BuiltinFunction(BuiltinFunction::Print) => {
+        let Value::Object(callee_object) = callee;
+        let wrapper = ObjectWrapper::new(callee_object.clone());
+        let call_target = wrapper
+            .call_target()
+            .ok_or_else(|| VmError::ObjectNotCallable {
+                type_name: wrapper.type_name().to_string(),
+            })?;
+        match call_target {
+            CallTarget::Builtin(BuiltinFunction::Print) => {
                 let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
                 self.output.push(rendered.join(" "));
-                Ok(Value::None)
+                Ok(Value::none_object())
             }
-            Value::BuiltinFunction(BuiltinFunction::Len) => {
+            CallTarget::Builtin(BuiltinFunction::Len) => {
                 if args.len() != 1 {
                     return Err(VmError::FunctionArityMismatch {
                         name: "len".to_string(),
@@ -375,16 +368,16 @@ impl VmRuntime<'_> {
                         found: args.len(),
                     });
                 }
-                match &args[0] {
-                    Value::Object(object) => Ok(Value::int_object(
-                        ObjectWrapper::new(object.clone()).len() as i64,
-                    )),
-                    other => Err(VmError::ExpectedListType {
-                        got: format!("{other:?}"),
-                    }),
+                let Value::Object(object) = &args[0];
+                let wrapper = ObjectWrapper::new(object.clone());
+                if wrapper.type_name() != "list" {
+                    return Err(VmError::ExpectedListType {
+                        got: format!("{:?}", &args[0]),
+                    });
                 }
+                Ok(Value::int_object(wrapper.len() as i64))
             }
-            Value::Function(name) => {
+            CallTarget::Function(name) => {
                 let function = self
                     .program
                     .functions
@@ -408,34 +401,25 @@ impl VmRuntime<'_> {
                 self.stack = parent_stack;
                 result
             }
-            Value::BoundMethod { receiver, method } => match *receiver {
-                Value::Object(object) => {
-                    ObjectWrapper::new(object.clone())
-                        .call_method(&method, args)
-                        .map_err(|error| match error {
-                            MethodError::ArityMismatch {
-                                method,
-                                expected,
-                                found,
-                            } => VmError::MethodArityMismatch {
-                                method,
-                                expected,
-                                found,
-                            },
-                            MethodError::UnknownMethod { method, type_name } => {
-                                VmError::UnknownMethod { method, type_name }
-                            }
-                        })?;
-                    Ok(Value::None)
-                }
-                other => Err(VmError::UnknownMethod {
-                    method,
-                    type_name: other.type_name().to_string(),
-                }),
-            },
-            other => Err(VmError::ObjectNotCallable {
-                type_name: other.type_name().to_string(),
-            }),
+            CallTarget::BoundMethod { receiver, method } => {
+                ObjectWrapper::new(receiver)
+                    .call_method(&method, args)
+                    .map_err(|error| match error {
+                        MethodError::ArityMismatch {
+                            method,
+                            expected,
+                            found,
+                        } => VmError::MethodArityMismatch {
+                            method,
+                            expected,
+                            found,
+                        },
+                        MethodError::UnknownMethod { method, type_name } => {
+                            VmError::UnknownMethod { method, type_name }
+                        }
+                    })?;
+                Ok(Value::none_object())
+            }
         }
     }
 }

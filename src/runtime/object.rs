@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::builtins::BuiltinFunction;
 use crate::runtime::list::{ListError, ListObject};
 use crate::runtime::value::Value;
 
@@ -30,6 +31,13 @@ pub(crate) enum BinaryOpError {
     ExpectedIntegerType { got: String },
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum CallTarget {
+    Builtin(BuiltinFunction),
+    Function(String),
+    BoundMethod { receiver: ObjectRef, method: String },
+}
+
 pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn type_name(&self) -> &'static str;
     fn is_truthy(&self) -> bool;
@@ -43,6 +51,9 @@ pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
     fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
     fn as_i64(&self) -> Option<i64> {
+        None
+    }
+    fn call_target(&self) -> Option<CallTarget> {
         None
     }
 }
@@ -92,6 +103,14 @@ impl ObjectWrapper {
 
     pub(crate) fn as_i64(&self) -> Option<i64> {
         self.object.borrow().as_i64()
+    }
+
+    pub(crate) fn call_target(&self) -> Option<CallTarget> {
+        self.object.borrow().call_target()
+    }
+
+    pub(crate) fn type_name(&self) -> &'static str {
+        self.object.borrow().type_name()
     }
 }
 
