@@ -1,0 +1,8 @@
+class: runtime_success
+parity: true
+bench:
+  enabled: true
+  tags: [small]
+expected:
+  exit_code: 0
+  stdout_file: stdout.txt

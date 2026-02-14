@@ -8,8 +8,8 @@ use pyparse::ast::Program;
 use pyparse::{lexer, parser};
 
 pub const WORKLOADS: [(&str, &str); 2] = [
-    ("long", "tests/programs/long.py"),
-    ("gcd", "tests/programs/bench_gcd.py"),
+    ("long", "tests/programs/long/program.py"),
+    ("gcd", "tests/programs/bench_gcd/program.py"),
 ];
 
 pub fn load_source(path: &str) -> String {

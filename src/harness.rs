@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use serde::Deserialize;
 
 use crate::backend::Backend;
 use crate::backend::interpreter::Interpreter;
@@ -10,97 +11,230 @@ use crate::backend::transpiler::Transpiler;
 use crate::backend::vm::VM;
 use crate::{lexer, parser};
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CaseClass {
+    RuntimeSuccess,
+    FrontendError,
+    BackendRuntimeError,
+    UnsupportedFeature,
+}
+
+#[derive(Debug, Deserialize)]
+struct BenchConfig {
+    enabled: bool,
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExpectedOutcome {
+    exit_code: i32,
+    stdout_file: Option<String>,
+    stderr_file: Option<String>,
+    stderr_contains_file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CaseSpec {
+    class: CaseClass,
+    parity: bool,
+    bench: BenchConfig,
+    expected: ExpectedOutcome,
+}
+
+#[derive(Debug)]
+struct Case {
+    name: String,
+    dir: std::path::PathBuf,
+    program_path: std::path::PathBuf,
+    spec: CaseSpec,
+}
+
 fn normalize_output(output: &str) -> String {
     output.replace("\r\n", "\n").trim_end().to_string()
 }
 
-fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
+fn read_text_from_case_file(case: &Case, relative_path: &str) -> Result<String> {
+    fs::read_to_string(case.dir.join(relative_path))
+        .with_context(|| format!("Reading {} fixture file {}", case.name, relative_path))
+}
+
+fn load_cases() -> Result<Vec<Case>> {
     let programs_dir = Path::new("tests/programs");
-    let mut programs = Vec::new();
+    let mut cases = Vec::new();
 
     for entry in
         fs::read_dir(programs_dir).with_context(|| format!("Reading {}", programs_dir.display()))?
     {
         let path = entry?.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("py") {
-            programs.push(path);
-        }
-    }
-
-    ensure!(
-        !programs.is_empty(),
-        "No .py programs found in {}",
-        programs_dir.display()
-    );
-    programs.sort();
-
-    for path in programs {
-        let source =
-            fs::read_to_string(&path).with_context(|| format!("Reading {}", path.display()))?;
-        let tokenized = lexer::tokenize(&source);
-        let expected_error_path = path.with_extension("err");
-        if expected_error_path.exists() {
-            let expected_error = fs::read_to_string(&expected_error_path)
-                .with_context(|| format!("Reading {}", expected_error_path.display()))?;
-            let expected_error = expected_error.trim();
-
-            match tokenized {
-                Err(err) => {
-                    let error = err.to_string();
-                    ensure!(
-                        error.contains(expected_error),
-                        "Expected error containing '{expected_error}', got '{error}'"
-                    );
-                }
-                Ok(tokens) => match parser::parse_tokens(tokens) {
-                    Ok(program) => {
-                        let result = backend.run(&program);
-                        ensure!(
-                            result.is_err(),
-                            "Expected error for backend {} in {}",
-                            backend.name(),
-                            path.display()
-                        );
-                        let error = match result {
-                            Ok(_) => unreachable!(),
-                            Err(error) => error.to_string(),
-                        };
-                        ensure!(
-                            error.contains(expected_error),
-                            "Expected error containing '{expected_error}', got '{error}'"
-                        );
-                    }
-                    Err(err) => {
-                        let error = err.to_string();
-                        ensure!(
-                            error.contains(expected_error),
-                            "Expected error containing '{expected_error}', got '{error}'"
-                        );
-                    }
-                },
-            }
+        if !path.is_dir() {
             continue;
         }
 
-        let tokens = tokenized.with_context(|| format!("Tokenizing {}", path.display()))?;
-        let expected_path = path.with_extension("out");
-        let expected = fs::read_to_string(&expected_path)
-            .with_context(|| format!("Reading {}", expected_path.display()))?;
-        let program =
-            parser::parse_tokens(tokens).with_context(|| format!("Parsing {}", path.display()))?;
-        let expected_output = normalize_output(&expected);
+        let case_path = path.join("case.yaml");
+        if !case_path.exists() {
+            continue;
+        }
 
-        let output = backend
-            .run(&program)
-            .with_context(|| format!("Backend {} failed for {}", backend.name(), path.display()))?;
-        let actual_output = normalize_output(&output);
-        assert_eq!(
-            actual_output,
-            expected_output,
-            "Backend {} mismatch for {}",
-            backend.name(),
+        let program_path = path.join("program.py");
+        ensure!(
+            program_path.exists(),
+            "Missing program.py for case {}",
             path.display()
         );
+
+        let case_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_string)
+            .with_context(|| format!("Invalid case directory name {}", path.display()))?;
+        let case_raw = fs::read_to_string(&case_path)
+            .with_context(|| format!("Reading {}", case_path.display()))?;
+        let spec: CaseSpec = serde_yaml::from_str(&case_raw)
+            .with_context(|| format!("Parsing {}", case_path.display()))?;
+
+        cases.push(Case {
+            name: case_name,
+            dir: path,
+            program_path,
+            spec,
+        });
+    }
+
+    ensure!(
+        !cases.is_empty(),
+        "No test cases found in {}",
+        programs_dir.display()
+    );
+    cases.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(cases)
+}
+
+fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
+    for case in load_cases()? {
+        if case.spec.parity {
+            ensure!(
+                matches!(case.spec.class, CaseClass::RuntimeSuccess),
+                "Case {} has parity enabled but is not runtime_success",
+                case.name
+            );
+        }
+        if case.spec.bench.enabled {
+            ensure!(
+                !case.spec.bench.tags.is_empty(),
+                "Case {} has bench enabled but no tags",
+                case.name
+            );
+        }
+        let source = fs::read_to_string(&case.program_path)
+            .with_context(|| format!("Reading {}", case.name))?;
+        let tokenized = lexer::tokenize(&source);
+        match case.spec.class {
+            CaseClass::RuntimeSuccess => {
+                ensure!(
+                    case.spec.expected.exit_code == 0,
+                    "Case {} expected exit code must be 0 for runtime_success",
+                    case.name
+                );
+                let stdout_file = case
+                    .spec
+                    .expected
+                    .stdout_file
+                    .as_deref()
+                    .with_context(|| format!("Missing stdout_file in {}", case.name))?;
+                let expected = read_text_from_case_file(&case, stdout_file)?;
+                let tokens = tokenized.with_context(|| format!("Tokenizing {}", case.name))?;
+                let program = parser::parse_tokens(tokens)
+                    .with_context(|| format!("Parsing {}", case.name))?;
+                let output = backend.run(&program).with_context(|| {
+                    format!("Backend {} failed for {}", backend.name(), case.name)
+                })?;
+                let actual_output = normalize_output(&output);
+                let expected_output = normalize_output(&expected);
+                assert_eq!(
+                    actual_output,
+                    expected_output,
+                    "Backend {} mismatch for {}",
+                    backend.name(),
+                    case.name
+                );
+            }
+            CaseClass::FrontendError => {
+                ensure!(
+                    case.spec.expected.exit_code == 1,
+                    "Case {} expected exit code must be 1 for frontend_error",
+                    case.name
+                );
+                let expected_file = case
+                    .spec
+                    .expected
+                    .stderr_contains_file
+                    .as_deref()
+                    .or(case.spec.expected.stderr_file.as_deref())
+                    .with_context(|| format!("Missing stderr expectation file in {}", case.name))?;
+                let expected_error = read_text_from_case_file(&case, expected_file)?;
+                let expected_error = expected_error.trim();
+                match tokenized {
+                    Err(error) => {
+                        let actual = error.to_string();
+                        ensure!(
+                            actual.contains(expected_error),
+                            "Expected frontend error containing '{expected_error}' in {}, got '{actual}'",
+                            case.name
+                        );
+                    }
+                    Ok(tokens) => {
+                        let parse_result = parser::parse_tokens(tokens);
+                        ensure!(
+                            parse_result.is_err(),
+                            "Expected frontend error in {}, but parsing succeeded",
+                            case.name
+                        );
+                        let actual = parse_result
+                            .expect_err("parse_result checked as err")
+                            .to_string();
+                        ensure!(
+                            actual.contains(expected_error),
+                            "Expected frontend error containing '{expected_error}' in {}, got '{actual}'",
+                            case.name
+                        );
+                    }
+                }
+            }
+            CaseClass::BackendRuntimeError => {
+                ensure!(
+                    case.spec.expected.exit_code == 1,
+                    "Case {} expected exit code must be 1 for backend_runtime_error",
+                    case.name
+                );
+                let expected_file = case
+                    .spec
+                    .expected
+                    .stderr_contains_file
+                    .as_deref()
+                    .or(case.spec.expected.stderr_file.as_deref())
+                    .with_context(|| format!("Missing stderr expectation file in {}", case.name))?;
+                let expected_error = read_text_from_case_file(&case, expected_file)?;
+                let expected_error = expected_error.trim();
+                let tokens = tokenized.with_context(|| format!("Tokenizing {}", case.name))?;
+                let program = parser::parse_tokens(tokens)
+                    .with_context(|| format!("Parsing {}", case.name))?;
+                let result = backend.run(&program);
+                ensure!(
+                    result.is_err(),
+                    "Expected backend runtime error for backend {} in {}",
+                    backend.name(),
+                    case.name
+                );
+                let actual = result.expect_err("result checked as err").to_string();
+                ensure!(
+                    actual.contains(expected_error),
+                    "Expected backend runtime error containing '{expected_error}' in {}, got '{actual}'",
+                    case.name
+                );
+            }
+            CaseClass::UnsupportedFeature => {}
+        }
     }
 
     Ok(())

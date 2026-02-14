@@ -1,0 +1,8 @@
+class: frontend_error
+parity: false
+bench:
+  enabled: false
+  tags: [small]
+expected:
+  exit_code: 1
+  stderr_contains_file: stderr.txt
