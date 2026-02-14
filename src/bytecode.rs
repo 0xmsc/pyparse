@@ -47,7 +47,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                 let compiled = compile_function(params, body)?;
                 functions.insert(name.to_string(), compiled);
             }
-            _ => compile_statement(statement, &mut main, false)?,
+            _ => append_relocated(&mut main, compile_statement(statement, false)?),
         }
     }
 
@@ -55,10 +55,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
 }
 
 fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
-    let mut code = Vec::new();
-    for statement in body {
-        compile_statement(statement, &mut code, true)?;
-    }
+    let mut code = compile_block(body, true)?;
     code.push(Instruction::Return);
 
     Ok(CompiledFunction {
@@ -67,14 +64,19 @@ fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFun
     })
 }
 
-fn compile_statement(
-    statement: &Statement,
-    code: &mut Vec<Instruction>,
-    in_function: bool,
-) -> Result<()> {
+fn compile_block(statements: &[Statement], in_function: bool) -> Result<Vec<Instruction>> {
+    let mut code = Vec::new();
+    for statement in statements {
+        append_relocated(&mut code, compile_statement(statement, in_function)?);
+    }
+    Ok(code)
+}
+
+fn compile_statement(statement: &Statement, in_function: bool) -> Result<Vec<Instruction>> {
+    let mut code = Vec::new();
     match statement {
         Statement::Assign { name, value } => {
-            compile_expression(value, code)?;
+            compile_expression(value, &mut code)?;
             code.push(Instruction::StoreName(name.to_string()));
         }
         Statement::If {
@@ -82,45 +84,45 @@ fn compile_statement(
             then_body,
             else_body,
         } => {
-            compile_expression(condition, code)?;
-            let jump_if_false_pos = code.len();
-            code.push(Instruction::JumpIfFalse(0));
-            for stmt in then_body {
-                compile_statement(stmt, code, in_function)?;
-            }
+            let mut condition_code = Vec::new();
+            compile_expression(condition, &mut condition_code)?;
+            let then_code = compile_block(then_body, in_function)?;
+            let else_code = compile_block(else_body, in_function)?;
+            let condition_len = condition_code.len();
+            let then_len = then_code.len();
+            let else_len = else_code.len();
+
+            append_relocated(&mut code, condition_code);
             if else_body.is_empty() {
-                let end = code.len();
-                code[jump_if_false_pos] = Instruction::JumpIfFalse(end);
+                code.push(Instruction::JumpIfFalse(condition_len + 1 + then_len));
+                append_relocated(&mut code, then_code);
             } else {
-                let jump_pos = code.len();
-                code.push(Instruction::Jump(0));
-                let else_start = code.len();
-                code[jump_if_false_pos] = Instruction::JumpIfFalse(else_start);
-                for stmt in else_body {
-                    compile_statement(stmt, code, in_function)?;
-                }
-                let end = code.len();
-                code[jump_pos] = Instruction::Jump(end);
+                let else_start = condition_len + 1 + then_len + 1;
+                let end = else_start + else_len;
+                code.push(Instruction::JumpIfFalse(else_start));
+                append_relocated(&mut code, then_code);
+                code.push(Instruction::Jump(end));
+                append_relocated(&mut code, else_code);
             }
         }
         Statement::While { condition, body } => {
-            let loop_start = code.len();
-            compile_expression(condition, code)?;
-            let jump_if_false_pos = code.len();
-            code.push(Instruction::JumpIfFalse(0));
-            for stmt in body {
-                compile_statement(stmt, code, in_function)?;
-            }
-            code.push(Instruction::Jump(loop_start));
-            let loop_end = code.len();
-            code[jump_if_false_pos] = Instruction::JumpIfFalse(loop_end);
+            let mut condition_code = Vec::new();
+            compile_expression(condition, &mut condition_code)?;
+            let body_code = compile_block(body, in_function)?;
+            let condition_len = condition_code.len();
+            let body_len = body_code.len();
+
+            append_relocated(&mut code, condition_code);
+            code.push(Instruction::JumpIfFalse(condition_len + 1 + body_len + 1));
+            append_relocated(&mut code, body_code);
+            code.push(Instruction::Jump(0));
         }
         Statement::Return(value) => {
             if !in_function {
                 bail!("Return outside of function is not supported in the VM");
             }
             if let Some(value) = value {
-                compile_expression(value, code)?;
+                compile_expression(value, &mut code)?;
             } else {
                 code.push(Instruction::PushNone);
             }
@@ -128,7 +130,7 @@ fn compile_statement(
         }
         Statement::Pass => {}
         Statement::Expr(expr) => {
-            compile_expression(expr, code)?;
+            compile_expression(expr, &mut code)?;
             code.push(Instruction::Pop);
         }
         Statement::FunctionDef { .. } => {
@@ -139,7 +141,22 @@ fn compile_statement(
             }
         }
     }
-    Ok(())
+    Ok(code)
+}
+
+fn append_relocated(code: &mut Vec<Instruction>, mut fragment: Vec<Instruction>) {
+    let base = code.len();
+    if base > 0 {
+        for instruction in &mut fragment {
+            match instruction {
+                Instruction::JumpIfFalse(target) | Instruction::Jump(target) => {
+                    *target += base;
+                }
+                _ => {}
+            }
+        }
+    }
+    code.extend(fragment);
 }
 
 fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<()> {
