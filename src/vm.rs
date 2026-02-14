@@ -135,6 +135,63 @@ pub struct PreparedVM {
     compiled: CompiledProgram,
 }
 
+struct Environment<'a> {
+    globals: &'a mut HashMap<String, Value>,
+    locals: Option<&'a mut HashMap<String, Value>>,
+}
+
+impl<'a> Environment<'a> {
+    fn top_level(globals: &'a mut HashMap<String, Value>) -> Self {
+        Self {
+            globals,
+            locals: None,
+        }
+    }
+
+    fn with_locals(
+        globals: &'a mut HashMap<String, Value>,
+        locals: &'a mut HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            globals,
+            locals: Some(locals),
+        }
+    }
+
+    fn load(&self, name: &str) -> Option<&Value> {
+        if let Some(locals) = self.locals.as_deref()
+            && let Some(value) = locals.get(name)
+        {
+            return Some(value);
+        }
+        self.globals.get(name)
+    }
+
+    fn load_mut(&mut self, name: &str) -> Option<&mut Value> {
+        if let Some(locals) = self.locals.as_deref_mut()
+            && locals.contains_key(name)
+        {
+            return locals.get_mut(name);
+        }
+        self.globals.get_mut(name)
+    }
+
+    fn store(&mut self, name: String, value: Value) {
+        if let Some(locals) = self.locals.as_deref_mut() {
+            locals.insert(name, value);
+        } else {
+            self.globals.insert(name, value);
+        }
+    }
+
+    fn child_with_locals<'b>(
+        &'b mut self,
+        locals: &'b mut HashMap<String, Value>,
+    ) -> Environment<'b> {
+        Environment::with_locals(self.globals, locals)
+    }
+}
+
 impl VM {
     pub fn new() -> Self {
         Self {
@@ -145,15 +202,22 @@ impl VM {
 
     fn run_compiled(&mut self, program: &CompiledProgram) -> VmResult<String> {
         let mut stack = Vec::new();
-        self.execute_code(&program.main, &mut stack, None, program)?;
+        let mut environment = Environment::top_level(&mut self.globals);
+        Self::execute_code(
+            &program.main,
+            &mut stack,
+            &mut environment,
+            &mut self.output,
+            program,
+        )?;
         Ok(self.output.join("\n"))
     }
 
     fn execute_code(
-        &mut self,
         code: &[Instruction],
         stack: &mut Vec<Value>,
-        mut locals: Option<&mut HashMap<String, Value>>,
+        environment: &mut Environment<'_>,
+        output: &mut Vec<String>,
         program: &CompiledProgram,
     ) -> VmResult<Value> {
         let mut ip = 0;
@@ -178,22 +242,15 @@ impl VM {
                 }
                 Instruction::PushNone => stack.push(Value::None),
                 Instruction::LoadName(name) => {
-                    if let Some(locals) = locals.as_ref()
-                        && let Some(value) = locals.get(&name)
-                    {
-                        stack.push(value.clone());
-                        continue;
-                    }
-                    let value = self
-                        .globals
-                        .get(&name)
+                    let value = environment
+                        .load(&name)
                         .cloned()
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
                     stack.push(value);
                 }
                 Instruction::StoreName(name) => {
                     let value = Self::pop_stack(stack)?;
-                    Self::store_name(&mut locals, &mut self.globals, name, value);
+                    environment.store(name, value);
                 }
                 Instruction::Add => {
                     let right = Self::pop_stack(stack)?;
@@ -238,16 +295,9 @@ impl VM {
                         return Err(VmError::NegativeListIndex { index: index_raw });
                     }
                     let index = index_raw as usize;
-                    let target = if let Some(locals) = locals.as_mut() {
-                        if locals.contains_key(&name) {
-                            locals.get_mut(&name)
-                        } else {
-                            self.globals.get_mut(&name)
-                        }
-                    } else {
-                        self.globals.get_mut(&name)
-                    }
-                    .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
+                    let target = environment
+                        .load_mut(&name)
+                        .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
                     let values = target.as_list_mut()?;
                     if index >= values.len() {
                         return Err(VmError::ListIndexOutOfBounds {
@@ -267,7 +317,7 @@ impl VM {
                                     values.push(value.to_output());
                                 }
                                 values.reverse();
-                                self.output.push(values.join(" "));
+                                output.push(values.join(" "));
                                 stack.push(Value::None);
                                 continue;
                             }
@@ -308,10 +358,12 @@ impl VM {
                     for (param, value) in function.params.iter().zip(args) {
                         locals_map.insert(param.to_string(), value);
                     }
-                    let return_value = self.execute_code(
+                    let mut child_environment = environment.child_with_locals(&mut locals_map);
+                    let return_value = Self::execute_code(
                         &function.code,
                         &mut Vec::new(),
-                        Some(&mut locals_map),
+                        &mut child_environment,
+                        output,
                         program,
                     )?;
                     stack.push(return_value);
@@ -327,45 +379,12 @@ impl VM {
                         args.push(value);
                     }
                     args.reverse();
-                    let target = if let Some(locals) = locals.as_mut() {
-                        if locals.contains_key(&receiver) {
-                            locals.get_mut(&receiver)
-                        } else {
-                            self.globals.get_mut(&receiver)
+                    let target = environment.load_mut(&receiver).ok_or_else(|| {
+                        VmError::UndefinedVariable {
+                            name: receiver.clone(),
                         }
-                    } else {
-                        self.globals.get_mut(&receiver)
-                    }
-                    .ok_or_else(|| VmError::UndefinedVariable {
-                        name: receiver.clone(),
                     })?;
-                    match target {
-                        Value::List(values) => match method.as_str() {
-                            "append" => {
-                                if argc != 1 {
-                                    return Err(VmError::MethodArityMismatch {
-                                        method: "append".to_string(),
-                                        expected: 1,
-                                        found: argc,
-                                    });
-                                }
-                                values.push(args.pop().expect("argc checked above"));
-                                stack.push(Value::None);
-                            }
-                            _ => {
-                                return Err(VmError::UnknownMethod {
-                                    method,
-                                    type_name: "list".to_string(),
-                                });
-                            }
-                        },
-                        _ => {
-                            return Err(VmError::UnknownMethod {
-                                method,
-                                type_name: target.type_name().to_string(),
-                            });
-                        }
-                    }
+                    Self::dispatch_method_call(target, method, argc, &mut args, stack)?;
                 }
                 Instruction::JumpIfFalse(target) => {
                     let value = Self::pop_stack(stack)?;
@@ -400,17 +419,41 @@ impl VM {
         stack.pop().ok_or(VmError::StackUnderflow)
     }
 
-    fn store_name(
-        locals: &mut Option<&mut HashMap<String, Value>>,
-        globals: &mut HashMap<String, Value>,
-        name: String,
-        value: Value,
-    ) {
-        if let Some(locals) = locals.as_mut() {
-            locals.insert(name, value);
-        } else {
-            globals.insert(name, value);
+    fn dispatch_method_call(
+        target: &mut Value,
+        method: String,
+        argc: usize,
+        args: &mut Vec<Value>,
+        stack: &mut Vec<Value>,
+    ) -> VmResult<()> {
+        match target {
+            Value::List(values) => match method.as_str() {
+                "append" => {
+                    if argc != 1 {
+                        return Err(VmError::MethodArityMismatch {
+                            method: "append".to_string(),
+                            expected: 1,
+                            found: argc,
+                        });
+                    }
+                    values.push(args.pop().expect("argc checked above"));
+                    stack.push(Value::None);
+                }
+                _ => {
+                    return Err(VmError::UnknownMethod {
+                        method,
+                        type_name: "list".to_string(),
+                    });
+                }
+            },
+            _ => {
+                return Err(VmError::UnknownMethod {
+                    method,
+                    type_name: target.type_name().to_string(),
+                });
+            }
         }
+        Ok(())
     }
 }
 
@@ -436,5 +479,128 @@ impl PreparedBackend for PreparedVM {
 impl Default for VM {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{VM, VmError};
+    use crate::ast::{AssignTarget, Expression, Program, Statement};
+    use crate::bytecode::{CompiledFunction, CompiledProgram, Instruction, compile};
+    use indoc::indoc;
+    use std::collections::HashMap;
+
+    fn call(name: &str, args: Vec<Expression>) -> Expression {
+        Expression::Call {
+            callee: Box::new(Expression::Identifier(name.to_string())),
+            args,
+        }
+    }
+
+    fn method_call(receiver: &str, method: &str, args: Vec<Expression>) -> Expression {
+        Expression::Call {
+            callee: Box::new(Expression::Attribute {
+                object: Box::new(Expression::Identifier(receiver.to_string())),
+                name: method.to_string(),
+            }),
+            args,
+        }
+    }
+
+    #[test]
+    fn run_compiled_reports_stack_underflow() {
+        let compiled = CompiledProgram {
+            functions: HashMap::<String, CompiledFunction>::new(),
+            main: vec![Instruction::Pop],
+        };
+
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected stack underflow");
+        assert_eq!(error, VmError::StackUnderflow);
+    }
+
+    #[test]
+    fn run_compiled_reports_invalid_jump_target() {
+        let compiled = CompiledProgram {
+            functions: HashMap::<String, CompiledFunction>::new(),
+            main: vec![Instruction::Jump(10)],
+        };
+
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected invalid jump target");
+        assert_eq!(error, VmError::InvalidJumpTarget);
+    }
+
+    #[test]
+    fn function_locals_shadow_globals() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("x".to_string()),
+                    value: Expression::Integer(1),
+                },
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec!["x".to_string()],
+                    body: vec![Statement::Return(Some(Expression::Identifier(
+                        "x".to_string(),
+                    )))],
+                },
+                Statement::Expr(call("print", vec![call("f", vec![Expression::Integer(2)])])),
+                Statement::Expr(call("print", vec![Expression::Identifier("x".to_string())])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                2
+                1
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
+    fn list_append_mutates_receiver_and_returns_none() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::List(vec![]),
+                },
+                Statement::Expr(call(
+                    "print",
+                    vec![method_call(
+                        "values",
+                        "append",
+                        vec![Expression::Integer(3)],
+                    )],
+                )),
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Identifier("values".to_string())],
+                )),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                None
+                [3]
+            "}
+            .trim_end()
+        );
     }
 }
