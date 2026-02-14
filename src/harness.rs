@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
@@ -59,6 +60,57 @@ fn read_text_from_case_file(case: &Case, relative_path: &str) -> Result<String> 
         .with_context(|| format!("Reading {} fixture file {}", case.name, relative_path))
 }
 
+fn python_parity_required() -> bool {
+    std::env::var("PYTHON_PARITY_REQUIRED")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+fn detect_python_interpreter() -> Result<Option<String>> {
+    if let Ok(python) = std::env::var("PYTHON") {
+        let status = Command::new(&python)
+            .arg("--version")
+            .status()
+            .with_context(|| format!("Running '{python} --version'"))?;
+        ensure!(
+            status.success(),
+            "Configured PYTHON interpreter '{}' is not executable",
+            python
+        );
+        return Ok(Some(python));
+    }
+
+    let status = Command::new("python3").arg("--version").status();
+    if let Ok(status) = status
+        && status.success()
+    {
+        return Ok(Some("python3".to_string()));
+    }
+
+    if python_parity_required() {
+        anyhow::bail!(
+            "CPython parity required but no interpreter found. Set PYTHON or install python3."
+        );
+    }
+
+    eprintln!("Skipping CPython parity test: no PYTHON env or python3 interpreter found.");
+    Ok(None)
+}
+
+fn run_python_program(interpreter: &str, case: &Case) -> Result<String> {
+    let output = Command::new(interpreter)
+        .arg(&case.program_path)
+        .output()
+        .with_context(|| format!("Running CPython for {}", case.name))?;
+    ensure!(
+        output.status.success(),
+        "CPython failed for {}: {}",
+        case.name,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn load_cases() -> Result<Vec<Case>> {
     let programs_dir = Path::new("tests/programs");
     let mut cases = Vec::new();
@@ -111,6 +163,8 @@ fn load_cases() -> Result<Vec<Case>> {
 }
 
 fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
+    let python_interpreter = detect_python_interpreter()?;
+
     for case in load_cases()? {
         if case.spec.parity {
             ensure!(
@@ -158,6 +212,20 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
                     backend.name(),
                     case.name
                 );
+
+                if case.spec.parity
+                    && let Some(interpreter) = python_interpreter.as_deref()
+                {
+                    let python_output = run_python_program(interpreter, &case)?;
+                    let expected_output = normalize_output(&python_output);
+                    assert_eq!(
+                        actual_output,
+                        expected_output,
+                        "Parity mismatch for backend {} in {}",
+                        backend.name(),
+                        case.name
+                    );
+                }
             }
             CaseClass::FrontendError => {
                 ensure!(
