@@ -1,13 +1,13 @@
 use anyhow::Result;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use thiserror::Error;
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
+use crate::runtime::list::ListError;
+use crate::runtime::object::{ObjectKind, ObjectRef, new_list_object};
 
 type VmResult<T> = std::result::Result<T, VmError>;
 
@@ -53,54 +53,11 @@ enum VmError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ObjectKind {
-    List(Vec<Value>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct Object {
-    kind: ObjectKind,
-}
-
-impl Object {
-    fn list(values: Vec<Value>) -> Self {
-        Self {
-            kind: ObjectKind::List(values),
-        }
-    }
-
-    fn to_output(&self) -> String {
-        match &self.kind {
-            ObjectKind::List(values) => {
-                let rendered = values
-                    .iter()
-                    .map(Value::to_output)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[{rendered}]")
-            }
-        }
-    }
-
-    fn is_truthy(&self) -> bool {
-        match &self.kind {
-            ObjectKind::List(values) => !values.is_empty(),
-        }
-    }
-
-    fn type_name(&self) -> &'static str {
-        match &self.kind {
-            ObjectKind::List(_) => "list",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
 enum Value {
     Integer(i64),
     Boolean(bool),
     String(String),
-    Object(Rc<RefCell<Object>>),
+    Object(ObjectRef<Value>),
     BuiltinFunction(BuiltinFunction),
     Function(String),
     BoundMethod {
@@ -137,7 +94,19 @@ impl Value {
                 }
             }
             Value::String(value) => value.clone(),
-            Value::Object(object) => object.borrow().to_output(),
+            Value::Object(object) => {
+                let borrowed = object.borrow();
+                match &borrowed.kind {
+                    ObjectKind::List(list) => {
+                        let rendered = list
+                            .iter()
+                            .map(Value::to_output)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("[{rendered}]")
+                    }
+                }
+            }
             Value::BuiltinFunction(_) => "<built-in function>".to_string(),
             Value::Function(name) => format!("<function {name}>"),
             Value::BoundMethod { .. } => "<bound method>".to_string(),
@@ -170,13 +139,13 @@ impl Value {
     }
 
     fn list_object(values: Vec<Value>) -> Self {
-        Value::Object(Rc::new(RefCell::new(Object::list(values))))
+        Value::Object(new_list_object(values))
     }
 
-    fn as_list_object(&self) -> Option<Rc<RefCell<Object>>> {
+    fn as_list_object(&self) -> Option<ObjectRef<Value>> {
         match self {
             Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                Some(Rc::clone(object))
+                Some(object.clone())
             }
             _ => None,
         }
@@ -353,10 +322,6 @@ impl VmRuntime<'_> {
                     let index_value = self.pop_stack()?;
                     let object = self.pop_stack()?;
                     let index_raw = index_value.as_int()?;
-                    if index_raw < 0 {
-                        return Err(VmError::NegativeListIndex { index: index_raw });
-                    }
-                    let index = index_raw as usize;
                     let object = match object {
                         Value::Object(object)
                             if matches!(object.borrow().kind, ObjectKind::List(_)) =>
@@ -370,25 +335,14 @@ impl VmRuntime<'_> {
                         }
                     };
                     let borrowed = object.borrow();
-                    let ObjectKind::List(values) = &borrowed.kind;
-                    let value =
-                        values
-                            .get(index)
-                            .cloned()
-                            .ok_or(VmError::ListIndexOutOfBounds {
-                                index,
-                                len: values.len(),
-                            })?;
+                    let ObjectKind::List(list) = &borrowed.kind;
+                    let value = list.__getitem__(index_raw).map_err(Self::map_list_error)?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
                     let index_raw = index_value.as_int()?;
-                    if index_raw < 0 {
-                        return Err(VmError::NegativeListIndex { index: index_raw });
-                    }
-                    let index = index_raw as usize;
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
@@ -405,14 +359,9 @@ impl VmRuntime<'_> {
                         }
                     };
                     let mut borrowed = object.borrow_mut();
-                    let ObjectKind::List(values) = &mut borrowed.kind;
-                    if index >= values.len() {
-                        return Err(VmError::ListIndexOutOfBounds {
-                            index,
-                            len: values.len(),
-                        });
-                    }
-                    values[index] = value;
+                    let ObjectKind::List(list) = &mut borrowed.kind;
+                    list.__setitem__(index_raw, value)
+                        .map_err(Self::map_list_error)?;
                 }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
@@ -496,8 +445,8 @@ impl VmRuntime<'_> {
                         if matches!(object.borrow().kind, ObjectKind::List(_)) =>
                     {
                         let borrowed = object.borrow();
-                        let ObjectKind::List(values) = &borrowed.kind;
-                        Ok(Value::Integer(values.len() as i64))
+                        let ObjectKind::List(list) = &borrowed.kind;
+                        Ok(Value::Integer(list.__len__() as i64))
                     }
                     other => Err(VmError::ExpectedListType {
                         got: format!("{other:?}"),
@@ -540,8 +489,8 @@ impl VmRuntime<'_> {
                                 });
                             }
                             let mut borrowed = object.borrow_mut();
-                            let ObjectKind::List(values) = &mut borrowed.kind;
-                            values.push(args.into_iter().next().expect("len checked above"));
+                            let ObjectKind::List(list) = &mut borrowed.kind;
+                            list.append(args.into_iter().next().expect("len checked above"));
                             Ok(Value::None)
                         }
                         _ => Err(VmError::UnknownMethod {
@@ -558,6 +507,13 @@ impl VmRuntime<'_> {
             other => Err(VmError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
+        }
+    }
+
+    fn map_list_error(error: ListError) -> VmError {
+        match error {
+            ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+            ListError::OutOfBounds { index, len } => VmError::ListIndexOutOfBounds { index, len },
         }
     }
 }

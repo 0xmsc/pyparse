@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
+use crate::runtime::list::ListError;
+use crate::runtime::object::ObjectKind;
 
-use super::{Function, InterpreterError, Value, value::ObjectKind};
+use super::{Function, InterpreterError, Value};
 
 /// Control-flow marker for statement execution.
 pub(super) enum ExecResult {
@@ -108,10 +110,6 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                     AssignTarget::Index { name, index } => {
                         let raw_index = self.eval_expression(index, environment)?.as_int()?;
-                        if raw_index < 0 {
-                            return Err(InterpreterError::NegativeListIndex { index: raw_index });
-                        }
-                        let index = raw_index as usize;
                         let list = environment.load_mut(name).ok_or_else(|| {
                             InterpreterError::UndefinedVariable {
                                 name: name.to_string(),
@@ -122,14 +120,9 @@ impl<'a> InterpreterRuntime<'a> {
                                 if matches!(object.borrow().kind, ObjectKind::List(_)) =>
                             {
                                 let mut borrowed = object.borrow_mut();
-                                let ObjectKind::List(values) = &mut borrowed.kind;
-                                if index >= values.len() {
-                                    return Err(InterpreterError::ListIndexOutOfBounds {
-                                        index,
-                                        len: values.len(),
-                                    });
-                                }
-                                values[index] = value;
+                                let ObjectKind::List(list) = &mut borrowed.kind;
+                                list.__setitem__(raw_index, value)
+                                    .map_err(Self::map_list_error)?;
                             }
                             other => {
                                 return Err(InterpreterError::ExpectedListType {
@@ -210,23 +203,13 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Index { object, index } => {
                 let object = self.eval_expression(object, environment)?;
                 let raw_index = self.eval_expression(index, environment)?.as_int()?;
-                if raw_index < 0 {
-                    return Err(InterpreterError::NegativeListIndex { index: raw_index });
-                }
-                let index = raw_index as usize;
                 match object {
                     Value::Object(object)
                         if matches!(object.borrow().kind, ObjectKind::List(_)) =>
                     {
                         let borrowed = object.borrow();
-                        let ObjectKind::List(values) = &borrowed.kind;
-                        let value = values.get(index).cloned().ok_or(
-                            InterpreterError::ListIndexOutOfBounds {
-                                index,
-                                len: values.len(),
-                            },
-                        )?;
-                        Ok(value)
+                        let ObjectKind::List(list) = &borrowed.kind;
+                        list.__getitem__(raw_index).map_err(Self::map_list_error)
                     }
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
@@ -339,8 +322,8 @@ impl<'a> InterpreterRuntime<'a> {
                         if matches!(object.borrow().kind, ObjectKind::List(_)) =>
                     {
                         let borrowed = object.borrow();
-                        let ObjectKind::List(values) = &borrowed.kind;
-                        Ok(Value::Integer(values.len() as i64))
+                        let ObjectKind::List(list) = &borrowed.kind;
+                        Ok(Value::Integer(list.__len__() as i64))
                     }
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
@@ -381,8 +364,8 @@ impl<'a> InterpreterRuntime<'a> {
                                 });
                             }
                             let mut borrowed = object.borrow_mut();
-                            let ObjectKind::List(values) = &mut borrowed.kind;
-                            values.push(args.into_iter().next().expect("len checked above"));
+                            let ObjectKind::List(list) = &mut borrowed.kind;
+                            list.append(args.into_iter().next().expect("len checked above"));
                             Ok(Value::None)
                         }
                         _ => Err(InterpreterError::UnknownMethod {
@@ -399,6 +382,15 @@ impl<'a> InterpreterRuntime<'a> {
             other => Err(InterpreterError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
+        }
+    }
+
+    fn map_list_error(error: ListError) -> InterpreterError {
+        match error {
+            ListError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
+            ListError::OutOfBounds { index, len } => {
+                InterpreterError::ListIndexOutOfBounds { index, len }
+            }
         }
     }
 }
