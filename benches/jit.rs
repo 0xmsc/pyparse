@@ -5,8 +5,8 @@ use pyparse::backend::Backend;
 use pyparse::backend::jit::JIT;
 
 fn bench_jit(c: &mut Criterion) {
-    for (label, path) in common::WORKLOADS {
-        let program = common::load_program(path);
+    for (label, path) in common::workloads() {
+        let program = common::load_program(&path);
 
         c.bench_function(&format!("backend_jit_prepare_only_{label}"), |b| {
             let jit = JIT::new();

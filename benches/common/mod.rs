@@ -1,16 +1,33 @@
 #![allow(dead_code)]
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pyparse::ast::Program;
+use pyparse::fixtures::{self, CaseClass};
 use pyparse::{lexer, parser};
 
-pub const WORKLOADS: [(&str, &str); 2] = [
-    ("long", "tests/programs/long/program.py"),
-    ("gcd", "tests/programs/bench_gcd/program.py"),
-];
+pub fn workloads() -> Vec<(String, String)> {
+    let cases =
+        fixtures::load_cases(Path::new("tests/programs")).expect("load fixture cases for benches");
+    cases
+        .into_iter()
+        .filter(|case| {
+            case.spec.bench.enabled && matches!(case.spec.class, CaseClass::RuntimeSuccess)
+        })
+        .map(|case| {
+            (
+                case.name,
+                case.program_path
+                    .to_str()
+                    .expect("program path must be valid utf8")
+                    .to_string(),
+            )
+        })
+        .collect()
+}
 
 pub fn load_source(path: &str) -> String {
     fs::read_to_string(path).unwrap_or_else(|err| panic!("read {path}: {err}"))

@@ -3,61 +3,17 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
 
 use crate::backend::Backend;
 use crate::backend::interpreter::Interpreter;
 use crate::backend::jit::JIT;
 use crate::backend::transpiler::Transpiler;
 use crate::backend::vm::VM;
+use crate::fixtures::{self, Case, CaseClass};
 use crate::{lexer, parser};
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum CaseClass {
-    RuntimeSuccess,
-    FrontendError,
-    BackendRuntimeError,
-    UnsupportedFeature,
-}
-
-#[derive(Debug, Deserialize)]
-struct BenchConfig {
-    enabled: bool,
-    tags: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExpectedOutcome {
-    exit_code: i32,
-    stdout_file: Option<String>,
-    stderr_file: Option<String>,
-    stderr_contains_file: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CaseSpec {
-    class: CaseClass,
-    parity: bool,
-    bench: BenchConfig,
-    expected: ExpectedOutcome,
-}
-
-#[derive(Debug)]
-struct Case {
-    name: String,
-    dir: std::path::PathBuf,
-    program_path: std::path::PathBuf,
-    spec: CaseSpec,
-}
 
 fn normalize_output(output: &str) -> String {
     output.replace("\r\n", "\n").trim_end().to_string()
-}
-
-fn read_text_from_case_file(case: &Case, relative_path: &str) -> Result<String> {
-    fs::read_to_string(case.dir.join(relative_path))
-        .with_context(|| format!("Reading {} fixture file {}", case.name, relative_path))
 }
 
 fn python_parity_required() -> bool {
@@ -111,61 +67,11 @@ fn run_python_program(interpreter: &str, case: &Case) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn load_cases() -> Result<Vec<Case>> {
-    let programs_dir = Path::new("tests/programs");
-    let mut cases = Vec::new();
-
-    for entry in
-        fs::read_dir(programs_dir).with_context(|| format!("Reading {}", programs_dir.display()))?
-    {
-        let path = entry?.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let case_path = path.join("case.yaml");
-        if !case_path.exists() {
-            continue;
-        }
-
-        let program_path = path.join("program.py");
-        ensure!(
-            program_path.exists(),
-            "Missing program.py for case {}",
-            path.display()
-        );
-
-        let case_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(str::to_string)
-            .with_context(|| format!("Invalid case directory name {}", path.display()))?;
-        let case_raw = fs::read_to_string(&case_path)
-            .with_context(|| format!("Reading {}", case_path.display()))?;
-        let spec: CaseSpec = serde_yaml::from_str(&case_raw)
-            .with_context(|| format!("Parsing {}", case_path.display()))?;
-
-        cases.push(Case {
-            name: case_name,
-            dir: path,
-            program_path,
-            spec,
-        });
-    }
-
-    ensure!(
-        !cases.is_empty(),
-        "No test cases found in {}",
-        programs_dir.display()
-    );
-    cases.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(cases)
-}
-
 fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
+    let cases = fixtures::load_cases(Path::new("tests/programs"))?;
     let python_interpreter = detect_python_interpreter()?;
 
-    for case in load_cases()? {
+    for case in cases {
         if case.spec.parity {
             ensure!(
                 matches!(case.spec.class, CaseClass::RuntimeSuccess),
@@ -196,7 +102,7 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
                     .stdout_file
                     .as_deref()
                     .with_context(|| format!("Missing stdout_file in {}", case.name))?;
-                let expected = read_text_from_case_file(&case, stdout_file)?;
+                let expected = case.read_text(stdout_file)?;
                 let tokens = tokenized.with_context(|| format!("Tokenizing {}", case.name))?;
                 let program = parser::parse_tokens(tokens)
                     .with_context(|| format!("Parsing {}", case.name))?;
@@ -240,7 +146,7 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
                     .as_deref()
                     .or(case.spec.expected.stderr_file.as_deref())
                     .with_context(|| format!("Missing stderr expectation file in {}", case.name))?;
-                let expected_error = read_text_from_case_file(&case, expected_file)?;
+                let expected_error = case.read_text(expected_file)?;
                 let expected_error = expected_error.trim();
                 match tokenized {
                     Err(error) => {
@@ -282,7 +188,7 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
                     .as_deref()
                     .or(case.spec.expected.stderr_file.as_deref())
                     .with_context(|| format!("Missing stderr expectation file in {}", case.name))?;
-                let expected_error = read_text_from_case_file(&case, expected_file)?;
+                let expected_error = case.read_text(expected_file)?;
                 let expected_error = expected_error.trim();
                 let tokens = tokenized.with_context(|| format!("Tokenizing {}", case.name))?;
                 let program = parser::parse_tokens(tokens)

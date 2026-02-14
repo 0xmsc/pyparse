@@ -4,8 +4,8 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use pyparse::{lexer, parser};
 
 fn bench_frontend(c: &mut Criterion) {
-    for (label, path) in common::WORKLOADS {
-        let source = common::load_source(path);
+    for (label, path) in common::workloads() {
+        let source = common::load_source(&path);
         let tokens = lexer::tokenize(&source).expect("tokenize");
 
         c.bench_function(&format!("frontend_tokenize_{label}"), |b| {

@@ -5,8 +5,8 @@ use pyparse::backend::Backend;
 use pyparse::backend::{bytecode, vm};
 
 fn bench_vm(c: &mut Criterion) {
-    for (label, path) in common::WORKLOADS {
-        let program = common::load_program(path);
+    for (label, path) in common::workloads() {
+        let program = common::load_program(&path);
 
         c.bench_function(&format!("backend_vm_compile_only_{label}"), |b| {
             b.iter(|| {

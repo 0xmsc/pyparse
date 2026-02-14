@@ -7,8 +7,8 @@ use pyparse::backend::Backend;
 use pyparse::backend::transpiler::Transpiler;
 
 fn bench_transpiler(c: &mut Criterion) {
-    for (label, path) in common::WORKLOADS {
-        let program = common::load_program(path);
+    for (label, path) in common::workloads() {
+        let program = common::load_program(&path);
 
         c.bench_function(&format!("backend_transpiler_codegen_only_{label}"), |b| {
             let transpiler = Transpiler;
