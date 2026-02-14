@@ -1,208 +1,302 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::bool::BoolObject;
-use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
+use crate::runtime::bool::{self, BoolObject};
+use crate::runtime::callable::{self, BoundMethodObject, BuiltinFunctionObject, FunctionObject};
 use crate::runtime::error::RuntimeError;
-use crate::runtime::int::IntObject;
-use crate::runtime::list::ListObject;
+use crate::runtime::int::{self, IntObject};
+use crate::runtime::list::{self};
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{CallTarget, ObjectRef, new_list_object};
-use crate::runtime::string::StringObject;
-use std::any::Any;
+use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, new_list_object};
+use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 
-#[derive(Debug, Clone)]
-pub(crate) struct Value(ObjectRef);
+#[derive(Clone, Copy)]
+struct ValueBehavior {
+    type_name: &'static str,
+    to_output: fn(&Value) -> String,
+    is_truthy: fn(&Value) -> bool,
+    get_item: fn(&Value, Value) -> Result<Value, RuntimeError>,
+    set_item: fn(&Value, Value, Value) -> Result<(), RuntimeError>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Value {
+    object: ObjectRef,
+    behavior: &'static ValueBehavior,
+    call_target: Option<CallTarget>,
+}
+
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Value({})", self.type_name())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CallTargetError {
     pub(crate) type_name: String,
 }
 
+fn unsupported_operation(operation: &str, type_name: &str) -> RuntimeError {
+    RuntimeError::UnsupportedOperation {
+        operation: operation.to_string(),
+        type_name: type_name.to_string(),
+    }
+}
+
+fn always_truthy(_value: &Value) -> bool {
+    true
+}
+
+fn unsupported_get_item(value: &Value, _index: Value) -> Result<Value, RuntimeError> {
+    Err(unsupported_operation("__getitem__", value.type_name()))
+}
+
+fn unsupported_set_item(
+    value: &Value,
+    _index: Value,
+    _assigned_value: Value,
+) -> Result<(), RuntimeError> {
+    Err(unsupported_operation("__setitem__", value.type_name()))
+}
+
+fn int_to_output(value: &Value) -> String {
+    int::try_to_output(value).expect("int behavior must wrap IntObject")
+}
+
+fn int_is_truthy(value: &Value) -> bool {
+    int::try_is_truthy(value).expect("int behavior must wrap IntObject")
+}
+
+fn bool_to_output(value: &Value) -> String {
+    bool::try_to_output(value).expect("bool behavior must wrap BoolObject")
+}
+
+fn bool_is_truthy(value: &Value) -> bool {
+    bool::try_is_truthy(value).expect("bool behavior must wrap BoolObject")
+}
+
+fn string_to_output(value: &Value) -> String {
+    string::try_to_output(value).expect("string behavior must wrap StringObject")
+}
+
+fn string_is_truthy(value: &Value) -> bool {
+    string::try_is_truthy(value).expect("string behavior must wrap StringObject")
+}
+
+fn list_to_output(value: &Value) -> String {
+    list::try_to_output(value).expect("list behavior must wrap ListObject")
+}
+
+fn list_is_truthy(value: &Value) -> bool {
+    list::try_is_truthy(value).expect("list behavior must wrap ListObject")
+}
+
+fn list_get_item(value: &Value, index: Value) -> Result<Value, RuntimeError> {
+    list::try_get_item(value, index).expect("list behavior must wrap ListObject")
+}
+
+fn list_set_item(value: &Value, index: Value, assigned_value: Value) -> Result<(), RuntimeError> {
+    list::try_set_item(value, index, assigned_value).expect("list behavior must wrap ListObject")
+}
+
+fn none_to_output(_value: &Value) -> String {
+    "None".to_string()
+}
+
+fn none_is_truthy(_value: &Value) -> bool {
+    false
+}
+
+fn builtin_function_to_output(_value: &Value) -> String {
+    "<built-in function>".to_string()
+}
+
+fn function_to_output(value: &Value) -> String {
+    callable::function_to_output(value)
+}
+
+fn bound_method_to_output(_value: &Value) -> String {
+    "<bound method>".to_string()
+}
+
+const INT_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "int",
+    to_output: int_to_output,
+    is_truthy: int_is_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "bool",
+    to_output: bool_to_output,
+    is_truthy: bool_is_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const STRING_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "str",
+    to_output: string_to_output,
+    is_truthy: string_is_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const NONE_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "NoneType",
+    to_output: none_to_output,
+    is_truthy: none_is_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const LIST_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "list",
+    to_output: list_to_output,
+    is_truthy: list_is_truthy,
+    get_item: list_get_item,
+    set_item: list_set_item,
+};
+
+const BUILTIN_FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "builtin_function_or_method",
+    to_output: builtin_function_to_output,
+    is_truthy: always_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "function",
+    to_output: function_to_output,
+    is_truthy: always_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
+const BOUND_METHOD_BEHAVIOR: ValueBehavior = ValueBehavior {
+    type_name: "method",
+    to_output: bound_method_to_output,
+    is_truthy: always_truthy,
+    get_item: unsupported_get_item,
+    set_item: unsupported_set_item,
+};
+
 impl Value {
-    pub(crate) fn from_object(object: ObjectRef) -> Self {
-        Self(object)
+    fn new(
+        object: ObjectRef,
+        behavior: &'static ValueBehavior,
+        call_target: Option<CallTarget>,
+    ) -> Self {
+        Self {
+            object,
+            behavior,
+            call_target,
+        }
     }
 
     pub(crate) fn object_ref(&self) -> ObjectRef {
-        self.0.clone()
+        self.object.clone()
     }
 
     pub(crate) fn type_name(&self) -> &'static str {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if any.is::<IntObject>() {
-            "int"
-        } else if any.is::<BoolObject>() {
-            "bool"
-        } else if any.is::<StringObject>() {
-            "str"
-        } else if any.is::<NoneObject>() {
-            "NoneType"
-        } else if any.is::<ListObject>() {
-            "list"
-        } else if any.is::<BuiltinFunctionObject>() {
-            "builtin_function_or_method"
-        } else if any.is::<FunctionObject>() {
-            "function"
-        } else if any.is::<BoundMethodObject>() {
-            "method"
-        } else {
-            "object"
-        }
+        self.behavior.type_name
     }
 
     pub(crate) fn to_output(&self) -> String {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if let Some(int) = any.downcast_ref::<IntObject>() {
-            int.value().to_string()
-        } else if let Some(boolean) = any.downcast_ref::<BoolObject>() {
-            if boolean.value() {
-                "True".to_string()
-            } else {
-                "False".to_string()
-            }
-        } else if let Some(string) = any.downcast_ref::<StringObject>() {
-            string.value().to_string()
-        } else if any.is::<NoneObject>() {
-            "None".to_string()
-        } else if let Some(list) = any.downcast_ref::<ListObject>() {
-            let rendered = list
-                .iter()
-                .map(Value::to_output)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{rendered}]")
-        } else if any.is::<BuiltinFunctionObject>() {
-            "<built-in function>".to_string()
-        } else if let Some(function) = any.downcast_ref::<FunctionObject>() {
-            format!("<function {}>", function.name())
-        } else if any.is::<BoundMethodObject>() {
-            "<bound method>".to_string()
-        } else {
-            format!("<{} object>", self.type_name())
-        }
+        (self.behavior.to_output)(self)
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if let Some(int) = any.downcast_ref::<IntObject>() {
-            int.value() != 0
-        } else if let Some(boolean) = any.downcast_ref::<BoolObject>() {
-            boolean.value()
-        } else if let Some(string) = any.downcast_ref::<StringObject>() {
-            !string.value().is_empty()
-        } else if any.is::<NoneObject>() {
-            false
-        } else if let Some(list) = any.downcast_ref::<ListObject>() {
-            !list.is_empty()
-        } else {
-            true
-        }
+        (self.behavior.is_truthy)(self)
     }
 
     pub(crate) fn call_target(&self) -> Result<CallTarget, CallTargetError> {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if let Some(builtin) = any.downcast_ref::<BuiltinFunctionObject>() {
-            Ok(builtin.call_target())
-        } else if let Some(function) = any.downcast_ref::<FunctionObject>() {
-            Ok(function.call_target())
-        } else if let Some(bound_method) = any.downcast_ref::<BoundMethodObject>() {
-            Ok(bound_method.call_target())
-        } else {
-            Err(CallTargetError {
-                type_name: self.type_name().to_string(),
-            })
-        }
+        self.call_target.clone().ok_or_else(|| CallTargetError {
+            type_name: self.type_name().to_string(),
+        })
     }
 
     pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
-        self.0.borrow().get_attribute(self.object_ref(), attribute)
+        self.object
+            .borrow()
+            .get_attribute(self.object_ref(), attribute)
     }
 
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if let Some(list) = any.downcast_ref::<ListObject>() {
-            list.get_item_value(index)
-        } else {
-            Err(RuntimeError::UnsupportedOperation {
-                operation: "__getitem__".to_string(),
-                type_name: self.type_name().to_string(),
-            })
-        }
+        (self.behavior.get_item)(self, index)
     }
 
     pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), RuntimeError> {
-        let type_name = self.type_name().to_string();
-        let mut object = self.0.borrow_mut();
-        let any = &mut **object as &mut dyn Any;
-        if let Some(list) = any.downcast_mut::<ListObject>() {
-            list.set_item_value(index, value)
-        } else {
-            Err(RuntimeError::UnsupportedOperation {
-                operation: "__setitem__".to_string(),
-                type_name,
-            })
-        }
-    }
-
-    pub(crate) fn call_method(
-        &self,
-        method: &str,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        let type_name = self.type_name().to_string();
-        let mut object = self.0.borrow_mut();
-        let any = &mut **object as &mut dyn Any;
-        if let Some(list) = any.downcast_mut::<ListObject>() {
-            list.call_method(method, args)
-        } else if let Some(int) = any.downcast_mut::<IntObject>() {
-            int.call_method(method, args)
-        } else {
-            Err(RuntimeError::UnknownMethod {
-                method: method.to_string(),
-                type_name,
-            })
-        }
+        (self.behavior.set_item)(self, index, value)
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
-        Self(new_list_object(values))
+        Self::new(new_list_object(values), &LIST_BEHAVIOR, None)
     }
 
     pub(crate) fn int_object(value: i64) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(IntObject::new(value)))))
+        Self::new(
+            Rc::new(RefCell::new(Box::new(IntObject::new(value)))),
+            &INT_BEHAVIOR,
+            None,
+        )
     }
 
     pub(crate) fn bool_object(value: bool) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(BoolObject::new(value)))))
+        Self::new(
+            Rc::new(RefCell::new(Box::new(BoolObject::new(value)))),
+            &BOOL_BEHAVIOR,
+            None,
+        )
     }
 
     pub(crate) fn string_object(value: String) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(StringObject::new(value)))))
+        Self::new(
+            Rc::new(RefCell::new(Box::new(StringObject::new(value)))),
+            &STRING_BEHAVIOR,
+            None,
+        )
     }
 
     pub(crate) fn none_object() -> Self {
-        Self(Rc::new(RefCell::new(Box::new(NoneObject::new()))))
+        Self::new(
+            Rc::new(RefCell::new(Box::new(NoneObject::new()))),
+            &NONE_BEHAVIOR,
+            None,
+        )
     }
 
     pub(crate) fn builtin_function_object(builtin: BuiltinFunction) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(BuiltinFunctionObject::new(
-            builtin,
-        )))))
+        let builtin_object = BuiltinFunctionObject::new(builtin);
+        let call_target = builtin_object.call_target();
+        Self::new(
+            Rc::new(RefCell::new(Box::new(builtin_object))),
+            &BUILTIN_FUNCTION_BEHAVIOR,
+            Some(call_target),
+        )
     }
 
     pub(crate) fn function_object(name: String) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(FunctionObject::new(name)))))
+        let function_object = FunctionObject::new(name);
+        let call_target = function_object.call_target();
+        Self::new(
+            Rc::new(RefCell::new(Box::new(function_object))),
+            &FUNCTION_BEHAVIOR,
+            Some(call_target),
+        )
     }
 
-    pub(crate) fn bound_method_object(receiver: ObjectRef, method: String) -> Self {
-        Self(Rc::new(RefCell::new(Box::new(BoundMethodObject::new(
-            receiver, method,
-        )))))
+    pub(crate) fn bound_method_object(callable: BoundMethodCallable) -> Self {
+        let bound_method_object = BoundMethodObject::new(callable);
+        let call_target = bound_method_object.call_target();
+        Self::new(
+            Rc::new(RefCell::new(Box::new(bound_method_object))),
+            &BOUND_METHOD_BEHAVIOR,
+            Some(call_target),
+        )
     }
 }

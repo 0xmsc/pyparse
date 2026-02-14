@@ -1,7 +1,9 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::{CallTarget, ObjectRef, RuntimeObject};
+use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BuiltinFunctionObject {
@@ -37,22 +39,24 @@ impl FunctionObject {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct BoundMethodObject {
-    receiver: ObjectRef,
-    method: String,
+    callable: BoundMethodCallable,
 }
 
 impl BoundMethodObject {
-    pub(crate) fn new(receiver: ObjectRef, method: String) -> Self {
-        Self { receiver, method }
+    pub(crate) fn new(callable: BoundMethodCallable) -> Self {
+        Self { callable }
     }
 
     pub(crate) fn call_target(&self) -> CallTarget {
-        CallTarget::BoundMethod {
-            receiver: self.receiver.clone(),
-            method: self.method.clone(),
-        }
+        CallTarget::BoundMethod(self.callable.clone())
+    }
+}
+
+impl fmt::Debug for BoundMethodObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BoundMethodObject(<callable>)")
     }
 }
 
@@ -81,4 +85,14 @@ impl RuntimeObject for FunctionObject {
 
 impl RuntimeObject for BoundMethodObject {
     impl_callable_runtime_object!("method");
+}
+
+pub(crate) fn function_to_output(value: &Value) -> String {
+    let object_ref = value.object_ref();
+    let object = object_ref.borrow();
+    let any = &**object as &dyn Any;
+    let function = any
+        .downcast_ref::<FunctionObject>()
+        .expect("function behavior must wrap FunctionObject");
+    format!("<function {}>", function.name())
 }

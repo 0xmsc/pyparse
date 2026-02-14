@@ -7,11 +7,13 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::list::ListObject;
 use crate::runtime::value::Value;
 
-#[derive(Debug, Clone)]
+pub(crate) type BoundMethodCallable = Rc<dyn Fn(Vec<Value>) -> Result<Value, RuntimeError>>;
+
+#[derive(Clone)]
 pub(crate) enum CallTarget {
     Builtin(BuiltinFunction),
     Function(String),
-    BoundMethod { receiver: ObjectRef, method: String },
+    BoundMethod(BoundMethodCallable),
 }
 
 pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;

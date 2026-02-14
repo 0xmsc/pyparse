@@ -2,6 +2,8 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::int::downcast_i64;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ListObject {
@@ -65,7 +67,11 @@ impl RuntimeObject for ListObject {
             attribute,
             "append" | "__len__" | "__getitem__" | "__setitem__"
         ) {
-            return Ok(Value::bound_method_object(receiver, attribute.to_string()));
+            let receiver = receiver.clone();
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                call_method_on_receiver(&receiver, &method, args)
+            })));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
@@ -160,6 +166,61 @@ impl ListObject {
             }),
         }
     }
+}
+
+pub(crate) fn try_to_output(value: &Value) -> Option<String> {
+    let object_ref = value.object_ref();
+    let object = object_ref.borrow();
+    let any = &**object as &dyn Any;
+    any.downcast_ref::<ListObject>().map(|list| {
+        let rendered = list
+            .iter()
+            .map(Value::to_output)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{rendered}]")
+    })
+}
+
+pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
+    let object_ref = value.object_ref();
+    let object = object_ref.borrow();
+    let any = &**object as &dyn Any;
+    any.downcast_ref::<ListObject>()
+        .map(|list| !list.is_empty())
+}
+
+pub(crate) fn try_get_item(value: &Value, index: Value) -> Option<Result<Value, RuntimeError>> {
+    let object_ref = value.object_ref();
+    let object = object_ref.borrow();
+    let any = &**object as &dyn Any;
+    any.downcast_ref::<ListObject>()
+        .map(|list| list.get_item_value(index))
+}
+
+pub(crate) fn try_set_item(
+    value: &Value,
+    index: Value,
+    assigned_value: Value,
+) -> Option<Result<(), RuntimeError>> {
+    let object_ref = value.object_ref();
+    let mut object = object_ref.borrow_mut();
+    let any = &mut **object as &mut dyn Any;
+    any.downcast_mut::<ListObject>()
+        .map(|list| list.set_item_value(index, assigned_value))
+}
+
+fn call_method_on_receiver(
+    receiver: &ObjectRef,
+    method: &str,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let mut object = receiver.borrow_mut();
+    let any = &mut **object as &mut dyn Any;
+    let list = any
+        .downcast_mut::<ListObject>()
+        .expect("list get_attribute receiver must be ListObject");
+    list.call_method(method, args)
 }
 
 #[cfg(test)]

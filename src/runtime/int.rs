@@ -2,6 +2,7 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IntObject {
@@ -57,16 +58,39 @@ pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
     any.downcast_ref::<IntObject>().map(IntObject::value)
 }
 
+pub(crate) fn try_to_output(value: &Value) -> Option<String> {
+    downcast_i64(value).map(|integer| integer.to_string())
+}
+
+pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
+    downcast_i64(value).map(|integer| integer != 0)
+}
+
+fn call_method_on_receiver(
+    receiver: &ObjectRef,
+    method: &str,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let mut object = receiver.borrow_mut();
+    let any = &mut **object as &mut dyn Any;
+    let int = any
+        .downcast_mut::<IntObject>()
+        .expect("int get_attribute receiver must be IntObject");
+    int.call_method(method, args)
+}
+
 impl RuntimeObject for IntObject {
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        match attribute {
-            "__add__" | "__sub__" | "__lt__" => {
-                Ok(Value::bound_method_object(receiver, attribute.to_string()))
-            }
-            _ => Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: "int".to_string(),
-            }),
+        if matches!(attribute, "__add__" | "__sub__" | "__lt__") {
+            let receiver = receiver.clone();
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                call_method_on_receiver(&receiver, &method, args)
+            })));
         }
+        Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "int".to_string(),
+        })
     }
 }

@@ -395,9 +395,7 @@ impl<'a> InterpreterRuntime<'a> {
                     ExecResult::Return(value) => Ok(value),
                 }
             }
-            CallTarget::BoundMethod { receiver, method } => Value::from_object(receiver)
-                .call_method(&method, args)
-                .map_err(Self::map_runtime_error),
+            CallTarget::BoundMethod(callable) => callable(args).map_err(Self::map_runtime_error),
         }
     }
 }
