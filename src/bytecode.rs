@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     PushInt(i64),
     PushBool(bool),
@@ -242,17 +242,23 @@ mod tests {
             .get("foo")
             .expect("expected compiled function 'foo'");
         assert!(function.params.is_empty());
-        assert_eq!(function.code.len(), 3);
-        assert!(matches!(function.code[0], Instruction::PushInt(7)));
-        assert!(matches!(function.code[1], Instruction::ReturnValue));
-        assert!(matches!(function.code[2], Instruction::Return));
+        assert_eq!(
+            function.code,
+            vec![
+                Instruction::PushInt(7),
+                Instruction::ReturnValue,
+                Instruction::Return
+            ]
+        );
 
-        assert_eq!(compiled.main.len(), 3);
-        assert!(matches!(
-            compiled.main[0], Instruction::LoadName(ref name) if name == "foo"
-        ));
-        assert!(matches!(compiled.main[1], Instruction::Call { argc: 0 }));
-        assert!(matches!(compiled.main[2], Instruction::Pop));
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("foo".to_string()),
+                Instruction::Call { argc: 0 },
+                Instruction::Pop
+            ]
+        );
     }
 
     #[test]
@@ -263,12 +269,14 @@ mod tests {
 
         let compiled = compile(&program).expect("compile should succeed");
         assert!(compiled.functions.is_empty());
-        assert_eq!(compiled.main.len(), 3);
-        assert!(matches!(
-            compiled.main[0], Instruction::LoadName(ref name) if name == "print"
-        ));
-        assert!(matches!(compiled.main[1], Instruction::Call { argc: 0 }));
-        assert!(matches!(compiled.main[2], Instruction::Pop));
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("print".to_string()),
+                Instruction::Call { argc: 0 },
+                Instruction::Pop
+            ]
+        );
     }
 
     #[test]
@@ -339,12 +347,26 @@ mod tests {
             .get("sum2")
             .expect("expected compiled function 'sum2'");
         assert_eq!(function.params, vec!["a".to_string(), "b".to_string()]);
-        assert!(matches!(
-            compiled.main[0], Instruction::LoadName(ref name) if name == "sum2"
-        ));
-        assert!(matches!(compiled.main[1], Instruction::PushInt(1)));
-        assert!(matches!(compiled.main[2], Instruction::PushInt(2)));
-        assert!(matches!(compiled.main[3], Instruction::Call { argc: 2 }));
+        assert_eq!(
+            function.code,
+            vec![
+                Instruction::LoadName("a".to_string()),
+                Instruction::LoadName("b".to_string()),
+                Instruction::Add,
+                Instruction::ReturnValue,
+                Instruction::Return
+            ]
+        );
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("sum2".to_string()),
+                Instruction::PushInt(1),
+                Instruction::PushInt(2),
+                Instruction::Call { argc: 2 },
+                Instruction::Pop
+            ]
+        );
     }
 
     #[test]
@@ -360,13 +382,17 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert!(matches!(
-            compiled.main[0], Instruction::LoadName(ref name) if name == "print"
-        ));
-        assert!(matches!(compiled.main[1], Instruction::PushInt(1)));
-        assert!(matches!(compiled.main[2], Instruction::PushInt(2)));
-        assert!(matches!(compiled.main[3], Instruction::BuildList(2)));
-        assert!(matches!(compiled.main[4], Instruction::Call { argc: 1 }));
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("print".to_string()),
+                Instruction::PushInt(1),
+                Instruction::PushInt(2),
+                Instruction::BuildList(2),
+                Instruction::Call { argc: 1 },
+                Instruction::Pop
+            ]
+        );
     }
 
     #[test]
@@ -395,14 +421,23 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert!(compiled.main.iter().any(
-            |instruction| matches!(instruction, Instruction::StoreIndex(name) if name == "values")
-        ));
-        assert!(
-            compiled
-                .main
-                .iter()
-                .any(|instruction| matches!(instruction, Instruction::LoadIndex))
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::PushInt(1),
+                Instruction::PushInt(2),
+                Instruction::BuildList(2),
+                Instruction::StoreName("values".to_string()),
+                Instruction::PushInt(1),
+                Instruction::PushInt(7),
+                Instruction::StoreIndex("values".to_string()),
+                Instruction::LoadName("print".to_string()),
+                Instruction::LoadName("values".to_string()),
+                Instruction::PushInt(0),
+                Instruction::LoadIndex,
+                Instruction::Call { argc: 1 },
+                Instruction::Pop
+            ]
         );
     }
 
@@ -425,14 +460,17 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert!(compiled.main.iter().any(|instruction| matches!(
-            instruction, Instruction::LoadAttr(method) if method == "append"
-        )));
-        assert!(
-            compiled
-                .main
-                .iter()
-                .any(|instruction| matches!(instruction, Instruction::Call { argc } if *argc == 1))
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::BuildList(0),
+                Instruction::StoreName("values".to_string()),
+                Instruction::LoadName("values".to_string()),
+                Instruction::LoadAttr("append".to_string()),
+                Instruction::PushInt(3),
+                Instruction::Call { argc: 1 },
+                Instruction::Pop
+            ]
         );
     }
 }
