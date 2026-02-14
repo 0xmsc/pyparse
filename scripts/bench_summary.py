@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 
@@ -19,38 +18,40 @@ def format_ns(ns: float) -> str:
     return f"{ns:.3f}ns"
 
 
-BACKEND_RE = re.compile(
-    r"^backend_(interpreter|vm|jit|transpiler)_"
-    r"(prepare_only|run_prepared_only|prepare_plus_run|full_pipeline)_(.+)$"
-)
-PYTHON_FULL_RE = re.compile(r"^python_full_runtime_(.+)$")
-
-
-def load_rows(criterion_dir: Path) -> list[tuple[str, float]]:
-    rows: list[tuple[str, float]] = []
+def load_rows(criterion_dir: Path) -> list[tuple[str, str | None, str | None, float]]:
+    rows: list[tuple[str, str | None, str | None, float]] = []
     for estimates_path in criterion_dir.rglob("new/estimates.json"):
-        bench_dir = estimates_path.parent.parent
-        bench_id = bench_dir.name
+        benchmark_path = estimates_path.parent / "benchmark.json"
+        if not benchmark_path.exists():
+            continue
+
         data = json.loads(estimates_path.read_text())
+        benchmark = json.loads(benchmark_path.read_text())
+        group_id = benchmark.get("group_id")
+        if not isinstance(group_id, str):
+            continue
+        function_id = benchmark.get("function_id")
+        if function_id is not None and not isinstance(function_id, str):
+            continue
+        value_str = benchmark.get("value_str")
+        if value_str is not None and not isinstance(value_str, str):
+            continue
         median_ns = float(data["median"]["point_estimate"])
-        rows.append((bench_id, median_ns))
+        rows.append((group_id, function_id, value_str, median_ns))
     return rows
 
 
 def parse_rows(
-    rows: list[tuple[str, float]],
+    rows: list[tuple[str, str | None, str | None, float]],
 ) -> tuple[dict[tuple[str, str], dict[str, float]], float | None]:
     table: dict[tuple[str, str], dict[str, float]] = {}
     python_startup_ns: float | None = None
 
-    for bench_id, median_ns in rows:
-        if bench_id == "python_startup_only":
-            python_startup_ns = median_ns
-            continue
-
-        backend_match = BACKEND_RE.match(bench_id)
-        if backend_match:
-            backend, phase, workload = backend_match.groups()
+    for group_id, function_id, value_str, median_ns in rows:
+        if group_id.startswith("backend_") and function_id and value_str:
+            backend = group_id.removeprefix("backend_")
+            phase = function_id
+            workload = value_str
             key = (backend, workload)
             if key not in table:
                 table[key] = {}
@@ -63,9 +64,12 @@ def parse_rows(
                 table[key]["total"] = median_ns
             continue
 
-        python_match = PYTHON_FULL_RE.match(bench_id)
-        if python_match:
-            workload = python_match.group(1)
+        if group_id == "python" and function_id == "startup_only":
+            python_startup_ns = median_ns
+            continue
+
+        if group_id == "python" and function_id == "full_runtime" and value_str:
+            workload = value_str
             key = ("python", workload)
             if key not in table:
                 table[key] = {}
@@ -125,21 +129,26 @@ def main() -> int:
             print(f"No matching benchmark rows for workload `{args.workload}`.")
         else:
             print("No matching backend benchmark rows found.")
+            print("Run benches after migrating to Criterion BenchmarkId layout.")
         return 1
 
-    entries.sort(key=lambda item: item[2].get("total", 0.0), reverse=True)
+    entries.sort(key=lambda item: (item[0], item[1]))
 
     print("Backend/workload timing (median):")
     header = f"{'backend':<12} {'workload':<16} {'prepare':>12} {'run':>12} {'total':>12}"
     print(header)
     print("-" * len(header))
+    previous_backend: str | None = None
     for backend, workload, phases in entries:
+        if previous_backend is not None and backend != previous_backend:
+            print("----")
         print(
             f"{backend:<12} {workload:<16} "
             f"{format_cell(phases.get('prepare')):>12} "
             f"{format_cell(phases.get('run')):>12} "
             f"{format_cell(phases.get('total')):>12}"
         )
+        previous_backend = backend
 
     if python_startup_ns is not None:
         print("")

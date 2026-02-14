@@ -1,49 +1,44 @@
 mod common;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use pyparse::backend::Backend;
 use pyparse::backend::transpiler::Transpiler;
 use pyparse::{lexer, parser};
 
 fn bench_transpiler(c: &mut Criterion) {
+    let mut group = c.benchmark_group("backend_transpiler");
     for (label, path) in common::workloads() {
         let source = common::load_source(&path);
         let program = common::load_program(&path);
         let transpiler = Transpiler;
 
-        c.bench_function(&format!("backend_transpiler_prepare_only_{label}"), |b| {
+        group.bench_function(BenchmarkId::new("prepare_only", &label), |b| {
             b.iter(|| {
                 let prepared = transpiler.prepare(black_box(&program)).expect("prepare");
                 black_box(prepared);
             })
         });
 
-        c.bench_function(
-            &format!("backend_transpiler_run_prepared_only_{label}"),
-            |b| {
-                let prepared = transpiler.prepare(&program).expect("prepare");
-                b.iter(|| {
-                    let output = prepared.run().expect("run prepared");
-                    black_box(output);
-                })
-            },
-        );
+        group.bench_function(BenchmarkId::new("run_prepared_only", &label), |b| {
+            let prepared = transpiler.prepare(&program).expect("prepare");
+            b.iter(|| {
+                let output = prepared.run().expect("run prepared");
+                black_box(output);
+            })
+        });
 
-        c.bench_function(
-            &format!("backend_transpiler_prepare_plus_run_{label}"),
-            |b| {
-                b.iter(|| {
-                    let output = transpiler
-                        .prepare(black_box(&program))
-                        .expect("prepare")
-                        .run()
-                        .expect("run");
-                    black_box(output);
-                })
-            },
-        );
+        group.bench_function(BenchmarkId::new("prepare_plus_run", &label), |b| {
+            b.iter(|| {
+                let output = transpiler
+                    .prepare(black_box(&program))
+                    .expect("prepare")
+                    .run()
+                    .expect("run");
+                black_box(output);
+            })
+        });
 
-        c.bench_function(&format!("backend_transpiler_full_pipeline_{label}"), |b| {
+        group.bench_function(BenchmarkId::new("full_pipeline", &label), |b| {
             b.iter(|| {
                 let tokens = lexer::tokenize(black_box(&source)).expect("tokenize");
                 let parsed_program = parser::parse_tokens(tokens).expect("parse");
@@ -56,6 +51,7 @@ fn bench_transpiler(c: &mut Criterion) {
             })
         });
     }
+    group.finish();
 }
 
 criterion_group!(benches, bench_transpiler);
