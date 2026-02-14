@@ -34,7 +34,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a full token stream into a `Program`.
-    /// Example: `x = 1\nprint(x)\n`.
+    /// Example:
+    /// ```text
+    /// x = 1
+    /// print(x)
+    /// ```
     pub fn parse_program(mut self) -> ParseResult<Program> {
         let mut statements = Vec::new();
         while !matches!(self.current_kind(), TokenKind::EOF) {
@@ -47,7 +51,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse one statement at the current token position.
-    /// Examples: `x = 1`, `if True: ...`, `print(x)`.
+    /// Examples:
+    /// - `x = 1\n`
+    /// - `if True:\n    pass\n`
+    /// - `print(x)\n`
     fn parse_statement(&mut self) -> ParseResult<Statement> {
         match (self.current_kind(), self.peek_kind()) {
             (TokenKind::Def, _) => self.parse_function_def(),
@@ -63,7 +70,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a function definition statement.
-    /// Example: `def sum2(a, b):\n    return a + b\n`.
+    /// Example:
+    /// ```text
+    /// def sum2(a, b):
+    ///     return a + b
+    /// ```
     fn parse_function_def(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Def, "def")?;
         let name = self.expect_identifier()?;
@@ -78,7 +89,10 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse statements that begin with an identifier.
-    /// Examples: `x = 1`, `values[1] = 7`, `print(x)`.
+    /// Examples:
+    /// - `x = 1\n`
+    /// - `values[1] = 7\n`
+    /// - `print(x)\n`
     fn parse_identifier_led_statement(&mut self) -> ParseResult<Statement> {
         let checkpoint = self.pos;
         let name = self.expect_identifier()?;
@@ -107,7 +121,13 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse an `if` statement with optional `else` block.
-    /// Example: `if n < 1:\n    pass\nelse:\n    return 1\n`.
+    /// Example:
+    /// ```text
+    /// if n < 1:
+    ///     pass
+    /// else:
+    ///     return 1
+    /// ```
     fn parse_if(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::If, "if")?;
         let condition = self.parse_expression()?;
@@ -130,7 +150,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a `while` loop statement.
-    /// Example: `while n < 10:\n    n = n + 1\n`.
+    /// Example:
+    /// ```text
+    /// while n < 10:
+    ///     n = n + 1
+    /// ```
     fn parse_while(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::While, "while")?;
         let condition = self.parse_expression()?;
