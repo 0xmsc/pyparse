@@ -206,12 +206,17 @@ impl<'a> InterpreterRuntime<'a> {
                             name: name.to_string(),
                         }
                     })?;
-                    if !evaluated_args.is_empty() {
-                        return Err(InterpreterError::FunctionDoesNotAcceptArguments {
+                    if evaluated_args.len() != function.params.len() {
+                        return Err(InterpreterError::FunctionArityMismatch {
                             name: name.to_string(),
+                            expected: function.params.len(),
+                            found: evaluated_args.len(),
                         });
                     }
                     let mut local_scope = HashMap::new();
+                    for (param, value) in function.params.iter().zip(evaluated_args) {
+                        local_scope.insert(param.clone(), value);
+                    }
                     // Function calls switch from expression evaluation back to statement execution.
                     let mut local_environment = environment.child_with_locals(&mut local_scope);
                     match self.exec_block(&function.body, &mut local_environment)? {

@@ -14,6 +14,7 @@ use value::Value;
 
 #[derive(Debug, Clone)]
 struct Function {
+    params: Vec<String>,
     body: Vec<Statement>,
 }
 
@@ -74,8 +75,14 @@ impl Backend for Interpreter {
 
         for statement in &program.statements {
             match statement {
-                Statement::FunctionDef { name, body } => {
-                    functions.insert(name.clone(), Function { body: body.clone() });
+                Statement::FunctionDef { name, params, body } => {
+                    functions.insert(
+                        name.clone(),
+                        Function {
+                            params: params.clone(),
+                            body: body.clone(),
+                        },
+                    );
                 }
                 _ => main_statements.push(statement.clone()),
             }
@@ -203,6 +210,7 @@ mod tests {
             statements: vec![
                 Statement::FunctionDef {
                     name: "f".to_string(),
+                    params: vec![],
                     body: vec![
                         Statement::Return(Some(int(7))),
                         Statement::Expr(call(
@@ -226,6 +234,7 @@ mod tests {
             statements: vec![
                 Statement::FunctionDef {
                     name: "f".to_string(),
+                    params: vec![],
                     body: vec![
                         Statement::Assign {
                             name: "x".to_string(),
@@ -296,14 +305,15 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_function_called_with_arguments() {
+    fn errors_when_function_called_with_wrong_arity() {
         let program = Program {
             statements: vec![
                 Statement::FunctionDef {
                     name: "f".to_string(),
+                    params: vec!["x".to_string()],
                     body: vec![Statement::Pass],
                 },
-                Statement::Expr(call("f", vec![int(1)])),
+                Statement::Expr(call("f", vec![])),
             ],
         };
 
@@ -313,8 +323,10 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::FunctionDoesNotAcceptArguments {
-                name: "f".to_string()
+            InterpreterError::FunctionArityMismatch {
+                name: "f".to_string(),
+                expected: 1,
+                found: 0,
             }
         );
     }
@@ -325,6 +337,7 @@ mod tests {
             statements: vec![
                 Statement::FunctionDef {
                     name: "f".to_string(),
+                    params: vec![],
                     body: vec![Statement::Pass],
                 },
                 print(vec![
@@ -369,5 +382,27 @@ mod tests {
                 name: "x".to_string()
             }
         );
+    }
+
+    #[test]
+    fn binds_multiple_function_arguments() {
+        let program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "sum2".to_string(),
+                    params: vec!["a".to_string(), "b".to_string()],
+                    body: vec![Statement::Return(Some(Expression::BinaryOp {
+                        left: Box::new(identifier("a")),
+                        op: BinaryOperator::Add,
+                        right: Box::new(identifier("b")),
+                    }))],
+                },
+                print(vec![call("sum2", vec![int(4), int(5)])]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "9");
     }
 }

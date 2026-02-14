@@ -191,18 +191,18 @@ unsafe extern "C" fn runtime_is_truthy(value: *mut RuntimeValue) -> u8 {
     if value.is_truthy() { 1 } else { 0 }
 }
 
-unsafe extern "C" fn runtime_print0(ctx: *mut Runtime) -> *mut RuntimeValue {
-    let runtime = unsafe { &mut *ctx };
-    runtime.output.push(String::new());
-    runtime.none_ptr
-}
-
-unsafe extern "C" fn runtime_print1(
+unsafe extern "C" fn runtime_print(
     ctx: *mut Runtime,
-    value: *mut RuntimeValue,
+    values: *const *mut RuntimeValue,
+    count: i64,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.output.push((unsafe { &*value }).to_output());
+    let mut rendered = Vec::new();
+    for idx in 0..count {
+        let value_ptr = unsafe { *values.offset(idx as isize) };
+        rendered.push((unsafe { &*value_ptr }).to_output());
+    }
+    runtime.output.push(rendered.join(" "));
     runtime.none_ptr
 }
 
@@ -282,8 +282,7 @@ impl JIT {
         builder.symbol("runtime_sub", runtime_sub as *const u8);
         builder.symbol("runtime_less_than", runtime_less_than as *const u8);
         builder.symbol("runtime_is_truthy", runtime_is_truthy as *const u8);
-        builder.symbol("runtime_print0", runtime_print0 as *const u8);
-        builder.symbol("runtime_print1", runtime_print1 as *const u8);
+        builder.symbol("runtime_print", runtime_print as *const u8);
         builder.symbol("runtime_load_global", runtime_load_global as *const u8);
         builder.symbol("runtime_store_global", runtime_store_global as *const u8);
         builder.symbol("runtime_set_error", runtime_set_error as *const u8);
@@ -292,29 +291,44 @@ impl JIT {
         let runtime_funcs = declare_runtime_functions(&mut module, ptr_type)?;
         let mut string_data = StringData::new();
 
-        let func_sig = value_function_signature(&mut module, ptr_type);
         let mut function_ids = HashMap::new();
+        let mut function_arities = HashMap::new();
         for name in &function_names {
+            let arity = compiled
+                .functions
+                .get(*name)
+                .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?
+                .params
+                .len();
+            let func_sig = value_function_signature(&mut module, ptr_type, arity);
             let func_id =
                 module.declare_function(&function_symbol(name), Linkage::Local, &func_sig)?;
             function_ids.insert((*name).clone(), func_id);
+            function_arities.insert((*name).clone(), arity);
         }
-        let main_id = module.declare_function("run_main", Linkage::Local, &func_sig)?;
+        let main_sig = value_function_signature(&mut module, ptr_type, 0);
+        let main_id = module.declare_function("run_main", Linkage::Local, &main_sig)?;
 
         for name in &function_names {
             let function = compiled
                 .functions
                 .get(*name)
                 .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?;
+            let mut locals = collect_store_names(&function.code);
+            for param in &function.params {
+                locals.insert(param.clone());
+            }
             define_function(
                 &mut module,
                 &runtime_funcs,
                 &mut string_data,
                 &function_ids,
+                &function_arities,
                 &global_indices,
                 function_ids.get(*name).copied().unwrap(),
+                &function.params,
                 &function.code,
-                &collect_store_names(&function.code),
+                &locals,
             )?;
         }
 
@@ -323,8 +337,10 @@ impl JIT {
             &runtime_funcs,
             &mut string_data,
             &function_ids,
+            &function_arities,
             &global_indices,
             main_id,
+            &[],
             &compiled.main,
             &BTreeSet::new(),
         )?;
@@ -386,8 +402,7 @@ struct RuntimeFunctions {
     sub: FuncId,
     less_than: FuncId,
     is_truthy: FuncId,
-    print0: FuncId,
-    print1: FuncId,
+    print: FuncId,
     load_global: FuncId,
     store_global: FuncId,
     set_error: FuncId,
@@ -421,9 +436,13 @@ impl StringData {
 fn value_function_signature(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
+    arity: usize,
 ) -> Signature {
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(ptr_type));
+    for _ in 0..arity {
+        sig.params.push(AbiParam::new(ptr_type));
+    }
     sig.returns.push(AbiParam::new(ptr_type));
     sig
 }
@@ -462,14 +481,11 @@ fn declare_runtime_functions(
     truthy_sig.params.push(AbiParam::new(ptr_type));
     truthy_sig.returns.push(AbiParam::new(types::I8));
 
-    let mut print0_sig = module.make_signature();
-    print0_sig.params.push(AbiParam::new(ptr_type));
-    print0_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut print1_sig = module.make_signature();
-    print1_sig.params.push(AbiParam::new(ptr_type));
-    print1_sig.params.push(AbiParam::new(ptr_type));
-    print1_sig.returns.push(AbiParam::new(ptr_type));
+    let mut print_sig = module.make_signature();
+    print_sig.params.push(AbiParam::new(ptr_type));
+    print_sig.params.push(AbiParam::new(ptr_type));
+    print_sig.params.push(AbiParam::new(types::I64));
+    print_sig.returns.push(AbiParam::new(ptr_type));
 
     let mut load_global_sig = module.make_signature();
     load_global_sig.params.push(AbiParam::new(ptr_type));
@@ -499,8 +515,7 @@ fn declare_runtime_functions(
         sub: module.declare_function("runtime_sub", Linkage::Import, &binary_sig)?,
         less_than: module.declare_function("runtime_less_than", Linkage::Import, &binary_sig)?,
         is_truthy: module.declare_function("runtime_is_truthy", Linkage::Import, &truthy_sig)?,
-        print0: module.declare_function("runtime_print0", Linkage::Import, &print0_sig)?,
-        print1: module.declare_function("runtime_print1", Linkage::Import, &print1_sig)?,
+        print: module.declare_function("runtime_print", Linkage::Import, &print_sig)?,
         load_global: module.declare_function(
             "runtime_load_global",
             Linkage::Import,
@@ -521,8 +536,10 @@ fn define_function(
     runtime_funcs: &RuntimeFunctions,
     string_data: &mut StringData,
     function_ids: &HashMap<String, FuncId>,
+    function_arities: &HashMap<String, usize>,
     global_indices: &HashMap<String, i64>,
     func_id: FuncId,
+    param_names: &[String],
     code: &[Instruction],
     locals: &BTreeSet<String>,
 ) -> Result<()> {
@@ -537,7 +554,7 @@ fn define_function(
         .collect();
 
     let mut ctx = module.make_context();
-    ctx.func.signature = value_function_signature(module, ptr_type);
+    ctx.func.signature = value_function_signature(module, ptr_type, param_names.len());
     let make_int = module.declare_func_in_func(runtime_funcs.make_int, &mut ctx.func);
     let make_bool = module.declare_func_in_func(runtime_funcs.make_bool, &mut ctx.func);
     let make_string = module.declare_func_in_func(runtime_funcs.make_string, &mut ctx.func);
@@ -546,8 +563,7 @@ fn define_function(
     let sub = module.declare_func_in_func(runtime_funcs.sub, &mut ctx.func);
     let less_than = module.declare_func_in_func(runtime_funcs.less_than, &mut ctx.func);
     let is_truthy = module.declare_func_in_func(runtime_funcs.is_truthy, &mut ctx.func);
-    let print0 = module.declare_func_in_func(runtime_funcs.print0, &mut ctx.func);
-    let print1 = module.declare_func_in_func(runtime_funcs.print1, &mut ctx.func);
+    let print = module.declare_func_in_func(runtime_funcs.print, &mut ctx.func);
     let load_global = module.declare_func_in_func(runtime_funcs.load_global, &mut ctx.func);
     let store_global = module.declare_func_in_func(runtime_funcs.store_global, &mut ctx.func);
     let set_error = module.declare_func_in_func(runtime_funcs.set_error, &mut ctx.func);
@@ -612,6 +628,26 @@ fn define_function(
         for idx in 0..local_list.len() {
             let offset = builder.ins().iadd_imm(locals_set_base, idx as i64);
             builder.ins().store(MemFlags::new(), zero_flag, offset, 0);
+        }
+    }
+    if !param_names.is_empty() {
+        if locals_set_slot.is_none() || locals_slot.is_none() {
+            bail!("Missing locals storage for function parameters");
+        }
+        let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
+        let locals_set_base = builder
+            .ins()
+            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
+        for (index, param_name) in param_names.iter().enumerate() {
+            let local_index = local_indices.get(param_name).copied().ok_or_else(|| {
+                anyhow::anyhow!("Missing local slot for parameter '{param_name}'")
+            })?;
+            let value = builder.block_params(entry_block)[index + 1];
+            let local_addr = builder.ins().iadd_imm(locals_base, local_index * ptr_size);
+            builder.ins().store(MemFlags::new(), value, local_addr, 0);
+            let set_addr = builder.ins().iadd_imm(locals_set_base, local_index);
+            let one = builder.ins().iconst(types::I8, 1);
+            builder.ins().store(MemFlags::new(), one, set_addr, 0);
         }
     }
 
@@ -817,21 +853,56 @@ fn define_function(
                 builder.switch_to_block(ok_block);
                 push_value(&mut builder, result);
             }
-            Instruction::CallBuiltinPrint0 => {
-                let call = builder.ins().call(print0, &[ctx_param]);
+            Instruction::CallBuiltinPrint(argc) => {
+                let values_base = if *argc == 0 {
+                    builder.ins().iconst(ptr_type, 0)
+                } else {
+                    let args_slot =
+                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            (*argc as u32) * (ptr_size as u32),
+                            ptr_align_shift,
+                        ));
+                    let args_base = builder.ins().stack_addr(ptr_type, args_slot, 0);
+                    for idx in (0..*argc).rev() {
+                        let value = pop_value(&mut builder);
+                        let arg_addr = builder.ins().iadd_imm(args_base, (idx as i64) * ptr_size);
+                        builder.ins().store(MemFlags::new(), value, arg_addr, 0);
+                    }
+                    args_base
+                };
+                let argc_value = builder.ins().iconst(types::I64, *argc as i64);
+                let call = builder
+                    .ins()
+                    .call(print, &[ctx_param, values_base, argc_value]);
                 let result = builder.inst_results(call)[0];
                 push_value(&mut builder, result);
             }
-            Instruction::CallBuiltinPrint1 => {
-                let value = pop_value(&mut builder);
-                let call = builder.ins().call(print1, &[ctx_param, value]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
-            Instruction::CallFunction(name) => {
+            Instruction::CallFunction { name, argc } => {
                 if let Some(&callee_id) = function_ids.get(name) {
+                    let expected = function_arities.get(name).copied().unwrap_or(0);
+                    if expected != *argc {
+                        emit_error(
+                            module,
+                            string_data,
+                            &mut builder,
+                            set_error,
+                            ctx_param,
+                            &format!("Function '{name}' expected {expected} arguments, got {argc}"),
+                        )?;
+                        builder.ins().jump(error_block, &[]);
+                        continue;
+                    }
                     let callee_ref = module.declare_func_in_func(callee_id, builder.func);
-                    let call = builder.ins().call(callee_ref, &[ctx_param]);
+                    let mut call_args = Vec::with_capacity(*argc + 1);
+                    call_args.push(ctx_param);
+                    let mut popped = Vec::with_capacity(*argc);
+                    for _ in 0..*argc {
+                        popped.push(pop_value(&mut builder));
+                    }
+                    popped.reverse();
+                    call_args.extend(popped);
+                    let call = builder.ins().call(callee_ref, &call_args);
                     let result = builder.inst_results(call)[0];
                     let ok_block = check_null(&mut builder, result);
                     builder.switch_to_block(ok_block);
@@ -1005,12 +1076,11 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::PushBool(_)
         | Instruction::PushString(_)
         | Instruction::PushNone
-        | Instruction::LoadName(_)
-        | Instruction::CallBuiltinPrint0
-        | Instruction::CallFunction(_) => 1,
+        | Instruction::LoadName(_) => 1,
+        Instruction::CallBuiltinPrint(argc) => 1 - (*argc as i32),
+        Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,
-        Instruction::CallBuiltinPrint1 => 0,
         Instruction::Jump(_) | Instruction::Return => 0,
         Instruction::ReturnValue => -1,
     }

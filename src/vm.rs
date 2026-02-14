@@ -151,24 +151,42 @@ impl VM {
                     let result = left.as_int()? < right.as_int()?;
                     stack.push(Value::Boolean(result));
                 }
-                Instruction::CallBuiltinPrint0 => {
-                    self.output.push(String::new());
+                Instruction::CallBuiltinPrint(argc) => {
+                    let mut values = Vec::with_capacity(argc);
+                    for _ in 0..argc {
+                        let value = stack
+                            .pop()
+                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        values.push(value.to_output());
+                    }
+                    values.reverse();
+                    self.output.push(values.join(" "));
                     stack.push(Value::None);
                 }
-                Instruction::CallBuiltinPrint1 => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    self.output.push(value.to_output());
-                    stack.push(Value::None);
-                }
-                Instruction::CallFunction(name) => {
+                Instruction::CallFunction { name, argc } => {
                     let function = program
                         .functions
                         .get(&name)
                         .ok_or_else(|| anyhow::anyhow!("Undefined function '{name}'"))?
                         .clone();
+                    if argc != function.params.len() {
+                        bail!(
+                            "Function '{name}' expected {} arguments, got {argc}",
+                            function.params.len()
+                        );
+                    }
+                    let mut args = Vec::with_capacity(argc);
+                    for _ in 0..argc {
+                        let value = stack
+                            .pop()
+                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        args.push(value);
+                    }
+                    args.reverse();
                     let mut locals_map = HashMap::new();
+                    for (param, value) in function.params.iter().zip(args) {
+                        locals_map.insert(param.to_string(), value);
+                    }
                     let return_value = self.execute_code(
                         &function.code,
                         &mut Vec::new(),

@@ -204,6 +204,7 @@ impl<'a> Lexer<'a> {
             '-' => TokenKind::Minus,
             '<' => TokenKind::Less,
             ':' => TokenKind::Colon,
+            ',' => TokenKind::Comma,
             '(' => TokenKind::LParen,
             ')' => TokenKind::RParen,
             _ => return None,
@@ -528,5 +529,20 @@ mod tests {
         "})
         .expect_err("expected unterminated string failure");
         assert_eq!(err, LexError::UnterminatedString { position: 4 });
+    }
+
+    #[test]
+    fn tokenizes_commas_in_parameter_and_argument_lists() {
+        let input = indoc! {"
+            def add(a, b):
+                return a + b
+            add(1, 2)
+        "};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        assert!(actual_kinds.contains(&TokenKind::Comma));
     }
 }

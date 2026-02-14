@@ -26,6 +26,7 @@ pub enum BinaryOperator {
 pub enum Statement {
     FunctionDef {
         name: String,
+        params: Vec<String>,
         body: Vec<Statement>,
     },
     Assign {

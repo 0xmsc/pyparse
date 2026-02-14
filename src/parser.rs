@@ -72,12 +72,13 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::Def, "def")?;
         let name = self.expect_identifier()?;
         self.expect_token(TokenKind::LParen, "(")?;
+        let params = self.parse_identifier_list(TokenKind::RParen)?;
         self.expect_token(TokenKind::RParen, ")")?;
         self.expect_token(TokenKind::Colon, ":")?;
         self.expect_token(TokenKind::Newline, "newline")?;
         let body = self.parse_indented_block()?;
 
-        Ok(Statement::FunctionDef { name, body })
+        Ok(Statement::FunctionDef { name, params, body })
     }
 
     fn parse_assignment(&mut self) -> ParseResult<Statement> {
@@ -187,10 +188,7 @@ impl<'a> Parser<'a> {
         // Example: `foo()()`.
         let mut expr = self.parse_primary()?;
         while self.try_consume(TokenKind::LParen) {
-            let mut args = Vec::new();
-            if !matches!(self.current_kind(), TokenKind::RParen) {
-                args.push(self.parse_expression()?);
-            }
+            let args = self.parse_expression_list(TokenKind::RParen)?;
             self.expect_token(TokenKind::RParen, ")")?;
             expr = Expression::Call {
                 callee: Box::new(expr),
@@ -198,6 +196,40 @@ impl<'a> Parser<'a> {
             };
         }
         Ok(expr)
+    }
+
+    fn parse_identifier_list(
+        &mut self,
+        terminator: TokenKind<'static>,
+    ) -> ParseResult<Vec<String>> {
+        let mut identifiers = Vec::new();
+        if self.current_kind() == terminator {
+            return Ok(identifiers);
+        }
+        loop {
+            identifiers.push(self.expect_identifier()?);
+            if !self.try_consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(identifiers)
+    }
+
+    fn parse_expression_list(
+        &mut self,
+        terminator: TokenKind<'static>,
+    ) -> ParseResult<Vec<Expression>> {
+        let mut expressions = Vec::new();
+        if self.current_kind() == terminator {
+            return Ok(expressions);
+        }
+        loop {
+            expressions.push(self.parse_expression()?);
+            if !self.try_consume(TokenKind::Comma) {
+                break;
+            }
+        }
+        Ok(expressions)
     }
 
     fn parse_primary(&mut self) -> ParseResult<Expression> {
@@ -353,6 +385,7 @@ mod tests {
             statements: vec![
                 Statement::FunctionDef {
                     name: "fn".to_string(),
+                    params: vec![],
                     body: vec![
                         Statement::Assign {
                             name: "n".to_string(),
@@ -472,6 +505,58 @@ mod tests {
             program,
             Program {
                 statements: vec![Statement::Pass],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_function_and_call_with_multiple_arguments() {
+        let tokens = vec![
+            tok(TokenKind::Def),
+            tok(TokenKind::Identifier("sum2")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("a")),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Identifier("b")),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Return),
+            tok(TokenKind::Identifier("a")),
+            tok(TokenKind::Plus),
+            tok(TokenKind::Identifier("b")),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Identifier("sum2")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Integer(2)),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![
+                    Statement::FunctionDef {
+                        name: "sum2".to_string(),
+                        params: vec!["a".to_string(), "b".to_string()],
+                        body: vec![Statement::Return(Some(Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier("a".to_string())),
+                            op: BinaryOperator::Add,
+                            right: Box::new(Expression::Identifier("b".to_string())),
+                        }))],
+                    },
+                    Statement::Expr(Expression::Call {
+                        callee: Box::new(Expression::Identifier("sum2".to_string())),
+                        args: vec![Expression::Integer(1), Expression::Integer(2)],
+                    }),
+                ],
             }
         );
     }

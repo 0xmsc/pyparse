@@ -28,6 +28,7 @@ pub enum TokenKind<'a> {
 
     // Delimiters
     Colon,  // :
+    Comma,  // ,
     LParen, // (
     RParen, // )
 

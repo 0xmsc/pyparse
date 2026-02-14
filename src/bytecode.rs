@@ -14,9 +14,8 @@ pub enum Instruction {
     Add,
     Sub,
     LessThan,
-    CallBuiltinPrint0,
-    CallBuiltinPrint1,
-    CallFunction(String),
+    CallBuiltinPrint(usize),
+    CallFunction { name: String, argc: usize },
     JumpIfFalse(usize),
     Jump(usize),
     Pop,
@@ -26,6 +25,7 @@ pub enum Instruction {
 
 #[derive(Debug, Clone)]
 pub struct CompiledFunction {
+    pub params: Vec<String>,
     pub code: Vec<Instruction>,
 }
 
@@ -41,11 +41,11 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
 
     for statement in &program.statements {
         match statement {
-            Statement::FunctionDef { name, body } => {
+            Statement::FunctionDef { name, params, body } => {
                 if functions.contains_key(name) {
                     bail!("Duplicate function definition '{name}'");
                 }
-                let compiled = compile_function(body)?;
+                let compiled = compile_function(params, body)?;
                 functions.insert(name.to_string(), compiled);
             }
             _ => compile_statement(statement, &mut main, false)?,
@@ -55,14 +55,17 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
     Ok(CompiledProgram { functions, main })
 }
 
-fn compile_function(body: &[Statement]) -> Result<CompiledFunction> {
+fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
     let mut code = Vec::new();
     for statement in body {
         compile_statement(statement, &mut code, true)?;
     }
     code.push(Instruction::Return);
 
-    Ok(CompiledFunction { code })
+    Ok(CompiledFunction {
+        params: params.to_vec(),
+        code,
+    })
 }
 
 fn compile_statement(
@@ -163,28 +166,24 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
                 BinaryOperator::LessThan => code.push(Instruction::LessThan),
             }
         }
-        Expression::Call { callee, args } => {
-            if args.len() > 1 {
-                bail!("VM only supports zero or one call argument");
-            }
-            match callee.as_ref() {
-                Expression::Identifier(name) if name == "print" => {
-                    if let Some(arg) = args.first() {
-                        compile_expression(arg, code)?;
-                        code.push(Instruction::CallBuiltinPrint1);
-                    } else {
-                        code.push(Instruction::CallBuiltinPrint0);
-                    }
+        Expression::Call { callee, args } => match callee.as_ref() {
+            Expression::Identifier(name) if name == "print" => {
+                for arg in args {
+                    compile_expression(arg, code)?;
                 }
-                Expression::Identifier(name) => {
-                    if !args.is_empty() {
-                        bail!("Function '{name}' does not accept arguments");
-                    }
-                    code.push(Instruction::CallFunction(name.to_string()));
-                }
-                _ => bail!("Can only call identifiers in the VM"),
+                code.push(Instruction::CallBuiltinPrint(args.len()));
             }
-        }
+            Expression::Identifier(name) => {
+                for arg in args {
+                    compile_expression(arg, code)?;
+                }
+                code.push(Instruction::CallFunction {
+                    name: name.to_string(),
+                    argc: args.len(),
+                });
+            }
+            _ => bail!("Can only call identifiers in the VM"),
+        },
     }
     Ok(())
 }
@@ -197,6 +196,7 @@ mod tests {
     fn function(name: &str, body: Vec<Statement>) -> Statement {
         Statement::FunctionDef {
             name: name.to_string(),
+            params: vec![],
             body,
         }
     }
@@ -224,6 +224,7 @@ mod tests {
             .functions
             .get("foo")
             .expect("expected compiled function 'foo'");
+        assert!(function.params.is_empty());
         assert_eq!(function.code.len(), 3);
         assert!(matches!(function.code[0], Instruction::PushInt(7)));
         assert!(matches!(function.code[1], Instruction::ReturnValue));
@@ -232,7 +233,7 @@ mod tests {
         assert_eq!(compiled.main.len(), 2);
         assert!(matches!(
             compiled.main[0],
-            Instruction::CallFunction(ref name) if name == "foo"
+            Instruction::CallFunction { ref name, argc } if name == "foo" && argc == 0
         ));
         assert!(matches!(compiled.main[1], Instruction::Pop));
     }
@@ -246,7 +247,7 @@ mod tests {
         let compiled = compile(&program).expect("compile should succeed");
         assert!(compiled.functions.is_empty());
         assert_eq!(compiled.main.len(), 2);
-        assert!(matches!(compiled.main[0], Instruction::CallBuiltinPrint0));
+        assert!(matches!(compiled.main[0], Instruction::CallBuiltinPrint(0)));
         assert!(matches!(compiled.main[1], Instruction::Pop));
     }
 
@@ -290,5 +291,39 @@ mod tests {
             error.to_string(),
             "Nested function definitions are not supported in the VM".to_string()
         );
+    }
+
+    #[test]
+    fn compiles_multi_argument_function_call() {
+        let program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "sum2".to_string(),
+                    params: vec!["a".to_string(), "b".to_string()],
+                    body: vec![Statement::Return(Some(Expression::BinaryOp {
+                        left: Box::new(Expression::Identifier("a".to_string())),
+                        op: crate::ast::BinaryOperator::Add,
+                        right: Box::new(Expression::Identifier("b".to_string())),
+                    }))],
+                },
+                Statement::Expr(call(
+                    "sum2",
+                    vec![Expression::Integer(1), Expression::Integer(2)],
+                )),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let function = compiled
+            .functions
+            .get("sum2")
+            .expect("expected compiled function 'sum2'");
+        assert_eq!(function.params, vec!["a".to_string(), "b".to_string()]);
+        assert!(matches!(compiled.main[0], Instruction::PushInt(1)));
+        assert!(matches!(compiled.main[1], Instruction::PushInt(2)));
+        assert!(matches!(
+            compiled.main[2],
+            Instruction::CallFunction { ref name, argc } if name == "sum2" && argc == 2
+        ));
     }
 }

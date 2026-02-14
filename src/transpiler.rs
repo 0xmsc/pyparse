@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use self::c_runtime::{
     C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_source,
     escape_c_string, run_compiled_binary,
 };
+use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 
 mod c_runtime;
@@ -19,7 +19,10 @@ pub struct PreparedTranspiler {
     binary_path: PathBuf,
 }
 
-type ProgramFunctionsAndMain<'a> = (Vec<(&'a str, &'a Vec<Statement>)>, Vec<&'a Statement>);
+type ProgramFunctionsAndMain<'a> = (
+    Vec<(&'a str, &'a Vec<String>, &'a Vec<Statement>)>,
+    Vec<&'a Statement>,
+);
 
 impl Transpiler {
     pub fn transpile(&self, program: &Program) -> Result<String> {
@@ -34,8 +37,11 @@ impl Transpiler {
         output.push_str(C_TRUTHY);
         output.push_str(C_PRINT);
 
-        for (name, _) in &functions {
-            output.push_str(&format!("static Value {name}(void);\n"));
+        for (name, params, _) in &functions {
+            output.push_str(&format!(
+                "static Value {name}({});\n",
+                self.emit_function_params(params)
+            ));
         }
         if !functions.is_empty() {
             output.push('\n');
@@ -50,9 +56,12 @@ impl Transpiler {
             output.push('\n');
         }
 
-        for (name, body) in &functions {
-            let locals = self.collect_locals(body)?;
-            output.push_str(&format!("static Value {name}(void) {{\n"));
+        for (name, params, body) in &functions {
+            let locals = self.collect_locals(body, params)?;
+            output.push_str(&format!(
+                "static Value {name}({}) {{\n",
+                self.emit_function_params(params)
+            ));
             for local in &locals {
                 output.push_str(&format!(
                     "    Value {local} = {{ VAL_NONE, 0, 0, NULL }};\n"
@@ -83,8 +92,8 @@ impl Transpiler {
         let mut main_statements = Vec::new();
         for statement in &program.statements {
             match statement {
-                Statement::FunctionDef { name, body } => {
-                    functions.push((name.as_str(), body));
+                Statement::FunctionDef { name, params, body } => {
+                    functions.push((name.as_str(), params, body));
                 }
                 _ => main_statements.push(statement),
             }
@@ -100,10 +109,17 @@ impl Transpiler {
         globals
     }
 
-    fn collect_locals(&self, statements: &[Statement]) -> Result<HashSet<String>> {
+    fn collect_locals(
+        &self,
+        statements: &[Statement],
+        params: &[String],
+    ) -> Result<HashSet<String>> {
         let mut locals = HashSet::new();
         for statement in statements {
             self.collect_assignments_in_function(statement, &mut locals)?;
+        }
+        for param in params {
+            locals.remove(param);
         }
         Ok(locals)
     }
@@ -256,29 +272,47 @@ impl Transpiler {
                     BinaryOperator::LessThan => Ok(format!("binary_lt({left}, {right})")),
                 }
             }
-            Expression::Call { callee, args } => {
-                if args.len() > 1 {
-                    bail!("Transpiler only supports zero or one call argument");
-                }
-                match callee.as_ref() {
-                    Expression::Identifier(name) if name == "print" => {
-                        if let Some(arg) = args.first() {
-                            let arg = self.emit_expression(arg)?;
-                            Ok(format!("builtin_print1({arg})"))
-                        } else {
-                            Ok("builtin_print0()".to_string())
+            Expression::Call { callee, args } => match callee.as_ref() {
+                Expression::Identifier(name) if name == "print" => {
+                    if args.is_empty() {
+                        Ok("builtin_print(NULL, 0)".to_string())
+                    } else {
+                        let mut rendered_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            rendered_args.push(self.emit_expression(arg)?);
                         }
+                        Ok(format!(
+                            "builtin_print((Value[]){{{}}}, {})",
+                            rendered_args.join(", "),
+                            args.len()
+                        ))
                     }
-                    Expression::Identifier(name) => {
-                        if !args.is_empty() {
-                            bail!("Function '{name}' does not accept arguments");
-                        }
+                }
+                Expression::Identifier(name) => {
+                    if args.is_empty() {
                         Ok(format!("{name}()"))
+                    } else {
+                        let mut rendered_args = Vec::with_capacity(args.len());
+                        for arg in args {
+                            rendered_args.push(self.emit_expression(arg)?);
+                        }
+                        Ok(format!("{name}({})", rendered_args.join(", ")))
                     }
-                    _ => bail!("Can only call identifiers in the transpiler"),
                 }
-            }
+                _ => bail!("Can only call identifiers in the transpiler"),
+            },
         }
+    }
+
+    fn emit_function_params(&self, params: &[String]) -> String {
+        if params.is_empty() {
+            return "void".to_string();
+        }
+        params
+            .iter()
+            .map(|param| format!("Value {param}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     fn push_line(&self, output: &mut String, indent: usize, line: &str) {

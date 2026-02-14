@@ -11,8 +11,12 @@ pub enum InterpreterError {
     UndefinedVariable { name: String },
     #[error("Undefined function '{name}'")]
     UndefinedFunction { name: String },
-    #[error("Function '{name}' does not accept arguments")]
-    FunctionDoesNotAcceptArguments { name: String },
+    #[error("Function '{name}' expected {expected} arguments, got {found}")]
+    FunctionArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
     #[error("Can only call identifiers")]
     NonIdentifierCallTarget,
     #[error("Return outside of function")]

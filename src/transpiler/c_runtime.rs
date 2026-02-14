@@ -79,13 +79,13 @@ pub const C_PRINT: &str = r#"static void print_value(Value value) {
     }
 }
 
-static Value builtin_print0(void) {
-    printf("\n");
-    return make_none();
-}
-
-static Value builtin_print1(Value value) {
-    print_value(value);
+static Value builtin_print(Value *values, int64_t count) {
+    for (int64_t i = 0; i < count; ++i) {
+        if (i > 0) {
+            printf(" ");
+        }
+        print_value(values[i]);
+    }
     printf("\n");
     return make_none();
 }
