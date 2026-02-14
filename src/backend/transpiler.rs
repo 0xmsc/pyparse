@@ -1,17 +1,20 @@
 use anyhow::{Result, bail};
 use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use crate::backend::c_runtime::{
-    C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_and_run,
-    escape_c_string,
+    C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_source,
+    escape_c_string, run_compiled_binary,
 };
 use crate::backend::{Backend, PreparedBackend};
 
 pub struct Transpiler;
 
 pub struct PreparedTranspiler {
-    source: String,
+    source_path: PathBuf,
+    binary_path: PathBuf,
 }
 
 type ProgramFunctionsAndMain<'a> = (Vec<(&'a str, &'a Vec<Statement>)>, Vec<&'a Statement>);
@@ -292,17 +295,24 @@ impl Backend for Transpiler {
 
     fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
         let source = self.transpile(program)?;
-        Ok(Box::new(PreparedTranspiler { source }))
+        let (source_path, binary_path) =
+            compile_source(&source, "", "C compilation failed in prepare phase")?;
+        Ok(Box::new(PreparedTranspiler {
+            source_path,
+            binary_path,
+        }))
     }
 }
 
 impl PreparedBackend for PreparedTranspiler {
     fn run(&self) -> Result<String> {
-        compile_and_run(
-            &self.source,
-            "",
-            "C compilation failed",
-            "Transpiled program failed",
-        )
+        run_compiled_binary(&self.binary_path, "Transpiled program failed")
+    }
+}
+
+impl Drop for PreparedTranspiler {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.source_path);
+        let _ = fs::remove_file(&self.binary_path);
     }
 }

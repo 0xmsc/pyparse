@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -123,14 +124,12 @@ pub fn write_temp_file(contents: &str, suffix: &str) -> Result<(PathBuf, PathBuf
     Ok((source_path, binary_path))
 }
 
-pub fn compile_and_run(
+pub fn compile_source(
     source: &str,
     suffix: &str,
     compile_error: &str,
-    run_error: &str,
-) -> Result<String> {
+) -> Result<(PathBuf, PathBuf)> {
     let (source_path, binary_path) = write_temp_file(source, suffix)?;
-
     let compile = Command::new("cc")
         .arg(&source_path)
         .arg("-std=c99")
@@ -143,8 +142,11 @@ pub fn compile_and_run(
         let stderr = String::from_utf8_lossy(&compile.stderr);
         bail!("{compile_error}: {stderr}");
     }
+    Ok((source_path, binary_path))
+}
 
-    let output = Command::new(&binary_path)
+pub fn run_compiled_binary(binary_path: &Path, run_error: &str) -> Result<String> {
+    let output = Command::new(binary_path)
         .output()
         .context("Running compiled program")?;
     if !output.status.success() {
