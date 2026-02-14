@@ -2,8 +2,11 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::BoolObject;
 use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
 use crate::runtime::int::IntObject;
+use crate::runtime::list::ListError;
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{BinaryOpError, ObjectRef, new_list_object};
+use crate::runtime::object::{
+    AttributeError, BinaryOpError, CallTarget, MethodError, ObjectRef, new_list_object,
+};
 use crate::runtime::string::StringObject;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -11,7 +14,16 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 pub(crate) struct Value(ObjectRef);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CallTargetError {
+    pub(crate) type_name: String,
+}
+
 impl Value {
+    pub(crate) fn from_object(object: ObjectRef) -> Self {
+        Self(object)
+    }
+
     pub(crate) fn object_ref(&self) -> ObjectRef {
         self.0.clone()
     }
@@ -22,6 +34,38 @@ impl Value {
 
     pub(crate) fn is_truthy(&self) -> bool {
         self.0.borrow().is_truthy()
+    }
+
+    pub(crate) fn call_target(&self) -> Result<CallTarget, CallTargetError> {
+        self.0
+            .borrow()
+            .call_target()
+            .ok_or_else(|| CallTargetError {
+                type_name: self.0.borrow().type_name().to_string(),
+            })
+    }
+
+    pub(crate) fn get_attribute_method_name(
+        &self,
+        attribute: &str,
+    ) -> Result<String, AttributeError> {
+        self.0.borrow().get_attribute_method_name(attribute)
+    }
+
+    pub(crate) fn len(&self) -> Result<usize, ListError> {
+        self.0.borrow().len()
+    }
+
+    pub(crate) fn get_item(&self, index: Value) -> Result<Value, ListError> {
+        self.0.borrow().get_item(index)
+    }
+
+    pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), ListError> {
+        self.0.borrow_mut().set_item(index, value)
+    }
+
+    pub(crate) fn call_method(&self, method: &str, args: Vec<Value>) -> Result<(), MethodError> {
+        self.0.borrow_mut().call_method(method, args)
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {

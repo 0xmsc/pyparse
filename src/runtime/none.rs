@@ -36,16 +36,22 @@ impl RuntimeObject for NoneObject {
         })
     }
 
-    fn len(&self) -> usize {
-        0
+    fn len(&self) -> Result<usize, ListError> {
+        Err(ListError::ExpectedListType {
+            got: "NoneType".to_string(),
+        })
     }
 
-    fn get_item(&self, _index: i64) -> Result<Value, ListError> {
-        Err(ListError::OutOfBounds { index: 0, len: 0 })
+    fn get_item(&self, _index: Value) -> Result<Value, ListError> {
+        Err(ListError::ExpectedListType {
+            got: "NoneType".to_string(),
+        })
     }
 
-    fn set_item(&mut self, _index: i64, _value: Value) -> Result<(), ListError> {
-        Err(ListError::OutOfBounds { index: 0, len: 0 })
+    fn set_item(&mut self, _index: Value, _value: Value) -> Result<(), ListError> {
+        Err(ListError::ExpectedListType {
+            got: "NoneType".to_string(),
+        })
     }
 
     fn call_method(&mut self, method: &str, _args: Vec<Value>) -> Result<(), MethodError> {

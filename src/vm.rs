@@ -6,10 +6,9 @@ use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
-use crate::runtime::int::downcast_i64;
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, CallTarget, MethodError};
-use crate::runtime::value::Value;
+use crate::runtime::value::{CallTargetError, Value};
 
 type VmResult<T> = std::result::Result<T, VmError>;
 
@@ -199,9 +198,7 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let object_ref = object.object_ref();
-                    let method = object_ref
-                        .borrow()
+                    let method = object
                         .get_attribute_method_name(&attribute)
                         .map_err(|error| match error {
                             AttributeError::UnknownAttribute {
@@ -213,7 +210,7 @@ impl VmRuntime<'_> {
                             },
                         })?;
                     self.stack
-                        .push(Value::bound_method_object(object_ref.clone(), method));
+                        .push(Value::bound_method_object(object.object_ref(), method));
                 }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
@@ -248,21 +245,16 @@ impl VmRuntime<'_> {
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
                     let object_value = self.pop_stack()?;
-                    let index_raw =
-                        downcast_i64(&index_value).ok_or_else(|| VmError::ExpectedIntegerType {
-                            got: format!("{index_value:?}"),
-                        })?;
-                    let object_ref = object_value.object_ref();
-                    if object_ref.borrow().type_name() != "list" {
-                        return Err(VmError::ExpectedListType {
-                            got: format!("{object_value:?}"),
-                        });
-                    }
                     let value =
-                        object_ref
-                            .borrow()
-                            .get_item(index_raw)
+                        object_value
+                            .get_item(index_value)
                             .map_err(|error| match error {
+                                ListError::ExpectedIntegerType { got } => {
+                                    VmError::ExpectedIntegerType { got }
+                                }
+                                ListError::ExpectedListType { got } => {
+                                    VmError::ExpectedListType { got }
+                                }
                                 ListError::NegativeIndex { index } => {
                                     VmError::NegativeListIndex { index }
                                 }
@@ -275,29 +267,25 @@ impl VmRuntime<'_> {
                 Instruction::StoreIndex(name) => {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
-                    let index_raw =
-                        downcast_i64(&index_value).ok_or_else(|| VmError::ExpectedIntegerType {
-                            got: format!("{index_value:?}"),
-                        })?;
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
-                    let target_ref = target.object_ref();
-                    if target_ref.borrow().type_name() != "list" {
-                        return Err(VmError::ExpectedListType {
-                            got: format!("{target:?}"),
-                        });
-                    }
-                    target_ref.borrow_mut().set_item(index_raw, value).map_err(
-                        |error| match error {
+                    target
+                        .set_item(index_value, value)
+                        .map_err(|error| match error {
+                            ListError::ExpectedIntegerType { got } => {
+                                VmError::ExpectedIntegerType { got }
+                            }
+                            ListError::ExpectedListType { got } => {
+                                VmError::ExpectedListType { got }
+                            }
                             ListError::NegativeIndex { index } => {
                                 VmError::NegativeListIndex { index }
                             }
                             ListError::OutOfBounds { index, len } => {
                                 VmError::ListIndexOutOfBounds { index, len }
                             }
-                        },
-                    )?;
+                        })?;
                 }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
@@ -349,14 +337,9 @@ impl VmRuntime<'_> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> VmResult<Value> {
-        let callee_ref = callee.object_ref();
-        let call_target =
-            callee_ref
-                .borrow()
-                .call_target()
-                .ok_or_else(|| VmError::ObjectNotCallable {
-                    type_name: callee_ref.borrow().type_name().to_string(),
-                })?;
+        let call_target = callee
+            .call_target()
+            .map_err(|CallTargetError { type_name }| VmError::ObjectNotCallable { type_name })?;
         match call_target {
             CallTarget::Builtin(BuiltinFunction::Print) => {
                 let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
@@ -371,13 +354,15 @@ impl VmRuntime<'_> {
                         found: args.len(),
                     });
                 }
-                let arg_ref = args[0].object_ref();
-                if arg_ref.borrow().type_name() != "list" {
-                    return Err(VmError::ExpectedListType {
-                        got: format!("{:?}", &args[0]),
-                    });
-                }
-                Ok(Value::int_object(arg_ref.borrow().len() as i64))
+                let len = args[0].len().map_err(|error| match error {
+                    ListError::ExpectedIntegerType { got } => VmError::ExpectedIntegerType { got },
+                    ListError::ExpectedListType { got } => VmError::ExpectedListType { got },
+                    ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+                    ListError::OutOfBounds { index, len } => {
+                        VmError::ListIndexOutOfBounds { index, len }
+                    }
+                })?;
+                Ok(Value::int_object(len as i64))
             }
             CallTarget::Function(name) => {
                 let function = self
@@ -404,8 +389,7 @@ impl VmRuntime<'_> {
                 result
             }
             CallTarget::BoundMethod { receiver, method } => {
-                receiver
-                    .borrow_mut()
+                Value::from_object(receiver)
                     .call_method(&method, args)
                     .map_err(|error| match error {
                         MethodError::ArityMismatch {

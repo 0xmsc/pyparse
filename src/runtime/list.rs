@@ -1,9 +1,12 @@
+use crate::runtime::int::downcast_i64;
 use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListError {
+    ExpectedListType { got: String },
+    ExpectedIntegerType { got: String },
     NegativeIndex { index: i64 },
     OutOfBounds { index: usize, len: usize },
 }
@@ -94,15 +97,25 @@ impl RuntimeObject for ListObject<Value> {
         })
     }
 
-    fn len(&self) -> usize {
-        self.__len__()
+    fn len(&self) -> Result<usize, ListError> {
+        Ok(self.__len__())
     }
 
-    fn get_item(&self, index: i64) -> Result<Value, ListError> {
+    fn get_item(&self, index: Value) -> Result<Value, ListError> {
+        let Some(index) = downcast_i64(&index) else {
+            return Err(ListError::ExpectedIntegerType {
+                got: format!("{index:?}"),
+            });
+        };
         self.__getitem__(index)
     }
 
-    fn set_item(&mut self, index: i64, value: Value) -> Result<(), ListError> {
+    fn set_item(&mut self, index: Value, value: Value) -> Result<(), ListError> {
+        let Some(index) = downcast_i64(&index) else {
+            return Err(ListError::ExpectedIntegerType {
+                got: format!("{index:?}"),
+            });
+        };
         self.__setitem__(index, value)
     }
 

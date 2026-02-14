@@ -45,9 +45,9 @@ pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn is_truthy(&self) -> bool;
     fn to_output(&self, render_value: &dyn Fn(&Value) -> String) -> String;
     fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError>;
-    fn len(&self) -> usize;
-    fn get_item(&self, index: i64) -> Result<Value, ListError>;
-    fn set_item(&mut self, index: i64, value: Value) -> Result<(), ListError>;
+    fn len(&self) -> Result<usize, ListError>;
+    fn get_item(&self, index: Value) -> Result<Value, ListError>;
+    fn set_item(&mut self, index: Value, value: Value) -> Result<(), ListError>;
     fn call_method(&mut self, method: &str, args: Vec<Value>) -> Result<(), MethodError>;
     fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
     fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError>;

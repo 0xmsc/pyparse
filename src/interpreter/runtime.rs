@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
-use crate::runtime::int::downcast_i64;
 use crate::runtime::list::ListError;
 use crate::runtime::object::{AttributeError, CallTarget, MethodError};
 
@@ -111,26 +110,19 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                     AssignTarget::Index { name, index } => {
                         let index_value = self.eval_expression(index, environment)?;
-                        let raw_index = downcast_i64(&index_value).ok_or_else(|| {
-                            InterpreterError::ExpectedIntegerType {
-                                got: format!("{index_value:?}"),
-                            }
-                        })?;
                         let list = environment.load_mut(name).ok_or_else(|| {
                             InterpreterError::UndefinedVariable {
                                 name: name.to_string(),
                             }
                         })?;
-                        let list_ref = list.object_ref();
-                        if list_ref.borrow().type_name() != "list" {
-                            return Err(InterpreterError::ExpectedListType {
-                                got: format!("{list:?}"),
-                            });
-                        }
-                        list_ref
-                            .borrow_mut()
-                            .set_item(raw_index, value)
+                        list.set_item(index_value, value)
                             .map_err(|error| match error {
+                                ListError::ExpectedIntegerType { got } => {
+                                    InterpreterError::ExpectedIntegerType { got }
+                                }
+                                ListError::ExpectedListType { got } => {
+                                    InterpreterError::ExpectedListType { got }
+                                }
                                 ListError::NegativeIndex { index } => {
                                     InterpreterError::NegativeListIndex { index }
                                 }
@@ -211,21 +203,15 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Index { object, index } => {
                 let object_value = self.eval_expression(object, environment)?;
                 let index_value = self.eval_expression(index, environment)?;
-                let raw_index = downcast_i64(&index_value).ok_or_else(|| {
-                    InterpreterError::ExpectedIntegerType {
-                        got: format!("{index_value:?}"),
-                    }
-                })?;
-                let object_ref = object_value.object_ref();
-                if object_ref.borrow().type_name() != "list" {
-                    return Err(InterpreterError::ExpectedListType {
-                        got: format!("{object_value:?}"),
-                    });
-                }
-                object_ref
-                    .borrow()
-                    .get_item(raw_index)
+                object_value
+                    .get_item(index_value)
                     .map_err(|error| match error {
+                        ListError::ExpectedIntegerType { got } => {
+                            InterpreterError::ExpectedIntegerType { got }
+                        }
+                        ListError::ExpectedListType { got } => {
+                            InterpreterError::ExpectedListType { got }
+                        }
                         ListError::NegativeIndex { index } => {
                             InterpreterError::NegativeListIndex { index }
                         }
@@ -319,12 +305,11 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        let callee_ref = callee.object_ref();
-        let call_target = callee_ref.borrow().call_target().ok_or_else(|| {
-            InterpreterError::ObjectNotCallable {
-                type_name: callee_ref.borrow().type_name().to_string(),
-            }
-        })?;
+        let call_target = callee.call_target().map_err(
+            |crate::runtime::value::CallTargetError { type_name }| {
+                InterpreterError::ObjectNotCallable { type_name }
+            },
+        )?;
         match call_target {
             CallTarget::Builtin(BuiltinFunction::Print) => {
                 let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
@@ -339,13 +324,21 @@ impl<'a> InterpreterRuntime<'a> {
                         found: args.len(),
                     });
                 }
-                let arg_ref = args[0].object_ref();
-                if arg_ref.borrow().type_name() != "list" {
-                    return Err(InterpreterError::ExpectedListType {
-                        got: format!("{:?}", &args[0]),
-                    });
-                }
-                Ok(Value::int_object(arg_ref.borrow().len() as i64))
+                let len = args[0].len().map_err(|error| match error {
+                    ListError::ExpectedIntegerType { got } => {
+                        InterpreterError::ExpectedIntegerType { got }
+                    }
+                    ListError::ExpectedListType { got } => {
+                        InterpreterError::ExpectedListType { got }
+                    }
+                    ListError::NegativeIndex { index } => {
+                        InterpreterError::NegativeListIndex { index }
+                    }
+                    ListError::OutOfBounds { index, len } => {
+                        InterpreterError::ListIndexOutOfBounds { index, len }
+                    }
+                })?;
+                Ok(Value::int_object(len as i64))
             }
             CallTarget::Function(name) => {
                 let function =
@@ -370,8 +363,7 @@ impl<'a> InterpreterRuntime<'a> {
                 }
             }
             CallTarget::BoundMethod { receiver, method } => {
-                receiver
-                    .borrow_mut()
+                Value::from_object(receiver)
                     .call_method(&method, args)
                     .map_err(|error| match error {
                         MethodError::ArityMismatch {
