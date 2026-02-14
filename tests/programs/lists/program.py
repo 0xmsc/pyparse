@@ -3,6 +3,7 @@ print(values)
 print(values[0])
 values[1] = 7
 print(values)
+print(len(values))
 if values:
     print(1)
 

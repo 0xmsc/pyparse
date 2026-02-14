@@ -895,6 +895,9 @@ fn define_function(
                             push_value(&mut builder, result);
                             handled_builtin = true;
                         }
+                        BuiltinFunction::Len => {
+                            bail!("len is not supported in the JIT backend");
+                        }
                     }
                 }
                 if handled_builtin {

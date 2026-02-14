@@ -454,4 +454,21 @@ mod tests {
         let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "1\n[1, 7]");
     }
+
+    #[test]
+    fn supports_len_builtin_for_lists() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::List(vec![int(1), int(2)]),
+                },
+                print(vec![call("len", vec![identifier("values")])]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "2");
+    }
 }

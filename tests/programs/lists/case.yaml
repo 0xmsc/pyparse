@@ -1,5 +1,5 @@
 class: runtime_success
-parity: false
+parity: true
 unsupported_backends: [jit, transpiler]
 bench:
   enabled: false

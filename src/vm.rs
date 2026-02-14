@@ -255,6 +255,17 @@ impl VM {
                                 stack.push(Value::None);
                                 continue;
                             }
+                            BuiltinFunction::Len => {
+                                if argc != 1 {
+                                    bail!("Function 'len' expected 1 arguments, got {argc}");
+                                }
+                                let value = stack
+                                    .pop()
+                                    .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                                let values = value.as_list()?;
+                                stack.push(Value::Integer(values.len() as i64));
+                                continue;
+                            }
                         }
                     }
                     let function = program

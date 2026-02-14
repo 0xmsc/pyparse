@@ -312,6 +312,9 @@ impl Transpiler {
                                     args.len()
                                 ));
                             }
+                            BuiltinFunction::Len => {
+                                bail!("len is not supported in the transpiler");
+                            }
                         }
                     }
                     if args.is_empty() {

@@ -256,24 +256,44 @@ impl<'a> InterpreterRuntime<'a> {
         args: &[Expression],
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        // Calls evaluate argument expressions first in the caller environment.
-        let mut evaluated_args = Vec::with_capacity(args.len());
-        for arg in args {
-            let value = self.eval_expression(arg, environment)?;
-            evaluated_args.push(value);
-        }
-
         match callee {
             Expression::Identifier(name) => {
                 if let Some(builtin) = BuiltinFunction::from_name(name) {
                     match builtin {
                         BuiltinFunction::Print => {
+                            // Calls evaluate argument expressions first in the caller environment.
+                            let mut evaluated_args = Vec::with_capacity(args.len());
+                            for arg in args {
+                                evaluated_args.push(self.eval_expression(arg, environment)?);
+                            }
                             let outputs: Vec<String> =
                                 evaluated_args.iter().map(Value::to_output).collect();
                             self.output.push(outputs.join(" "));
                             return Ok(Value::None);
                         }
+                        BuiltinFunction::Len => {
+                            if args.len() != 1 {
+                                return Err(InterpreterError::FunctionArityMismatch {
+                                    name: "len".to_string(),
+                                    expected: 1,
+                                    found: args.len(),
+                                });
+                            }
+                            let value = self.eval_expression(&args[0], environment)?;
+                            return match value {
+                                Value::List(values) => Ok(Value::Integer(values.len() as i64)),
+                                other => Err(InterpreterError::ExpectedListType {
+                                    got: format!("{other:?}"),
+                                }),
+                            };
+                        }
                     }
+                }
+                // Calls evaluate argument expressions first in the caller environment.
+                let mut evaluated_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    let value = self.eval_expression(arg, environment)?;
+                    evaluated_args.push(value);
                 }
                 let function = self.functions.get(name).cloned().ok_or_else(|| {
                     InterpreterError::UndefinedFunction {
