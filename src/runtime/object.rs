@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::runtime::list::{ListError, ListObject};
+use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AttributeError {
@@ -24,7 +25,7 @@ pub(crate) enum MethodError {
     },
 }
 
-pub(crate) trait RuntimeObject<Value>: std::fmt::Debug {
+pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn type_name(&self) -> &'static str;
     fn is_truthy(&self) -> bool;
     fn to_output(&self, render_value: &dyn Fn(&Value) -> String) -> String;
@@ -35,15 +36,15 @@ pub(crate) trait RuntimeObject<Value>: std::fmt::Debug {
     fn call_method(&mut self, method: &str, args: Vec<Value>) -> Result<(), MethodError>;
 }
 
-pub(crate) type ObjectRef<Value> = Rc<RefCell<Box<dyn RuntimeObject<Value>>>>;
+pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ObjectWrapper<Value> {
-    object: ObjectRef<Value>,
+pub(crate) struct ObjectWrapper {
+    object: ObjectRef,
 }
 
-impl<Value> ObjectWrapper<Value> {
-    pub(crate) fn new(object: ObjectRef<Value>) -> Self {
+impl ObjectWrapper {
+    pub(crate) fn new(object: ObjectRef) -> Self {
         Self { object }
     }
 
@@ -67,14 +68,12 @@ impl<Value> ObjectWrapper<Value> {
     }
 }
 
-impl<Value: Clone> ObjectWrapper<Value> {
+impl ObjectWrapper {
     pub(crate) fn get_item(&self, index: i64) -> Result<Value, ListError> {
         self.object.borrow().get_item(index)
     }
 }
 
-pub(crate) fn new_list_object<Value: Clone + std::fmt::Debug + 'static>(
-    values: Vec<Value>,
-) -> ObjectRef<Value> {
+pub(crate) fn new_list_object(values: Vec<Value>) -> ObjectRef {
     Rc::new(RefCell::new(Box::new(ListObject::new(values))))
 }

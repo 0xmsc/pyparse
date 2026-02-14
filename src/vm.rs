@@ -7,9 +7,8 @@ use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::list::ListError;
-use crate::runtime::object::{
-    AttributeError, MethodError, ObjectRef, ObjectWrapper, new_list_object,
-};
+use crate::runtime::object::{AttributeError, MethodError, ObjectWrapper};
+use crate::runtime::value::Value;
 
 type VmResult<T> = std::result::Result<T, VmError>;
 
@@ -52,85 +51,6 @@ enum VmError {
     ObjectNotCallable { type_name: String },
     #[error("Invalid jump target")]
     InvalidJumpTarget,
-}
-
-#[derive(Debug, Clone)]
-enum Value {
-    Integer(i64),
-    Boolean(bool),
-    String(String),
-    Object(ObjectRef<Value>),
-    BuiltinFunction(BuiltinFunction),
-    Function(String),
-    BoundMethod {
-        receiver: Box<Value>,
-        method: String,
-    },
-    None,
-}
-
-impl Value {
-    fn as_int(&self) -> VmResult<i64> {
-        match self {
-            Value::Integer(value) => Ok(*value),
-            Value::Boolean(_)
-            | Value::String(_)
-            | Value::Object(_)
-            | Value::BuiltinFunction(_)
-            | Value::Function(_)
-            | Value::BoundMethod { .. }
-            | Value::None => Err(VmError::ExpectedIntegerType {
-                got: format!("{self:?}"),
-            }),
-        }
-    }
-
-    fn to_output(&self) -> String {
-        match self {
-            Value::Integer(value) => value.to_string(),
-            Value::Boolean(value) => {
-                if *value {
-                    "True".to_string()
-                } else {
-                    "False".to_string()
-                }
-            }
-            Value::String(value) => value.clone(),
-            Value::Object(object) => object.borrow().to_output(&Value::to_output),
-            Value::BuiltinFunction(_) => "<built-in function>".to_string(),
-            Value::Function(name) => format!("<function {name}>"),
-            Value::BoundMethod { .. } => "<bound method>".to_string(),
-            Value::None => "None".to_string(),
-        }
-    }
-
-    fn is_truthy(&self) -> bool {
-        match self {
-            Value::Integer(value) => *value != 0,
-            Value::Boolean(value) => *value,
-            Value::String(value) => !value.is_empty(),
-            Value::Object(object) => object.borrow().is_truthy(),
-            Value::BuiltinFunction(_) | Value::Function(_) | Value::BoundMethod { .. } => true,
-            Value::None => false,
-        }
-    }
-
-    fn type_name(&self) -> &'static str {
-        match self {
-            Value::Integer(_) => "int",
-            Value::Boolean(_) => "bool",
-            Value::String(_) => "str",
-            Value::Object(object) => object.borrow().type_name(),
-            Value::BuiltinFunction(_) => "builtin_function_or_method",
-            Value::Function(_) => "function",
-            Value::BoundMethod { .. } => "method",
-            Value::None => "NoneType",
-        }
-    }
-
-    fn list_object(values: Vec<Value>) -> Self {
-        Value::Object(new_list_object(values))
-    }
 }
 
 pub struct VM {
@@ -304,25 +224,42 @@ impl VmRuntime<'_> {
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.as_int()? + right.as_int()?;
+                    let result = left
+                        .as_int()
+                        .map_err(|got| VmError::ExpectedIntegerType { got })?
+                        + right
+                            .as_int()
+                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
                     self.stack.push(Value::Integer(result));
                 }
                 Instruction::Sub => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.as_int()? - right.as_int()?;
+                    let result = left
+                        .as_int()
+                        .map_err(|got| VmError::ExpectedIntegerType { got })?
+                        - right
+                            .as_int()
+                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
                     self.stack.push(Value::Integer(result));
                 }
                 Instruction::LessThan => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.as_int()? < right.as_int()?;
+                    let result = left
+                        .as_int()
+                        .map_err(|got| VmError::ExpectedIntegerType { got })?
+                        < right
+                            .as_int()
+                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
                     self.stack.push(Value::Boolean(result));
                 }
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
                     let object = self.pop_stack()?;
-                    let index_raw = index_value.as_int()?;
+                    let index_raw = index_value
+                        .as_int()
+                        .map_err(|got| VmError::ExpectedIntegerType { got })?;
                     let object = match object {
                         Value::Object(object) => object,
                         other => {
@@ -346,7 +283,9 @@ impl VmRuntime<'_> {
                 Instruction::StoreIndex(name) => {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
-                    let index_raw = index_value.as_int()?;
+                    let index_raw = index_value
+                        .as_int()
+                        .map_err(|got| VmError::ExpectedIntegerType { got })?;
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;

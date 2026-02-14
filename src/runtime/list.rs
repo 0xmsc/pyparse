@@ -1,4 +1,5 @@
 use crate::runtime::object::{AttributeError, MethodError, RuntimeObject};
+use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListError {
@@ -7,12 +8,12 @@ pub(crate) enum ListError {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ListObject<Value> {
-    values: Vec<Value>,
+pub(crate) struct ListObject<Element> {
+    values: Vec<Element>,
 }
 
-impl<Value> ListObject<Value> {
-    pub(crate) fn new(values: Vec<Value>) -> Self {
+impl<Element> ListObject<Element> {
+    pub(crate) fn new(values: Vec<Element>) -> Self {
         Self { values }
     }
 
@@ -24,7 +25,7 @@ impl<Value> ListObject<Value> {
         self.values.is_empty()
     }
 
-    pub(crate) fn __setitem__(&mut self, index: i64, value: Value) -> Result<(), ListError> {
+    pub(crate) fn __setitem__(&mut self, index: i64, value: Element) -> Result<(), ListError> {
         if index < 0 {
             return Err(ListError::NegativeIndex { index });
         }
@@ -39,17 +40,17 @@ impl<Value> ListObject<Value> {
         Ok(())
     }
 
-    pub(crate) fn append(&mut self, value: Value) {
+    pub(crate) fn append(&mut self, value: Element) {
         self.values.push(value);
     }
 
-    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Value> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Element> {
         self.values.iter()
     }
 }
 
-impl<Value: Clone> ListObject<Value> {
-    pub(crate) fn __getitem__(&self, index: i64) -> Result<Value, ListError> {
+impl<Element: Clone> ListObject<Element> {
+    pub(crate) fn __getitem__(&self, index: i64) -> Result<Element, ListError> {
         if index < 0 {
             return Err(ListError::NegativeIndex { index });
         }
@@ -64,7 +65,7 @@ impl<Value: Clone> ListObject<Value> {
     }
 }
 
-impl<Value: Clone + std::fmt::Debug> RuntimeObject<Value> for ListObject<Value> {
+impl RuntimeObject for ListObject<Value> {
     fn type_name(&self) -> &'static str {
         "list"
     }

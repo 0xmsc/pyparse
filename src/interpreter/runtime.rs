@@ -109,7 +109,10 @@ impl<'a> InterpreterRuntime<'a> {
                         environment.store(name.to_string(), value);
                     }
                     AssignTarget::Index { name, index } => {
-                        let raw_index = self.eval_expression(index, environment)?.as_int()?;
+                        let raw_index = self
+                            .eval_expression(index, environment)?
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
                         let list = environment.load_mut(name).ok_or_else(|| {
                             InterpreterError::UndefinedVariable {
                                 name: name.to_string(),
@@ -206,7 +209,10 @@ impl<'a> InterpreterRuntime<'a> {
             }
             Expression::Index { object, index } => {
                 let object = self.eval_expression(object, environment)?;
-                let raw_index = self.eval_expression(index, environment)?.as_int()?;
+                let raw_index = self
+                    .eval_expression(index, environment)?
+                    .as_int()
+                    .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
                 match object {
                     Value::Object(object) => ObjectWrapper::new(object.clone())
                         .get_item(raw_index)
@@ -228,18 +234,30 @@ impl<'a> InterpreterRuntime<'a> {
                 let right = self.eval_expression(right, environment)?;
                 match op {
                     BinaryOperator::Add => {
-                        let left = left.as_int()?;
-                        let right = right.as_int()?;
+                        let left = left
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
+                        let right = right
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
                         Ok(Value::Integer(left + right))
                     }
                     BinaryOperator::Sub => {
-                        let left = left.as_int()?;
-                        let right = right.as_int()?;
+                        let left = left
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
+                        let right = right
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
                         Ok(Value::Integer(left - right))
                     }
                     BinaryOperator::LessThan => {
-                        let left = left.as_int()?;
-                        let right = right.as_int()?;
+                        let left = left
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
+                        let right = right
+                            .as_int()
+                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
                         Ok(Value::Boolean(left < right))
                     }
                 }
