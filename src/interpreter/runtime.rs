@@ -109,10 +109,12 @@ impl<'a> InterpreterRuntime<'a> {
                         environment.store(name.to_string(), value);
                     }
                     AssignTarget::Index { name, index } => {
-                        let raw_index = self
-                            .eval_expression(index, environment)?
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
+                        let index_value = self.eval_expression(index, environment)?;
+                        let raw_index = index_value.as_i64().ok_or_else(|| {
+                            InterpreterError::ExpectedIntegerType {
+                                got: format!("{index_value:?}"),
+                            }
+                        })?;
                         let list = environment.load_mut(name).ok_or_else(|| {
                             InterpreterError::UndefinedVariable {
                                 name: name.to_string(),
@@ -189,7 +191,7 @@ impl<'a> InterpreterRuntime<'a> {
     ) -> std::result::Result<Value, InterpreterError> {
         // Expression evaluation can recurse into calls, which may execute statements.
         match expr {
-            Expression::Integer(value) => Ok(Value::Integer(*value)),
+            Expression::Integer(value) => Ok(Value::int_object(*value)),
             Expression::Boolean(value) => Ok(Value::Boolean(*value)),
             Expression::String(value) => Ok(Value::String(value.clone())),
             Expression::List(elements) => {
@@ -209,10 +211,13 @@ impl<'a> InterpreterRuntime<'a> {
             }
             Expression::Index { object, index } => {
                 let object = self.eval_expression(object, environment)?;
-                let raw_index = self
-                    .eval_expression(index, environment)?
-                    .as_int()
-                    .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
+                let index_value = self.eval_expression(index, environment)?;
+                let raw_index =
+                    index_value
+                        .as_i64()
+                        .ok_or_else(|| InterpreterError::ExpectedIntegerType {
+                            got: format!("{index_value:?}"),
+                        })?;
                 match object {
                     Value::Object(object) => ObjectWrapper::new(object.clone())
                         .get_item(raw_index)
@@ -233,33 +238,21 @@ impl<'a> InterpreterRuntime<'a> {
                 let left = self.eval_expression(left, environment)?;
                 let right = self.eval_expression(right, environment)?;
                 match op {
-                    BinaryOperator::Add => {
-                        let left = left
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        let right = right
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        Ok(Value::Integer(left + right))
-                    }
-                    BinaryOperator::Sub => {
-                        let left = left
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        let right = right
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        Ok(Value::Integer(left - right))
-                    }
-                    BinaryOperator::LessThan => {
-                        let left = left
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        let right = right
-                            .as_int()
-                            .map_err(|got| InterpreterError::ExpectedIntegerType { got })?;
-                        Ok(Value::Boolean(left < right))
-                    }
+                    BinaryOperator::Add => left.add(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            InterpreterError::ExpectedIntegerType { got }
+                        }
+                    }),
+                    BinaryOperator::Sub => left.sub(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            InterpreterError::ExpectedIntegerType { got }
+                        }
+                    }),
+                    BinaryOperator::LessThan => left.lt(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            InterpreterError::ExpectedIntegerType { got }
+                        }
+                    }),
                 }
             }
             Expression::Attribute { object, name } => {
@@ -349,7 +342,7 @@ impl<'a> InterpreterRuntime<'a> {
                     });
                 }
                 match &args[0] {
-                    Value::Object(object) => Ok(Value::Integer(
+                    Value::Object(object) => Ok(Value::int_object(
                         ObjectWrapper::new(object.clone()).len() as i64,
                     )),
                     other => Err(InterpreterError::ExpectedListType {

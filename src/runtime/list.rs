@@ -1,4 +1,4 @@
-use crate::runtime::object::{AttributeError, MethodError, RuntimeObject};
+use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
 use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +119,24 @@ impl RuntimeObject for ListObject<Value> {
                 type_name: "list".to_string(),
             }),
         }
+    }
+
+    fn add(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
+        Err(BinaryOpError::ExpectedIntegerType {
+            got: "list".to_string(),
+        })
+    }
+
+    fn sub(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
+        Err(BinaryOpError::ExpectedIntegerType {
+            got: "list".to_string(),
+        })
+    }
+
+    fn lt(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
+        Err(BinaryOpError::ExpectedIntegerType {
+            got: "list".to_string(),
+        })
     }
 }
 

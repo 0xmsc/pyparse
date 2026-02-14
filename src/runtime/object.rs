@@ -25,6 +25,11 @@ pub(crate) enum MethodError {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BinaryOpError {
+    ExpectedIntegerType { got: String },
+}
+
 pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn type_name(&self) -> &'static str;
     fn is_truthy(&self) -> bool;
@@ -34,6 +39,12 @@ pub(crate) trait RuntimeObject: std::fmt::Debug {
     fn get_item(&self, index: i64) -> Result<Value, ListError>;
     fn set_item(&mut self, index: i64, value: Value) -> Result<(), ListError>;
     fn call_method(&mut self, method: &str, args: Vec<Value>) -> Result<(), MethodError>;
+    fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
+    fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
+    fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError>;
+    fn as_i64(&self) -> Option<i64> {
+        None
+    }
 }
 
 pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
@@ -65,6 +76,22 @@ impl ObjectWrapper {
 
     pub(crate) fn call_method(&self, method: &str, args: Vec<Value>) -> Result<(), MethodError> {
         self.object.borrow_mut().call_method(method, args)
+    }
+
+    pub(crate) fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        self.object.borrow().add(rhs)
+    }
+
+    pub(crate) fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        self.object.borrow().sub(rhs)
+    }
+
+    pub(crate) fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        self.object.borrow().lt(rhs)
+    }
+
+    pub(crate) fn as_i64(&self) -> Option<i64> {
+        self.object.borrow().as_i64()
     }
 }
 

@@ -167,7 +167,7 @@ impl VmRuntime<'_> {
             };
             ip += 1;
             match instruction {
-                Instruction::PushInt(value) => self.stack.push(Value::Integer(value)),
+                Instruction::PushInt(value) => self.stack.push(Value::int_object(value)),
                 Instruction::PushBool(value) => self.stack.push(Value::Boolean(value)),
                 Instruction::PushString(value) => self.stack.push(Value::String(value)),
                 Instruction::BuildList(count) => {
@@ -224,42 +224,42 @@ impl VmRuntime<'_> {
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left
-                        .as_int()
-                        .map_err(|got| VmError::ExpectedIntegerType { got })?
-                        + right
-                            .as_int()
-                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
-                    self.stack.push(Value::Integer(result));
+                    let result = left.add(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            VmError::ExpectedIntegerType { got }
+                        }
+                    })?;
+                    self.stack.push(result);
                 }
                 Instruction::Sub => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left
-                        .as_int()
-                        .map_err(|got| VmError::ExpectedIntegerType { got })?
-                        - right
-                            .as_int()
-                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
-                    self.stack.push(Value::Integer(result));
+                    let result = left.sub(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            VmError::ExpectedIntegerType { got }
+                        }
+                    })?;
+                    self.stack.push(result);
                 }
                 Instruction::LessThan => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left
-                        .as_int()
-                        .map_err(|got| VmError::ExpectedIntegerType { got })?
-                        < right
-                            .as_int()
-                            .map_err(|got| VmError::ExpectedIntegerType { got })?;
-                    self.stack.push(Value::Boolean(result));
+                    let result = left.lt(&right).map_err(|error| match error {
+                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
+                            VmError::ExpectedIntegerType { got }
+                        }
+                    })?;
+                    self.stack.push(result);
                 }
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
                     let object = self.pop_stack()?;
-                    let index_raw = index_value
-                        .as_int()
-                        .map_err(|got| VmError::ExpectedIntegerType { got })?;
+                    let index_raw =
+                        index_value
+                            .as_i64()
+                            .ok_or_else(|| VmError::ExpectedIntegerType {
+                                got: format!("{index_value:?}"),
+                            })?;
                     let object = match object {
                         Value::Object(object) => object,
                         other => {
@@ -283,9 +283,12 @@ impl VmRuntime<'_> {
                 Instruction::StoreIndex(name) => {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
-                    let index_raw = index_value
-                        .as_int()
-                        .map_err(|got| VmError::ExpectedIntegerType { got })?;
+                    let index_raw =
+                        index_value
+                            .as_i64()
+                            .ok_or_else(|| VmError::ExpectedIntegerType {
+                                got: format!("{index_value:?}"),
+                            })?;
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
@@ -373,7 +376,7 @@ impl VmRuntime<'_> {
                     });
                 }
                 match &args[0] {
-                    Value::Object(object) => Ok(Value::Integer(
+                    Value::Object(object) => Ok(Value::int_object(
                         ObjectWrapper::new(object.clone()).len() as i64,
                     )),
                     other => Err(VmError::ExpectedListType {

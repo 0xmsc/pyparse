@@ -1,9 +1,11 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::object::{ObjectRef, new_list_object};
+use crate::runtime::int::IntObject;
+use crate::runtime::object::{BinaryOpError, ObjectRef, ObjectWrapper, new_list_object};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Value {
-    Integer(i64),
     Boolean(bool),
     String(String),
     Object(ObjectRef),
@@ -17,22 +19,8 @@ pub(crate) enum Value {
 }
 
 impl Value {
-    pub(crate) fn as_int(&self) -> Result<i64, String> {
-        match self {
-            Value::Integer(value) => Ok(*value),
-            Value::Boolean(_)
-            | Value::String(_)
-            | Value::Object(_)
-            | Value::BuiltinFunction(_)
-            | Value::Function(_)
-            | Value::BoundMethod { .. }
-            | Value::None => Err(format!("{self:?}")),
-        }
-    }
-
     pub(crate) fn to_output(&self) -> String {
         match self {
-            Value::Integer(value) => value.to_string(),
             Value::Boolean(value) => {
                 if *value {
                     "True".to_string()
@@ -51,7 +39,6 @@ impl Value {
 
     pub(crate) fn is_truthy(&self) -> bool {
         match self {
-            Value::Integer(value) => *value != 0,
             Value::Boolean(value) => *value,
             Value::String(value) => !value.is_empty(),
             Value::Object(object) => object.borrow().is_truthy(),
@@ -62,7 +49,6 @@ impl Value {
 
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
-            Value::Integer(_) => "int",
             Value::Boolean(_) => "bool",
             Value::String(_) => "str",
             Value::Object(object) => object.borrow().type_name(),
@@ -75,5 +61,43 @@ impl Value {
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
         Value::Object(new_list_object(values))
+    }
+
+    pub(crate) fn int_object(value: i64) -> Self {
+        Value::Object(Rc::new(RefCell::new(Box::new(IntObject::new(value)))))
+    }
+
+    pub(crate) fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        match self {
+            Value::Object(object) => ObjectWrapper::new(object.clone()).add(rhs),
+            _ => Err(BinaryOpError::ExpectedIntegerType {
+                got: format!("{self:?}"),
+            }),
+        }
+    }
+
+    pub(crate) fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        match self {
+            Value::Object(object) => ObjectWrapper::new(object.clone()).sub(rhs),
+            _ => Err(BinaryOpError::ExpectedIntegerType {
+                got: format!("{self:?}"),
+            }),
+        }
+    }
+
+    pub(crate) fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
+        match self {
+            Value::Object(object) => ObjectWrapper::new(object.clone()).lt(rhs),
+            _ => Err(BinaryOpError::ExpectedIntegerType {
+                got: format!("{self:?}"),
+            }),
+        }
+    }
+
+    pub(crate) fn as_i64(&self) -> Option<i64> {
+        match self {
+            Value::Object(object) => ObjectWrapper::new(object.clone()).as_i64(),
+            _ => None,
+        }
     }
 }
