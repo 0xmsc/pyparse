@@ -14,6 +14,8 @@ pub struct PreparedTranspiler {
     source: String,
 }
 
+type ProgramFunctionsAndMain<'a> = (Vec<(&'a str, &'a Vec<Statement>)>, Vec<&'a Statement>);
+
 impl Transpiler {
     pub fn transpile(&self, program: &Program) -> Result<String> {
         let mut output = String::new();
@@ -71,10 +73,7 @@ impl Transpiler {
         Ok(output)
     }
 
-    fn split_program<'a>(
-        &self,
-        program: &'a Program,
-    ) -> Result<(Vec<(&'a str, &'a Vec<Statement>)>, Vec<&'a Statement>)> {
+    fn split_program<'a>(&self, program: &'a Program) -> Result<ProgramFunctionsAndMain<'a>> {
         let mut functions = Vec::new();
         let mut main_statements = Vec::new();
         for statement in &program.statements {
@@ -258,7 +257,7 @@ impl Transpiler {
                 }
                 match callee.as_ref() {
                     Expression::Identifier(name) if name == "print" => {
-                        if let Some(arg) = args.get(0) {
+                        if let Some(arg) = args.first() {
                             let arg = self.emit_expression(arg)?;
                             Ok(format!("builtin_print1({arg})"))
                         } else {

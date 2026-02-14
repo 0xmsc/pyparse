@@ -53,6 +53,7 @@ struct Runtime {
     globals_set: Vec<bool>,
     global_names: Vec<String>,
     output: Vec<String>,
+    #[allow(clippy::vec_box)]
     values: Vec<Box<RuntimeValue>>,
     none_ptr: *mut RuntimeValue,
     error: Option<String>,
@@ -514,6 +515,7 @@ fn declare_runtime_functions(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn define_function(
     module: &mut JITModule,
     runtime_funcs: &RuntimeFunctions,

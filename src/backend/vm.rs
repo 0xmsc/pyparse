@@ -98,11 +98,11 @@ impl VM {
                 Instruction::PushString(value) => stack.push(Value::String(value)),
                 Instruction::PushNone => stack.push(Value::None),
                 Instruction::LoadName(name) => {
-                    if let Some(locals) = locals.as_ref() {
-                        if let Some(value) = locals.get(&name) {
-                            stack.push(value.clone());
-                            continue;
-                        }
+                    if let Some(locals) = locals.as_ref()
+                        && let Some(value) = locals.get(&name)
+                    {
+                        stack.push(value.clone());
+                        continue;
                     }
                     let value = self
                         .globals

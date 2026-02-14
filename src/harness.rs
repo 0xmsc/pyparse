@@ -3,14 +3,18 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 
-use crate::{backend, lexer, parser};
+use crate::backend::Backend;
+use crate::backend::interpreter::Interpreter;
+use crate::backend::jit::JIT;
+use crate::backend::transpiler::Transpiler;
+use crate::backend::vm::VM;
+use crate::{lexer, parser};
 
 fn normalize_output(output: &str) -> String {
     output.replace("\r\n", "\n").trim_end().to_string()
 }
 
-#[test]
-fn slow_runs_programs_across_backends() -> Result<()> {
+fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
     let programs_dir = Path::new("tests/programs");
     let mut programs = Vec::new();
 
@@ -50,20 +54,21 @@ fn slow_runs_programs_across_backends() -> Result<()> {
                 }
                 Ok(tokens) => match parser::parse_tokens(tokens) {
                     Ok(program) => {
-                        for backend in backend::backends() {
-                            let result = backend.run(&program);
-                            ensure!(
-                                result.is_err(),
-                                "Expected error for backend {} in {}",
-                                backend.name(),
-                                path.display()
-                            );
-                            let error = result.err().unwrap().to_string();
-                            ensure!(
-                                error.contains(expected_error),
-                                "Expected error containing '{expected_error}', got '{error}'"
-                            );
-                        }
+                        let result = backend.run(&program);
+                        ensure!(
+                            result.is_err(),
+                            "Expected error for backend {} in {}",
+                            backend.name(),
+                            path.display()
+                        );
+                        let error = match result {
+                            Ok(_) => unreachable!(),
+                            Err(error) => error.to_string(),
+                        };
+                        ensure!(
+                            error.contains(expected_error),
+                            "Expected error containing '{expected_error}', got '{error}'"
+                        );
                     }
                     Err(err) => {
                         let error = err.to_string();
@@ -85,20 +90,38 @@ fn slow_runs_programs_across_backends() -> Result<()> {
             parser::parse_tokens(tokens).with_context(|| format!("Parsing {}", path.display()))?;
         let expected_output = normalize_output(&expected);
 
-        for backend in backend::backends() {
-            let output = backend.run(&program).with_context(|| {
-                format!("Backend {} failed for {}", backend.name(), path.display())
-            })?;
-            let actual_output = normalize_output(&output);
-            assert_eq!(
-                actual_output,
-                expected_output,
-                "Backend {} mismatch for {}",
-                backend.name(),
-                path.display()
-            );
-        }
+        let output = backend
+            .run(&program)
+            .with_context(|| format!("Backend {} failed for {}", backend.name(), path.display()))?;
+        let actual_output = normalize_output(&output);
+        assert_eq!(
+            actual_output,
+            expected_output,
+            "Backend {} mismatch for {}",
+            backend.name(),
+            path.display()
+        );
     }
 
     Ok(())
+}
+
+#[test]
+fn slow_runs_programs_interpreter_backend() -> Result<()> {
+    run_programs_for_backend(&Interpreter::new())
+}
+
+#[test]
+fn slow_runs_programs_vm_backend() -> Result<()> {
+    run_programs_for_backend(&VM::new())
+}
+
+#[test]
+fn slow_runs_programs_jit_backend() -> Result<()> {
+    run_programs_for_backend(&JIT::new())
+}
+
+#[test]
+fn slow_runs_programs_transpiler_backend() -> Result<()> {
+    run_programs_for_backend(&Transpiler)
 }

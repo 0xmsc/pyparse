@@ -35,10 +35,10 @@ impl<'a> Environment<'a> {
     }
 
     fn load(&self, name: &str) -> Option<Value> {
-        if let Some(locals) = self.locals.as_deref() {
-            if let Some(value) = locals.get(name) {
-                return Some(value.clone());
-            }
+        if let Some(locals) = self.locals.as_deref()
+            && let Some(value) = locals.get(name)
+        {
+            return Some(value.clone());
         }
         self.globals.get(name).cloned()
     }

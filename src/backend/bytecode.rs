@@ -169,7 +169,7 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
             }
             match callee.as_ref() {
                 Expression::Identifier(name) if name == "print" => {
-                    if let Some(arg) = args.get(0) {
+                    if let Some(arg) = args.first() {
                         compile_expression(arg, code)?;
                         code.push(Instruction::CallBuiltinPrint1);
                     } else {
