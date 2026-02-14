@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::{cell::RefCell, rc::Rc};
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 
-use super::{Function, InterpreterError, Value};
+use super::{Function, InterpreterError, Value, value::ObjectKind};
 
 /// Control-flow marker for statement execution.
 pub(super) enum ExecResult {
@@ -119,15 +118,18 @@ impl<'a> InterpreterRuntime<'a> {
                             }
                         })?;
                         match list {
-                            Value::List(values) => {
-                                let mut borrowed = values.borrow_mut();
-                                if index >= borrowed.len() {
+                            Value::Object(object)
+                                if matches!(object.borrow().kind, ObjectKind::List(_)) =>
+                            {
+                                let mut borrowed = object.borrow_mut();
+                                let ObjectKind::List(values) = &mut borrowed.kind;
+                                if index >= values.len() {
                                     return Err(InterpreterError::ListIndexOutOfBounds {
                                         index,
-                                        len: borrowed.len(),
+                                        len: values.len(),
                                     });
                                 }
-                                borrowed[index] = value;
+                                values[index] = value;
                             }
                             other => {
                                 return Err(InterpreterError::ExpectedListType {
@@ -195,7 +197,7 @@ impl<'a> InterpreterRuntime<'a> {
                 for element in elements {
                     values.push(self.eval_expression(element, environment)?);
                 }
-                Ok(Value::List(Rc::new(RefCell::new(values))))
+                Ok(Value::list_object(values))
             }
             Expression::Identifier(name) => {
                 if let Some(value) = environment.load(name) {
@@ -213,12 +215,15 @@ impl<'a> InterpreterRuntime<'a> {
                 }
                 let index = raw_index as usize;
                 match object {
-                    Value::List(values) => {
-                        let borrowed = values.borrow();
-                        let value = borrowed.get(index).cloned().ok_or(
+                    Value::Object(object)
+                        if matches!(object.borrow().kind, ObjectKind::List(_)) =>
+                    {
+                        let borrowed = object.borrow();
+                        let ObjectKind::List(values) = &borrowed.kind;
+                        let value = values.get(index).cloned().ok_or(
                             InterpreterError::ListIndexOutOfBounds {
                                 index,
-                                len: borrowed.len(),
+                                len: values.len(),
                             },
                         )?;
                         Ok(value)
@@ -297,16 +302,16 @@ impl<'a> InterpreterRuntime<'a> {
         object: Value,
         attribute: String,
     ) -> std::result::Result<Value, InterpreterError> {
-        match object {
-            Value::List(_) if attribute == "append" => Ok(Value::BoundMethod {
+        if object.as_list_object().is_some() && attribute == "append" {
+            return Ok(Value::BoundMethod {
                 receiver: Box::new(object),
                 method: attribute,
-            }),
-            other => Err(InterpreterError::UnknownAttribute {
-                attribute,
-                type_name: other.type_name().to_string(),
-            }),
+            });
         }
+        Err(InterpreterError::UnknownAttribute {
+            attribute,
+            type_name: object.type_name().to_string(),
+        })
     }
 
     fn call_value(
@@ -330,7 +335,13 @@ impl<'a> InterpreterRuntime<'a> {
                     });
                 }
                 match &args[0] {
-                    Value::List(values) => Ok(Value::Integer(values.borrow().len() as i64)),
+                    Value::Object(object)
+                        if matches!(object.borrow().kind, ObjectKind::List(_)) =>
+                    {
+                        let borrowed = object.borrow();
+                        let ObjectKind::List(values) = &borrowed.kind;
+                        Ok(Value::Integer(values.len() as i64))
+                    }
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
                     }),
@@ -373,25 +384,27 @@ impl<'a> InterpreterRuntime<'a> {
         mut args: Vec<Value>,
     ) -> std::result::Result<Value, InterpreterError> {
         match receiver {
-            Value::List(values) => match method.as_str() {
-                "append" => {
-                    if args.len() != 1 {
-                        return Err(InterpreterError::MethodArityMismatch {
-                            method: "append".to_string(),
-                            expected: 1,
-                            found: args.len(),
-                        });
+            Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
+                match method.as_str() {
+                    "append" => {
+                        if args.len() != 1 {
+                            return Err(InterpreterError::MethodArityMismatch {
+                                method: "append".to_string(),
+                                expected: 1,
+                                found: args.len(),
+                            });
+                        }
+                        let mut borrowed = object.borrow_mut();
+                        let ObjectKind::List(values) = &mut borrowed.kind;
+                        values.push(args.pop().expect("len checked above"));
+                        Ok(Value::None)
                     }
-                    values
-                        .borrow_mut()
-                        .push(args.pop().expect("len checked above"));
-                    Ok(Value::None)
+                    _ => Err(InterpreterError::UnknownMethod {
+                        method,
+                        type_name: "list".to_string(),
+                    }),
                 }
-                _ => Err(InterpreterError::UnknownMethod {
-                    method,
-                    type_name: "list".to_string(),
-                }),
-            },
+            }
             other => Err(InterpreterError::UnknownMethod {
                 method,
                 type_name: other.type_name().to_string(),

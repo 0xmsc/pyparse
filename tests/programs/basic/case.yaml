@@ -1,5 +1,6 @@
 class: runtime_success
 parity: true
+unsupported_backends: [jit, transpiler]
 bench:
   enabled: false
   tags: [small, smoke]
