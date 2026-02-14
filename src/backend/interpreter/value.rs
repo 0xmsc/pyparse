@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use super::InterpreterError;
 
 /// Runtime value model used by the tree-walking interpreter.
 #[derive(Debug, Clone, PartialEq)]
@@ -10,11 +10,13 @@ pub(super) enum Value {
 }
 
 impl Value {
-    pub(super) fn as_int(&self) -> Result<i64> {
+    pub(super) fn as_int(&self) -> std::result::Result<i64, InterpreterError> {
         match self {
             Value::Integer(value) => Ok(*value),
             Value::Boolean(_) | Value::String(_) | Value::None => {
-                bail!("Expected integer, got {self:?}")
+                Err(InterpreterError::ExpectedIntegerType {
+                    got: format!("{self:?}"),
+                })
             }
         }
     }

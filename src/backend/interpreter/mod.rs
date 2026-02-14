@@ -1,12 +1,14 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::collections::HashMap;
 
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 
+mod error;
 mod runtime;
 mod value;
 
+pub use error::InterpreterError;
 use runtime::{Environment, ExecResult, InterpreterRuntime};
 use value::Value;
 
@@ -35,7 +37,7 @@ pub struct PreparedInterpreter {
 }
 
 impl PreparedInterpreter {
-    fn run_once(&self) -> Result<String> {
+    fn run_once(&self) -> std::result::Result<String, InterpreterError> {
         // Execution pipeline:
         // run_once -> exec_block (top-level statements) -> exec_statement
         // -> eval_expression -> eval_call -> exec_block (function body).
@@ -47,7 +49,7 @@ impl PreparedInterpreter {
         };
         match runtime.exec_block(&self.main_statements, &mut environment)? {
             ExecResult::Continue => {}
-            ExecResult::Return(_) => bail!("Return outside of function"),
+            ExecResult::Return(_) => return Err(InterpreterError::ReturnOutsideFunction),
         }
         Ok(runtime.output.join("\n"))
     }
@@ -61,7 +63,7 @@ impl Default for Interpreter {
 
 impl PreparedBackend for PreparedInterpreter {
     fn run(&self) -> Result<String> {
-        self.run_once()
+        Ok(self.run_once()?)
     }
 }
 
@@ -112,6 +114,12 @@ mod tests {
 
     fn print(args: Vec<Expression>) -> Statement {
         Statement::Expr(call("print", args))
+    }
+
+    fn expect_interpreter_error(error: anyhow::Error) -> InterpreterError {
+        error
+            .downcast::<InterpreterError>()
+            .expect("expected InterpreterError")
     }
 
     #[test]
@@ -232,10 +240,17 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let error = interpreter
-            .run(&program)
-            .expect_err("expected undefined variable");
-        assert!(error.to_string().contains("Undefined variable 'x'"));
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&program)
+                .expect_err("expected undefined variable"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::UndefinedVariable {
+                name: "x".to_string()
+            }
+        );
     }
 
     #[test]
@@ -245,10 +260,12 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let error = interpreter
-            .run(&program)
-            .expect_err("expected return outside function");
-        assert!(error.to_string().contains("Return outside of function"));
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&program)
+                .expect_err("expected return outside function"),
+        );
+        assert_eq!(error, InterpreterError::ReturnOutsideFunction);
     }
 
     #[test]
@@ -261,18 +278,27 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let error = interpreter
-            .run(&invalid_callee_program)
-            .expect_err("expected call target error");
-        assert!(error.to_string().contains("Can only call identifiers"));
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&invalid_callee_program)
+                .expect_err("expected call target error"),
+        );
+        assert_eq!(error, InterpreterError::NonIdentifierCallTarget);
 
         let undefined_function_program = Program {
             statements: vec![Statement::Expr(call("missing", vec![]))],
         };
-        let error = interpreter
-            .run(&undefined_function_program)
-            .expect_err("expected undefined function error");
-        assert!(error.to_string().contains("Undefined function 'missing'"));
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&undefined_function_program)
+                .expect_err("expected undefined function error"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::UndefinedFunction {
+                name: "missing".to_string()
+            }
+        );
     }
 
     #[test]
@@ -288,13 +314,16 @@ mod tests {
         };
 
         let interpreter = Interpreter::new();
-        let error = interpreter
-            .run(&program)
-            .expect_err("expected argument mismatch");
-        assert!(
-            error
-                .to_string()
-                .contains("Function 'f' does not accept arguments")
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&program)
+                .expect_err("expected argument mismatch"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::FunctionDoesNotAcceptArguments {
+                name: "f".to_string()
+            }
         );
     }
 
@@ -338,9 +367,16 @@ mod tests {
         let output = interpreter.run(&first_program).expect("first run failed");
         assert_eq!(output, "1");
 
-        let error = interpreter
-            .run(&second_program)
-            .expect_err("expected globals to be cleared between runs");
-        assert!(error.to_string().contains("Undefined variable 'x'"));
+        let error = expect_interpreter_error(
+            interpreter
+                .run(&second_program)
+                .expect_err("expected globals to be cleared between runs"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::UndefinedVariable {
+                name: "x".to_string()
+            }
+        );
     }
 }

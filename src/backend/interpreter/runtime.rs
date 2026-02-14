@@ -1,9 +1,8 @@
-use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{BinaryOperator, Expression, Statement};
 
-use super::{Function, Value};
+use super::{Function, InterpreterError, Value};
 
 /// Control-flow marker for statement execution.
 pub(super) enum ExecResult {
@@ -71,7 +70,7 @@ impl<'a> InterpreterRuntime<'a> {
         &mut self,
         body: &[Statement],
         environment: &mut Environment<'_>,
-    ) -> Result<ExecResult> {
+    ) -> std::result::Result<ExecResult, InterpreterError> {
         // Execute statements in order until one returns, then bubble that up.
         for statement in body {
             match self.exec_statement(statement, environment)? {
@@ -86,9 +85,11 @@ impl<'a> InterpreterRuntime<'a> {
         &mut self,
         statement: &Statement,
         environment: &mut Environment<'_>,
-    ) -> Result<ExecResult> {
+    ) -> std::result::Result<ExecResult, InterpreterError> {
         match statement {
-            Statement::FunctionDef { .. } => bail!("Nested function definitions are not supported"),
+            Statement::FunctionDef { .. } => {
+                Err(InterpreterError::NestedFunctionDefinitionsUnsupported)
+            }
             Statement::Assign { name, value } => {
                 let value = self.eval_expression(value, environment)?;
                 environment.store(name.to_string(), value);
@@ -139,7 +140,7 @@ impl<'a> InterpreterRuntime<'a> {
         &mut self,
         expr: &Expression,
         environment: &mut Environment<'_>,
-    ) -> Result<Value> {
+    ) -> std::result::Result<Value, InterpreterError> {
         // Expression evaluation can recurse into calls, which may execute statements.
         match expr {
             Expression::Integer(value) => Ok(Value::Integer(*value)),
@@ -149,7 +150,9 @@ impl<'a> InterpreterRuntime<'a> {
                 if let Some(value) = environment.load(name) {
                     return Ok(value.clone());
                 }
-                bail!("Undefined variable '{name}'")
+                Err(InterpreterError::UndefinedVariable {
+                    name: name.to_string(),
+                })
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -181,7 +184,7 @@ impl<'a> InterpreterRuntime<'a> {
         callee: &Expression,
         args: &[Expression],
         environment: &mut Environment<'_>,
-    ) -> Result<Value> {
+    ) -> std::result::Result<Value, InterpreterError> {
         // Calls evaluate argument expressions first in the caller environment.
         let mut evaluated_args = Vec::with_capacity(args.len());
         for arg in args {
@@ -198,13 +201,15 @@ impl<'a> InterpreterRuntime<'a> {
                     Ok(Value::None)
                 }
                 _ => {
-                    let function = self
-                        .functions
-                        .get(name)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("Undefined function '{name}'"))?;
+                    let function = self.functions.get(name).cloned().ok_or_else(|| {
+                        InterpreterError::UndefinedFunction {
+                            name: name.to_string(),
+                        }
+                    })?;
                     if !evaluated_args.is_empty() {
-                        bail!("Function '{name}' does not accept arguments");
+                        return Err(InterpreterError::FunctionDoesNotAcceptArguments {
+                            name: name.to_string(),
+                        });
                     }
                     let mut local_scope = HashMap::new();
                     // Function calls switch from expression evaluation back to statement execution.
@@ -215,7 +220,7 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                 }
             },
-            _ => bail!("Can only call identifiers"),
+            _ => Err(InterpreterError::NonIdentifierCallTarget),
         }
     }
 }
