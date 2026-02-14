@@ -10,7 +10,7 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
-use crate::backend::vm::bytecode::{Instruction, compile};
+use crate::bytecode::{Instruction, compile};
 
 type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
 

@@ -3,9 +3,7 @@ use std::collections::HashMap;
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
-use self::bytecode::{CompiledProgram, Instruction, compile};
-
-pub(crate) mod bytecode;
+use crate::bytecode::{CompiledProgram, Instruction, compile};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Value {

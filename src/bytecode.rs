@@ -188,3 +188,107 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Instruction, compile};
+    use crate::ast::{Expression, Program, Statement};
+
+    fn function(name: &str, body: Vec<Statement>) -> Statement {
+        Statement::FunctionDef {
+            name: name.to_string(),
+            body,
+        }
+    }
+
+    fn call(name: &str, args: Vec<Expression>) -> Expression {
+        Expression::Call {
+            callee: Box::new(Expression::Identifier(name.to_string())),
+            args,
+        }
+    }
+
+    #[test]
+    fn compiles_main_and_function_separately() {
+        let program = Program {
+            statements: vec![
+                function("foo", vec![Statement::Return(Some(Expression::Integer(7)))]),
+                Statement::Expr(call("foo", vec![])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert_eq!(compiled.functions.len(), 1);
+
+        let function = compiled
+            .functions
+            .get("foo")
+            .expect("expected compiled function 'foo'");
+        assert_eq!(function.code.len(), 3);
+        assert!(matches!(function.code[0], Instruction::PushInt(7)));
+        assert!(matches!(function.code[1], Instruction::ReturnValue));
+        assert!(matches!(function.code[2], Instruction::Return));
+
+        assert_eq!(compiled.main.len(), 2);
+        assert!(matches!(
+            compiled.main[0],
+            Instruction::CallFunction(ref name) if name == "foo"
+        ));
+        assert!(matches!(compiled.main[1], Instruction::Pop));
+    }
+
+    #[test]
+    fn compiles_print_without_argument() {
+        let program = Program {
+            statements: vec![Statement::Expr(call("print", vec![]))],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert!(compiled.functions.is_empty());
+        assert_eq!(compiled.main.len(), 2);
+        assert!(matches!(compiled.main[0], Instruction::CallBuiltinPrint0));
+        assert!(matches!(compiled.main[1], Instruction::Pop));
+    }
+
+    #[test]
+    fn errors_on_duplicate_function_definitions() {
+        let program = Program {
+            statements: vec![function("dup", vec![]), function("dup", vec![])],
+        };
+
+        let error = compile(&program).expect_err("compile should fail");
+        assert_eq!(
+            error.to_string(),
+            "Duplicate function definition 'dup'".to_string()
+        );
+    }
+
+    #[test]
+    fn errors_on_return_outside_function() {
+        let program = Program {
+            statements: vec![Statement::Return(None)],
+        };
+
+        let error = compile(&program).expect_err("compile should fail");
+        assert_eq!(
+            error.to_string(),
+            "Return outside of function is not supported in the VM".to_string()
+        );
+    }
+
+    #[test]
+    fn errors_on_nested_function_definitions() {
+        let program = Program {
+            statements: vec![function(
+                "outer",
+                vec![function("inner", vec![Statement::Return(None)])],
+            )],
+        };
+
+        let error = compile(&program).expect_err("compile should fail");
+        assert_eq!(
+            error.to_string(),
+            "Nested function definitions are not supported in the VM".to_string()
+        );
+    }
+}

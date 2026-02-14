@@ -2,10 +2,10 @@ use anyhow::Result;
 
 use crate::ast::Program;
 
-pub mod interpreter;
-pub mod jit;
-pub mod transpiler;
-pub mod vm;
+pub use crate::interpreter;
+pub use crate::jit;
+pub use crate::transpiler;
+pub use crate::vm;
 
 pub trait PreparedBackend {
     fn run(&self) -> Result<String>;
@@ -22,9 +22,9 @@ pub trait Backend {
 
 pub fn backends() -> Vec<Box<dyn Backend>> {
     vec![
-        Box::new(interpreter::Interpreter::new()),
-        Box::new(vm::VM::new()),
-        Box::new(jit::JIT::new()),
-        Box::new(transpiler::Transpiler),
+        Box::new(crate::interpreter::Interpreter::new()),
+        Box::new(crate::vm::VM::new()),
+        Box::new(crate::jit::JIT::new()),
+        Box::new(crate::transpiler::Transpiler),
     ]
 }
