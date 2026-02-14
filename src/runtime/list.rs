@@ -1,22 +1,15 @@
+use crate::runtime::error::RuntimeError;
 use crate::runtime::int::downcast_i64;
-use crate::runtime::object::{AttributeError, MethodError, ObjectRef, RuntimeObject};
+use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ListError {
-    ExpectedListType { got: String },
-    ExpectedIntegerType { got: String },
-    NegativeIndex { index: i64 },
-    OutOfBounds { index: usize, len: usize },
+#[derive(Debug, Clone)]
+pub(crate) struct ListObject {
+    values: Vec<Value>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ListObject<Element> {
-    values: Vec<Element>,
-}
-
-impl<Element> ListObject<Element> {
-    pub(crate) fn new(values: Vec<Element>) -> Self {
+impl ListObject {
+    pub(crate) fn new(values: Vec<Value>) -> Self {
         Self { values }
     }
 
@@ -28,13 +21,13 @@ impl<Element> ListObject<Element> {
         self.values.is_empty()
     }
 
-    pub(crate) fn __setitem__(&mut self, index: i64, value: Element) -> Result<(), ListError> {
+    pub(crate) fn __setitem__(&mut self, index: i64, value: Value) -> Result<(), RuntimeError> {
         if index < 0 {
-            return Err(ListError::NegativeIndex { index });
+            return Err(RuntimeError::NegativeIndex { index });
         }
         let index = index as usize;
         if index >= self.values.len() {
-            return Err(ListError::OutOfBounds {
+            return Err(RuntimeError::IndexOutOfBounds {
                 index,
                 len: self.values.len(),
             });
@@ -43,60 +36,68 @@ impl<Element> ListObject<Element> {
         Ok(())
     }
 
-    pub(crate) fn append(&mut self, value: Element) {
+    pub(crate) fn append(&mut self, value: Value) {
         self.values.push(value);
     }
 
-    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Element> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, Value> {
         self.values.iter()
     }
-}
 
-impl<Element: Clone> ListObject<Element> {
-    pub(crate) fn __getitem__(&self, index: i64) -> Result<Element, ListError> {
+    pub(crate) fn __getitem__(&self, index: i64) -> Result<Value, RuntimeError> {
         if index < 0 {
-            return Err(ListError::NegativeIndex { index });
+            return Err(RuntimeError::NegativeIndex { index });
         }
         let index = index as usize;
         self.values
             .get(index)
             .cloned()
-            .ok_or(ListError::OutOfBounds {
+            .ok_or(RuntimeError::IndexOutOfBounds {
                 index,
                 len: self.values.len(),
             })
     }
 }
 
-impl RuntimeObject for ListObject<Value> {
-    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, AttributeError> {
+impl RuntimeObject for ListObject {
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if matches!(
             attribute,
             "append" | "__len__" | "__getitem__" | "__setitem__"
         ) {
             return Ok(Value::bound_method_object(receiver, attribute.to_string()));
         }
-        Err(AttributeError::UnknownAttribute {
+        Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "list".to_string(),
         })
     }
 }
 
-impl ListObject<Value> {
-    pub(crate) fn get_item_value(&self, index: Value) -> Result<Value, ListError> {
+impl ListObject {
+    pub(crate) fn get_item_value(&self, index: Value) -> Result<Value, RuntimeError> {
         let Some(index) = downcast_i64(&index) else {
-            return Err(ListError::ExpectedIntegerType {
-                got: format!("{index:?}"),
+            return Err(RuntimeError::InvalidArgumentType {
+                operation: "__getitem__".to_string(),
+                argument: "index".to_string(),
+                expected: "int".to_string(),
+                got: index.type_name().to_string(),
             });
         };
         self.__getitem__(index)
     }
 
-    pub(crate) fn set_item_value(&mut self, index: Value, value: Value) -> Result<(), ListError> {
+    pub(crate) fn set_item_value(
+        &mut self,
+        index: Value,
+        value: Value,
+    ) -> Result<(), RuntimeError> {
         let Some(index) = downcast_i64(&index) else {
-            return Err(ListError::ExpectedIntegerType {
-                got: format!("{index:?}"),
+            return Err(RuntimeError::InvalidArgumentType {
+                operation: "__setitem__".to_string(),
+                argument: "index".to_string(),
+                expected: "int".to_string(),
+                got: index.type_name().to_string(),
             });
         };
         self.__setitem__(index, value)
@@ -106,11 +107,11 @@ impl ListObject<Value> {
         &mut self,
         method: &str,
         mut args: Vec<Value>,
-    ) -> Result<Value, MethodError> {
+    ) -> Result<Value, RuntimeError> {
         match method {
             "append" => {
                 if args.len() != 1 {
-                    return Err(MethodError::ArityMismatch {
+                    return Err(RuntimeError::ArityMismatch {
                         method: "append".to_string(),
                         expected: 1,
                         found: args.len(),
@@ -121,7 +122,7 @@ impl ListObject<Value> {
             }
             "__len__" => {
                 if !args.is_empty() {
-                    return Err(MethodError::ArityMismatch {
+                    return Err(RuntimeError::ArityMismatch {
                         method: "__len__".to_string(),
                         expected: 0,
                         found: args.len(),
@@ -131,7 +132,7 @@ impl ListObject<Value> {
             }
             "__getitem__" => {
                 if args.len() != 1 {
-                    return Err(MethodError::ArityMismatch {
+                    return Err(RuntimeError::ArityMismatch {
                         method: "__getitem__".to_string(),
                         expected: 1,
                         found: args.len(),
@@ -139,11 +140,10 @@ impl ListObject<Value> {
                 }
                 let index = args.pop().expect("len checked above");
                 self.get_item_value(index)
-                    .map_err(MethodError::ListOperation)
             }
             "__setitem__" => {
                 if args.len() != 2 {
-                    return Err(MethodError::ArityMismatch {
+                    return Err(RuntimeError::ArityMismatch {
                         method: "__setitem__".to_string(),
                         expected: 2,
                         found: args.len(),
@@ -151,11 +151,10 @@ impl ListObject<Value> {
                 }
                 let value = args.pop().expect("len checked above");
                 let index = args.pop().expect("len checked above");
-                self.set_item_value(index, value)
-                    .map_err(MethodError::ListOperation)?;
+                self.set_item_value(index, value)?;
                 Ok(Value::none_object())
             }
-            _ => Err(MethodError::UnknownMethod {
+            _ => Err(RuntimeError::UnknownMethod {
                 method: method.to_string(),
                 type_name: "list".to_string(),
             }),
@@ -165,41 +164,44 @@ impl ListObject<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListError, ListObject};
+    use super::ListObject;
+    use crate::runtime::error::RuntimeError;
+    use crate::runtime::value::Value;
 
     #[test]
     fn supports_len_get_set_and_append() {
-        let mut list = ListObject::new(vec![1, 2]);
+        let mut list = ListObject::new(vec![Value::int_object(1), Value::int_object(2)]);
         assert_eq!(list.__len__(), 2);
-        assert_eq!(list.__getitem__(0).expect("index 0"), 1);
-        list.__setitem__(1, 7).expect("set item at index 1");
-        list.append(9);
+        assert_eq!(list.__getitem__(0).expect("index 0").to_output(), "1");
+        list.__setitem__(1, Value::int_object(7))
+            .expect("set item at index 1");
+        list.append(Value::int_object(9));
         assert_eq!(list.__len__(), 3);
-        assert_eq!(list.__getitem__(1).expect("index 1"), 7);
-        assert_eq!(list.__getitem__(2).expect("index 2"), 9);
+        assert_eq!(list.__getitem__(1).expect("index 1").to_output(), "7");
+        assert_eq!(list.__getitem__(2).expect("index 2").to_output(), "9");
     }
 
     #[test]
     fn reports_negative_and_out_of_bounds_indexes() {
-        let mut list = ListObject::new(vec![1]);
+        let mut list = ListObject::new(vec![Value::int_object(1)]);
         assert_eq!(
             list.__getitem__(-1)
                 .expect_err("negative index should fail"),
-            ListError::NegativeIndex { index: -1 }
+            RuntimeError::NegativeIndex { index: -1 }
         );
         assert_eq!(
             list.__getitem__(2).expect_err("oob index should fail"),
-            ListError::OutOfBounds { index: 2, len: 1 }
+            RuntimeError::IndexOutOfBounds { index: 2, len: 1 }
         );
         assert_eq!(
-            list.__setitem__(-1, 5)
+            list.__setitem__(-1, Value::int_object(5))
                 .expect_err("negative index assignment should fail"),
-            ListError::NegativeIndex { index: -1 }
+            RuntimeError::NegativeIndex { index: -1 }
         );
         assert_eq!(
-            list.__setitem__(2, 5)
+            list.__setitem__(2, Value::int_object(5))
                 .expect_err("oob assignment should fail"),
-            ListError::OutOfBounds { index: 2, len: 1 }
+            RuntimeError::IndexOutOfBounds { index: 2, len: 1 }
         );
     }
 }

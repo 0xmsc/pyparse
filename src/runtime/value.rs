@@ -1,10 +1,11 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::BoolObject;
 use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
+use crate::runtime::error::RuntimeError;
 use crate::runtime::int::IntObject;
-use crate::runtime::list::{ListError, ListObject};
+use crate::runtime::list::ListObject;
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{AttributeError, CallTarget, MethodError, ObjectRef, new_list_object};
+use crate::runtime::object::{CallTarget, ObjectRef, new_list_object};
 use crate::runtime::string::StringObject;
 use std::any::Any;
 use std::cell::RefCell;
@@ -38,7 +39,7 @@ impl Value {
             "str"
         } else if any.is::<NoneObject>() {
             "NoneType"
-        } else if any.is::<ListObject<Value>>() {
+        } else if any.is::<ListObject>() {
             "list"
         } else if any.is::<BuiltinFunctionObject>() {
             "builtin_function_or_method"
@@ -66,7 +67,7 @@ impl Value {
             string.value().to_string()
         } else if any.is::<NoneObject>() {
             "None".to_string()
-        } else if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+        } else if let Some(list) = any.downcast_ref::<ListObject>() {
             let rendered = list
                 .iter()
                 .map(Value::to_output)
@@ -95,7 +96,7 @@ impl Value {
             !string.value().is_empty()
         } else if any.is::<NoneObject>() {
             false
-        } else if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+        } else if let Some(list) = any.downcast_ref::<ListObject>() {
             !list.is_empty()
         } else {
             true
@@ -118,43 +119,51 @@ impl Value {
         }
     }
 
-    pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, AttributeError> {
+    pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
         self.0.borrow().get_attribute(self.object_ref(), attribute)
     }
 
-    pub(crate) fn get_item(&self, index: Value) -> Result<Value, ListError> {
+    pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
         let object = self.0.borrow();
         let any = &**object as &dyn Any;
-        if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+        if let Some(list) = any.downcast_ref::<ListObject>() {
             list.get_item_value(index)
         } else {
-            Err(ListError::ExpectedListType {
-                got: self.type_name().to_string(),
+            Err(RuntimeError::UnsupportedOperation {
+                operation: "__getitem__".to_string(),
+                type_name: self.type_name().to_string(),
             })
         }
     }
 
-    pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), ListError> {
+    pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), RuntimeError> {
         let type_name = self.type_name().to_string();
         let mut object = self.0.borrow_mut();
         let any = &mut **object as &mut dyn Any;
-        if let Some(list) = any.downcast_mut::<ListObject<Value>>() {
+        if let Some(list) = any.downcast_mut::<ListObject>() {
             list.set_item_value(index, value)
         } else {
-            Err(ListError::ExpectedListType { got: type_name })
+            Err(RuntimeError::UnsupportedOperation {
+                operation: "__setitem__".to_string(),
+                type_name,
+            })
         }
     }
 
-    pub(crate) fn call_method(&self, method: &str, args: Vec<Value>) -> Result<Value, MethodError> {
+    pub(crate) fn call_method(
+        &self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
         let type_name = self.type_name().to_string();
         let mut object = self.0.borrow_mut();
         let any = &mut **object as &mut dyn Any;
-        if let Some(list) = any.downcast_mut::<ListObject<Value>>() {
+        if let Some(list) = any.downcast_mut::<ListObject>() {
             list.call_method(method, args)
         } else if let Some(int) = any.downcast_mut::<IntObject>() {
             int.call_method(method, args)
         } else {
-            Err(MethodError::UnknownMethod {
+            Err(RuntimeError::UnknownMethod {
                 method: method.to_string(),
                 type_name,
             })

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
-use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, CallTarget, MethodError};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallTarget;
 
 use super::{Function, InterpreterError, Value};
 
@@ -78,20 +78,47 @@ pub(super) struct InterpreterRuntime<'a> {
 }
 
 impl<'a> InterpreterRuntime<'a> {
-    fn map_list_error(operation: &str, error: ListError) -> InterpreterError {
+    fn map_runtime_error(error: RuntimeError) -> InterpreterError {
         match error {
-            ListError::ExpectedIntegerType { got } => InterpreterError::InvalidArgumentType {
-                operation: operation.to_string(),
-                argument: "index".to_string(),
-                expected: "int".to_string(),
+            RuntimeError::UnknownAttribute {
+                attribute,
+                type_name,
+            } => InterpreterError::UnknownAttribute {
+                attribute,
+                type_name,
+            },
+            RuntimeError::ArityMismatch {
+                method,
+                expected,
+                found,
+            } => InterpreterError::MethodArityMismatch {
+                method,
+                expected,
+                found,
+            },
+            RuntimeError::UnknownMethod { method, type_name } => {
+                InterpreterError::UnknownMethod { method, type_name }
+            }
+            RuntimeError::UnsupportedOperation {
+                operation,
+                type_name,
+            } => InterpreterError::UnsupportedOperation {
+                operation,
+                type_name,
+            },
+            RuntimeError::InvalidArgumentType {
+                operation,
+                argument,
+                expected,
+                got,
+            } => InterpreterError::InvalidArgumentType {
+                operation,
+                argument,
+                expected,
                 got,
             },
-            ListError::ExpectedListType { got } => InterpreterError::UnsupportedOperation {
-                operation: operation.to_string(),
-                type_name: got,
-            },
-            ListError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
-            ListError::OutOfBounds { index, len } => {
+            RuntimeError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
+            RuntimeError::IndexOutOfBounds { index, len } => {
                 InterpreterError::ListIndexOutOfBounds { index, len }
             }
         }
@@ -135,7 +162,7 @@ impl<'a> InterpreterRuntime<'a> {
                             }
                         })?;
                         list.set_item(index_value, value)
-                            .map_err(|error| Self::map_list_error("__setitem__", error))?;
+                            .map_err(Self::map_runtime_error)?;
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -211,7 +238,7 @@ impl<'a> InterpreterRuntime<'a> {
                 let index_value = self.eval_expression(index, environment)?;
                 object_value
                     .get_item(index_value)
-                    .map_err(|error| Self::map_list_error("__getitem__", error))
+                    .map_err(Self::map_runtime_error)
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -220,38 +247,41 @@ impl<'a> InterpreterRuntime<'a> {
                     BinaryOperator::Add => {
                         let callee =
                             left.get_attribute("__add__").map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
+                                RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
                                 } => InterpreterError::UnsupportedOperation {
                                     operation: "__add__".to_string(),
                                     type_name,
                                 },
+                                other => Self::map_runtime_error(other),
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
                     BinaryOperator::Sub => {
                         let callee =
                             left.get_attribute("__sub__").map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
+                                RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
                                 } => InterpreterError::UnsupportedOperation {
                                     operation: "__sub__".to_string(),
                                     type_name,
                                 },
+                                other => Self::map_runtime_error(other),
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
                     BinaryOperator::LessThan => {
                         let callee = left.get_attribute("__lt__").map_err(|error| match error {
-                            AttributeError::UnknownAttribute {
+                            RuntimeError::UnknownAttribute {
                                 attribute: _,
                                 type_name,
                             } => InterpreterError::UnsupportedOperation {
                                 operation: "__lt__".to_string(),
                                 type_name,
                             },
+                            other => Self::map_runtime_error(other),
                         })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -262,15 +292,7 @@ impl<'a> InterpreterRuntime<'a> {
                 let attribute = name.to_string();
                 object
                     .get_attribute(&attribute)
-                    .map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
-                            attribute,
-                            type_name,
-                        } => InterpreterError::UnknownAttribute {
-                            attribute,
-                            type_name,
-                        },
-                    })
+                    .map_err(Self::map_runtime_error)
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -340,13 +362,14 @@ impl<'a> InterpreterRuntime<'a> {
                 let callee = args[0]
                     .get_attribute("__len__")
                     .map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
+                        RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
                         } => InterpreterError::UnsupportedOperation {
                             operation: "len".to_string(),
                             type_name,
                         },
+                        other => Self::map_runtime_error(other),
                     })?;
                 self.call_value(callee, Vec::new(), environment)
             }
@@ -374,21 +397,7 @@ impl<'a> InterpreterRuntime<'a> {
             }
             CallTarget::BoundMethod { receiver, method } => Value::from_object(receiver)
                 .call_method(&method, args)
-                .map_err(|error| match error {
-                    MethodError::ArityMismatch {
-                        method,
-                        expected,
-                        found,
-                    } => InterpreterError::MethodArityMismatch {
-                        method,
-                        expected,
-                        found,
-                    },
-                    MethodError::ListOperation(error) => Self::map_list_error(&method, error),
-                    MethodError::UnknownMethod { method, type_name } => {
-                        InterpreterError::UnknownMethod { method, type_name }
-                    }
-                }),
+                .map_err(Self::map_runtime_error),
         }
     }
 }

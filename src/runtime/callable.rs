@@ -1,5 +1,6 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::object::{AttributeError, CallTarget, ObjectRef, RuntimeObject};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::object::{CallTarget, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,8 +62,8 @@ macro_rules! impl_callable_runtime_object {
             &self,
             _receiver: ObjectRef,
             attribute: &str,
-        ) -> Result<Value, AttributeError> {
-            Err(AttributeError::UnknownAttribute {
+        ) -> Result<Value, RuntimeError> {
+            Err(RuntimeError::UnknownAttribute {
                 attribute: attribute.to_string(),
                 type_name: $type_name.to_string(),
             })

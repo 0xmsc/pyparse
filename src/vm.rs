@@ -6,8 +6,8 @@ use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
-use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, CallTarget, MethodError};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallTarget;
 use crate::runtime::value::{CallTargetError, Value};
 
 type VmResult<T> = std::result::Result<T, VmError>;
@@ -155,20 +155,49 @@ impl VM {
 }
 
 impl VmRuntime<'_> {
-    fn map_list_error(operation: &str, error: ListError) -> VmError {
+    fn map_runtime_error(error: RuntimeError) -> VmError {
         match error {
-            ListError::ExpectedIntegerType { got } => VmError::InvalidArgumentType {
-                operation: operation.to_string(),
-                argument: "index".to_string(),
-                expected: "int".to_string(),
+            RuntimeError::UnknownAttribute {
+                attribute,
+                type_name,
+            } => VmError::UnknownAttribute {
+                attribute,
+                type_name,
+            },
+            RuntimeError::ArityMismatch {
+                method,
+                expected,
+                found,
+            } => VmError::MethodArityMismatch {
+                method,
+                expected,
+                found,
+            },
+            RuntimeError::UnknownMethod { method, type_name } => {
+                VmError::UnknownMethod { method, type_name }
+            }
+            RuntimeError::UnsupportedOperation {
+                operation,
+                type_name,
+            } => VmError::UnsupportedOperation {
+                operation,
+                type_name,
+            },
+            RuntimeError::InvalidArgumentType {
+                operation,
+                argument,
+                expected,
+                got,
+            } => VmError::InvalidArgumentType {
+                operation,
+                argument,
+                expected,
                 got,
             },
-            ListError::ExpectedListType { got } => VmError::UnsupportedOperation {
-                operation: operation.to_string(),
-                type_name: got,
-            },
-            ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
-            ListError::OutOfBounds { index, len } => VmError::ListIndexOutOfBounds { index, len },
+            RuntimeError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+            RuntimeError::IndexOutOfBounds { index, len } => {
+                VmError::ListIndexOutOfBounds { index, len }
+            }
         }
     }
 
@@ -216,31 +245,23 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let attribute_value =
-                        object
-                            .get_attribute(&attribute)
-                            .map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
-                                    attribute,
-                                    type_name,
-                                } => VmError::UnknownAttribute {
-                                    attribute,
-                                    type_name,
-                                },
-                            })?;
+                    let attribute_value = object
+                        .get_attribute(&attribute)
+                        .map_err(Self::map_runtime_error)?;
                     self.stack.push(attribute_value);
                 }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
                     let callee = left.get_attribute("__add__").map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
+                        RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
                         } => VmError::UnsupportedOperation {
                             operation: "__add__".to_string(),
                             type_name,
                         },
+                        other => Self::map_runtime_error(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -249,13 +270,14 @@ impl VmRuntime<'_> {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
                     let callee = left.get_attribute("__sub__").map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
+                        RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
                         } => VmError::UnsupportedOperation {
                             operation: "__sub__".to_string(),
                             type_name,
                         },
+                        other => Self::map_runtime_error(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -264,13 +286,14 @@ impl VmRuntime<'_> {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
                     let callee = left.get_attribute("__lt__").map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
+                        RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
                         } => VmError::UnsupportedOperation {
                             operation: "__lt__".to_string(),
                             type_name,
                         },
+                        other => Self::map_runtime_error(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -282,13 +305,14 @@ impl VmRuntime<'_> {
                         object_value
                             .get_attribute("__getitem__")
                             .map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
+                                RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
                                 } => VmError::UnsupportedOperation {
                                     operation: "__getitem__".to_string(),
                                     type_name,
                                 },
+                                other => Self::map_runtime_error(other),
                             })?;
                     let value = self.call_value(callee, vec![index_value], environment)?;
                     self.stack.push(value);
@@ -304,13 +328,14 @@ impl VmRuntime<'_> {
                         target
                             .get_attribute("__setitem__")
                             .map_err(|error| match error {
-                                AttributeError::UnknownAttribute {
+                                RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
                                 } => VmError::UnsupportedOperation {
                                     operation: "__setitem__".to_string(),
                                     type_name,
                                 },
+                                other => Self::map_runtime_error(other),
                             })?;
                     self.call_value(callee, vec![index_value, value], environment)?;
                 }
@@ -384,13 +409,14 @@ impl VmRuntime<'_> {
                 let callee = args[0]
                     .get_attribute("__len__")
                     .map_err(|error| match error {
-                        AttributeError::UnknownAttribute {
+                        RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
                         } => VmError::UnsupportedOperation {
                             operation: "len".to_string(),
                             type_name,
                         },
+                        other => Self::map_runtime_error(other),
                     })?;
                 self.call_value(callee, Vec::new(), environment)
             }
@@ -420,21 +446,7 @@ impl VmRuntime<'_> {
             }
             CallTarget::BoundMethod { receiver, method } => Value::from_object(receiver)
                 .call_method(&method, args)
-                .map_err(|error| match error {
-                    MethodError::ArityMismatch {
-                        method,
-                        expected,
-                        found,
-                    } => VmError::MethodArityMismatch {
-                        method,
-                        expected,
-                        found,
-                    },
-                    MethodError::ListOperation(error) => Self::map_list_error(&method, error),
-                    MethodError::UnknownMethod { method, type_name } => {
-                        VmError::UnknownMethod { method, type_name }
-                    }
-                }),
+                .map_err(Self::map_runtime_error),
         }
     }
 }
