@@ -7,7 +7,7 @@ use self::c_runtime::{
     C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_source,
     escape_c_string, run_compiled_binary,
 };
-use crate::ast::{BinaryOperator, Expression, Program, Statement};
+use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 
@@ -127,10 +127,16 @@ impl Transpiler {
 
     fn collect_assignments(&self, statement: &Statement, names: &mut HashSet<String>) {
         match statement {
-            Statement::Assign { name, .. } => {
+            Statement::Assign {
+                target: AssignTarget::Name(name),
+                ..
+            } => {
                 names.insert(name.to_string());
             }
-            Statement::AssignIndex { .. } => {}
+            Statement::Assign {
+                target: AssignTarget::Index { .. },
+                ..
+            } => {}
             Statement::If {
                 then_body,
                 else_body,
@@ -158,10 +164,16 @@ impl Transpiler {
         names: &mut HashSet<String>,
     ) -> Result<()> {
         match statement {
-            Statement::Assign { name, .. } => {
+            Statement::Assign {
+                target: AssignTarget::Name(name),
+                ..
+            } => {
                 names.insert(name.to_string());
             }
-            Statement::AssignIndex { .. } => {}
+            Statement::Assign {
+                target: AssignTarget::Index { .. },
+                ..
+            } => {}
             Statement::If {
                 then_body,
                 else_body,
@@ -195,13 +207,15 @@ impl Transpiler {
         in_function: bool,
     ) -> Result<()> {
         match statement {
-            Statement::Assign { name, value } => {
-                let expr = self.emit_expression(value)?;
-                self.push_line(output, indent, &format!("{name} = {expr};"));
-            }
-            Statement::AssignIndex { .. } => {
-                bail!("List index assignment is not supported in the transpiler");
-            }
+            Statement::Assign { target, value } => match target {
+                AssignTarget::Name(name) => {
+                    let expr = self.emit_expression(value)?;
+                    self.push_line(output, indent, &format!("{name} = {expr};"));
+                }
+                AssignTarget::Index { .. } => {
+                    bail!("List index assignment is not supported in the transpiler");
+                }
+            },
             Statement::While { condition, body } => {
                 let condition = self.emit_expression(condition)?;
                 self.push_line(

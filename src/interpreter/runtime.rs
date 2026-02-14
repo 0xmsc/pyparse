@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ast::{BinaryOperator, Expression, Statement};
+use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 
 use super::{Function, InterpreterError, Value};
@@ -100,38 +100,39 @@ impl<'a> InterpreterRuntime<'a> {
             Statement::FunctionDef { .. } => {
                 Err(InterpreterError::NestedFunctionDefinitionsUnsupported)
             }
-            Statement::Assign { name, value } => {
+            Statement::Assign { target, value } => {
                 let value = self.eval_expression(value, environment)?;
-                environment.store(name.to_string(), value);
-                Ok(ExecResult::Continue)
-            }
-            Statement::AssignIndex { name, index, value } => {
-                let raw_index = self.eval_expression(index, environment)?.as_int()?;
-                if raw_index < 0 {
-                    return Err(InterpreterError::NegativeListIndex { index: raw_index });
-                }
-                let index = raw_index as usize;
-                let value = self.eval_expression(value, environment)?;
-
-                let list = environment.load_mut(name).ok_or_else(|| {
-                    InterpreterError::UndefinedVariable {
-                        name: name.to_string(),
+                match target {
+                    AssignTarget::Name(name) => {
+                        environment.store(name.to_string(), value);
                     }
-                })?;
-                match list {
-                    Value::List(values) => {
-                        if index >= values.len() {
-                            return Err(InterpreterError::ListIndexOutOfBounds {
-                                index,
-                                len: values.len(),
-                            });
+                    AssignTarget::Index { name, index } => {
+                        let raw_index = self.eval_expression(index, environment)?.as_int()?;
+                        if raw_index < 0 {
+                            return Err(InterpreterError::NegativeListIndex { index: raw_index });
                         }
-                        values[index] = value;
-                    }
-                    other => {
-                        return Err(InterpreterError::ExpectedListType {
-                            got: format!("{other:?}"),
-                        });
+                        let index = raw_index as usize;
+                        let list = environment.load_mut(name).ok_or_else(|| {
+                            InterpreterError::UndefinedVariable {
+                                name: name.to_string(),
+                            }
+                        })?;
+                        match list {
+                            Value::List(values) => {
+                                if index >= values.len() {
+                                    return Err(InterpreterError::ListIndexOutOfBounds {
+                                        index,
+                                        len: values.len(),
+                                    });
+                                }
+                                values[index] = value;
+                            }
+                            other => {
+                                return Err(InterpreterError::ExpectedListType {
+                                    got: format!("{other:?}"),
+                                });
+                            }
+                        }
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -211,12 +212,12 @@ impl<'a> InterpreterRuntime<'a> {
                 let index = raw_index as usize;
                 match object {
                     Value::List(values) => {
-                        let value = values.get(index).cloned().ok_or({
+                        let value = values.get(index).cloned().ok_or(
                             InterpreterError::ListIndexOutOfBounds {
                                 index,
                                 len: values.len(),
-                            }
-                        })?;
+                            },
+                        )?;
                         Ok(value)
                     }
                     other => Err(InterpreterError::ExpectedListType {

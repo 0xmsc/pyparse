@@ -98,7 +98,7 @@ impl Backend for Interpreter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinaryOperator, Expression, Program, Statement};
+    use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
     fn identifier(name: &str) -> Expression {
         Expression::Identifier(name.to_string())
@@ -134,7 +134,7 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "n".to_string(),
+                    target: AssignTarget::Name("n".to_string()),
                     value: Expression::BinaryOp {
                         left: Box::new(int(1)),
                         op: BinaryOperator::Add,
@@ -177,7 +177,7 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "n".to_string(),
+                    target: AssignTarget::Name("n".to_string()),
                     value: int(0),
                 },
                 Statement::While {
@@ -187,7 +187,7 @@ mod tests {
                         right: Box::new(int(3)),
                     },
                     body: vec![Statement::Assign {
-                        name: "n".to_string(),
+                        target: AssignTarget::Name("n".to_string()),
                         value: Expression::BinaryOp {
                             left: Box::new(identifier("n")),
                             op: BinaryOperator::Add,
@@ -237,7 +237,7 @@ mod tests {
                     params: vec![],
                     body: vec![
                         Statement::Assign {
-                            name: "x".to_string(),
+                            target: AssignTarget::Name("x".to_string()),
                             value: int(42),
                         },
                         Statement::Return(None),
@@ -358,7 +358,7 @@ mod tests {
         let first_program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "x".to_string(),
+                    target: AssignTarget::Name("x".to_string()),
                     value: int(1),
                 },
                 print(vec![identifier("x")]),
@@ -411,7 +411,7 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "values".to_string(),
+                    target: AssignTarget::Name("values".to_string()),
                     value: Expression::List(vec![int(1), int(2)]),
                 },
                 Statement::If {
@@ -432,12 +432,14 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "values".to_string(),
+                    target: AssignTarget::Name("values".to_string()),
                     value: Expression::List(vec![int(1), int(2)]),
                 },
-                Statement::AssignIndex {
-                    name: "values".to_string(),
-                    index: int(1),
+                Statement::Assign {
+                    target: AssignTarget::Index {
+                        name: "values".to_string(),
+                        index: int(1),
+                    },
                     value: int(7),
                 },
                 print(vec![Expression::Index {

@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 
-use crate::ast::{BinaryOperator, Expression, Program, Statement};
+use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
@@ -80,15 +80,17 @@ fn compile_block(statements: &[Statement], in_function: bool) -> Result<Compiled
 fn compile_statement(statement: &Statement, in_function: bool) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
-        Statement::Assign { name, value } => {
-            code.extend(compile_expression(value)?);
-            code.push(Instruction::StoreName(name.to_string()));
-        }
-        Statement::AssignIndex { name, index, value } => {
-            code.extend(compile_expression(index)?);
-            code.extend(compile_expression(value)?);
-            code.push(Instruction::StoreIndex(name.to_string()));
-        }
+        Statement::Assign { target, value } => match target {
+            AssignTarget::Name(name) => {
+                code.extend(compile_expression(value)?);
+                code.push(Instruction::StoreName(name.to_string()));
+            }
+            AssignTarget::Index { name, index } => {
+                code.extend(compile_expression(index)?);
+                code.extend(compile_expression(value)?);
+                code.push(Instruction::StoreIndex(name.to_string()));
+            }
+        },
         Statement::If {
             condition,
             then_body,
@@ -206,7 +208,7 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
 #[cfg(test)]
 mod tests {
     use super::{Instruction, compile};
-    use crate::ast::{Expression, Program, Statement};
+    use crate::ast::{AssignTarget, Expression, Program, Statement};
 
     fn function(name: &str, body: Vec<Statement>) -> Statement {
         Statement::FunctionDef {
@@ -372,12 +374,14 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Assign {
-                    name: "values".to_string(),
+                    target: AssignTarget::Name("values".to_string()),
                     value: Expression::List(vec![Expression::Integer(1), Expression::Integer(2)]),
                 },
-                Statement::AssignIndex {
-                    name: "values".to_string(),
-                    index: Expression::Integer(1),
+                Statement::Assign {
+                    target: AssignTarget::Index {
+                        name: "values".to_string(),
+                        index: Expression::Integer(1),
+                    },
                     value: Expression::Integer(7),
                 },
                 Statement::Expr(call(

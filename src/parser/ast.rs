@@ -35,12 +35,7 @@ pub enum Statement {
         body: Vec<Statement>,
     },
     Assign {
-        name: String,
-        value: Expression,
-    },
-    AssignIndex {
-        name: String,
-        index: Expression,
+        target: AssignTarget,
         value: Expression,
     },
     While {
@@ -55,6 +50,12 @@ pub enum Statement {
     Return(Option<Expression>),
     Pass,
     Expr(Expression),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum AssignTarget {
+    Name(String),
+    Index { name: String, index: Expression },
 }
 
 #[derive(Debug, PartialEq, Clone)]

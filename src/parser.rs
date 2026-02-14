@@ -2,7 +2,7 @@ use thiserror::Error;
 
 pub mod ast;
 
-use self::ast::{BinaryOperator, Expression, Program, Statement};
+use self::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 use crate::lexer::{Span, Token, TokenKind};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -33,6 +33,8 @@ impl<'a> Parser<'a> {
         Ok(Self { tokens, pos: 0 })
     }
 
+    /// Parse a full token stream into a `Program`.
+    /// Example: `x = 1\nprint(x)\n`.
     pub fn parse_program(mut self) -> ParseResult<Program> {
         let mut statements = Vec::new();
         while !matches!(self.current_kind(), TokenKind::EOF) {
@@ -44,45 +46,24 @@ impl<'a> Parser<'a> {
         Ok(Program { statements })
     }
 
+    /// Parse one statement at the current token position.
+    /// Examples: `x = 1`, `if True: ...`, `print(x)`.
     fn parse_statement(&mut self) -> ParseResult<Statement> {
-        // Statements are top-level executable units in this language.
-        // Examples:
-        // - assignment: `x = 1`, `values[0] = 7`
-        // - control flow: `if ...:`, `while ...:`
-        // - declarations: `def f(...):`
-        // - flow markers: `return`, `pass`
-        // - expression statement: `print(x)` (an expression used as a statement)
-        if matches!(self.current_kind(), TokenKind::Def) {
-            return self.parse_function_def();
+        match (self.current_kind(), self.peek_kind()) {
+            (TokenKind::Def, _) => self.parse_function_def(),
+            (TokenKind::If, _) => self.parse_if(),
+            (TokenKind::While, _) => self.parse_while(),
+            (TokenKind::Return, _) => self.parse_return(),
+            (TokenKind::Pass, _) => self.parse_pass(),
+            (TokenKind::Identifier(_), TokenKind::Equal | TokenKind::LBracket) => {
+                self.parse_identifier_led_statement()
+            }
+            _ => self.parse_expression_statement(),
         }
-        if matches!(self.current_kind(), TokenKind::If) {
-            return self.parse_if();
-        }
-        if matches!(self.current_kind(), TokenKind::While) {
-            return self.parse_while();
-        }
-        if matches!(self.current_kind(), TokenKind::Return) {
-            return self.parse_return();
-        }
-        if matches!(self.current_kind(), TokenKind::Pass) {
-            return self.parse_pass();
-        }
-        if matches!(self.current_kind(), TokenKind::Identifier(_))
-            && matches!(self.peek_kind(), TokenKind::Equal)
-        {
-            return self.parse_assignment();
-        }
-        if matches!(self.current_kind(), TokenKind::Identifier(_))
-            && matches!(self.peek_kind(), TokenKind::LBracket)
-            && let Some(assignment) = self.try_parse_index_assignment()?
-        {
-            return Ok(assignment);
-        }
-        let expr = self.parse_expression()?;
-        self.expect_token(TokenKind::Newline, "newline")?;
-        Ok(Statement::Expr(expr))
     }
 
+    /// Parse a function definition statement.
+    /// Example: `def sum2(a, b):\n    return a + b\n`.
     fn parse_function_def(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Def, "def")?;
         let name = self.expect_identifier()?;
@@ -96,31 +77,37 @@ impl<'a> Parser<'a> {
         Ok(Statement::FunctionDef { name, params, body })
     }
 
-    fn parse_assignment(&mut self) -> ParseResult<Statement> {
-        let name = self.expect_identifier()?;
-        self.expect_token(TokenKind::Equal, "=")?;
-        let value = self.parse_expression()?;
-        self.expect_token(TokenKind::Newline, "newline")?;
-        Ok(Statement::Assign { name, value })
-    }
-
-    fn try_parse_index_assignment(&mut self) -> ParseResult<Option<Statement>> {
+    /// Parse statements that begin with an identifier.
+    /// Examples: `x = 1`, `values[1] = 7`, `print(x)`.
+    fn parse_identifier_led_statement(&mut self) -> ParseResult<Statement> {
         let checkpoint = self.pos;
-
         let name = self.expect_identifier()?;
-        self.expect_token(TokenKind::LBracket, "[")?;
-        let index = self.parse_expression()?;
-        self.expect_token(TokenKind::RBracket, "]")?;
+        let target = if self.try_consume(TokenKind::LBracket) {
+            let index = self.parse_expression()?;
+            self.expect_token(TokenKind::RBracket, "]")?;
+            AssignTarget::Index { name, index }
+        } else {
+            AssignTarget::Name(name)
+        };
         if !self.try_consume(TokenKind::Equal) {
             self.pos = checkpoint;
-            return Ok(None);
+            return self.parse_expression_statement();
         }
-
         let value = self.parse_expression()?;
         self.expect_token(TokenKind::Newline, "newline")?;
-        Ok(Some(Statement::AssignIndex { name, index, value }))
+        Ok(Statement::Assign { target, value })
     }
 
+    /// Parse an expression statement followed by newline.
+    /// Examples: `print(x)\n`, `f(1, 2)\n`, `values[0]\n`.
+    fn parse_expression_statement(&mut self) -> ParseResult<Statement> {
+        let expr = self.parse_expression()?;
+        self.expect_token(TokenKind::Newline, "newline")?;
+        Ok(Statement::Expr(expr))
+    }
+
+    /// Parse an `if` statement with optional `else` block.
+    /// Example: `if n < 1:\n    pass\nelse:\n    return 1\n`.
     fn parse_if(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::If, "if")?;
         let condition = self.parse_expression()?;
@@ -142,6 +129,8 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a `while` loop statement.
+    /// Example: `while n < 10:\n    n = n + 1\n`.
     fn parse_while(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::While, "while")?;
         let condition = self.parse_expression()?;
@@ -152,6 +141,8 @@ impl<'a> Parser<'a> {
         Ok(Statement::While { condition, body })
     }
 
+    /// Parse a `return` statement.
+    /// Examples: `return\n`, `return a + b\n`.
     fn parse_return(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Return, "return")?;
         if self.try_consume(TokenKind::Newline) {
@@ -162,30 +153,23 @@ impl<'a> Parser<'a> {
         Ok(Statement::Return(Some(value)))
     }
 
+    /// Parse a `pass` statement.
+    /// Example: `pass\n`.
     fn parse_pass(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Pass, "pass")?;
         self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Pass)
     }
 
+    /// Parse an expression with full precedence handling.
+    /// Example: `1 + 2 < 4 - 1`.
     fn parse_expression(&mut self) -> ParseResult<Expression> {
-        // Expressions compute and produce values.
-        // Examples:
-        // - literals: `1`, `"hi"`, `True`, `[1, 2]`
-        // - reads: `x`, `values[0]`
-        // - operators: `a + b`, `n < 10`
-        // - calls: `f(1, 2)`
-        //
-        // Expressions can appear inside statements, and can also form an
-        // expression statement (`Statement::Expr`) such as `print(x)`.
-        // Entry point for expressions: parse the lowest-precedence level.
-        // Example: `1 + 2 < 4 - 1` parses as `(1 + 2) < (4 - 1)`.
         self.parse_comparison()
     }
 
+    /// Parse comparison expressions (`<`) over additive expressions.
+    /// Example: `a + 1 < b - 2`.
     fn parse_comparison(&mut self) -> ParseResult<Expression> {
-        // Comparison level (`<`), with additive expressions as operands.
-        // Example: `a + 1 < b - 2`.
         let mut expr = self.parse_additive()?;
         while self.try_consume(TokenKind::Less) {
             let right = self.parse_additive()?;
@@ -198,9 +182,9 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Parse additive expressions (`+` and `-`) over postfix expressions.
+    /// Example: `a + b - c`.
     fn parse_additive(&mut self) -> ParseResult<Expression> {
-        // Additive level (`+`/`-`), with postfix/primary expressions as operands.
-        // Example: `a + b - c`.
         let mut expr = self.parse_postfix()?;
         loop {
             if self.try_consume(TokenKind::Plus) {
@@ -224,9 +208,9 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Parse postfix chains of calls and indexing.
+    /// Example: `foo()[0](1)`.
     fn parse_postfix(&mut self) -> ParseResult<Expression> {
-        // Postfix level parses call and index chains left-to-right.
-        // Example: `foo()[0](1)`.
         let mut expr = self.parse_primary()?;
         loop {
             if self.try_consume(TokenKind::LParen) {
@@ -250,6 +234,8 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Parse a comma-separated identifier list until `terminator`.
+    /// Example: `(a, b, c)` in function parameters.
     fn parse_identifier_list(
         &mut self,
         terminator: TokenKind<'static>,
@@ -267,6 +253,8 @@ impl<'a> Parser<'a> {
         Ok(identifiers)
     }
 
+    /// Parse a comma-separated expression list until `terminator`.
+    /// Example: `(1, x + 2)` or `[1, 2, 3]`.
     fn parse_expression_list(
         &mut self,
         terminator: TokenKind<'static>,
@@ -284,9 +272,9 @@ impl<'a> Parser<'a> {
         Ok(expressions)
     }
 
+    /// Parse primary expressions (literals, identifiers, grouped, list literals).
+    /// Examples: `42`, `name`, `(a + b)`, `[1, 2]`.
     fn parse_primary(&mut self) -> ParseResult<Expression> {
-        // Primary atoms: literals, identifiers, and parenthesized expressions.
-        // Example: `42`, `name`, or `(a + b)`.
         let expression = match self.current_kind() {
             TokenKind::Integer(value) => Expression::Integer(value),
             TokenKind::True => Expression::Boolean(true),
@@ -319,6 +307,8 @@ impl<'a> Parser<'a> {
         consumed
     }
 
+    /// Parse an indented statement block between `Indent` and `Dedent`.
+    /// Example body of `if`, `while`, or `def`.
     fn parse_indented_block(&mut self) -> ParseResult<Vec<Statement>> {
         self.expect_token(TokenKind::Indent, "indent")?;
 
@@ -397,6 +387,8 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// Parse a full token vector into a `Program`.
+/// Example: tokens for `x = 1\nprint(x)\n`.
 pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> ParseResult<Program> {
     Parser::new(tokens)?.parse_program()
 }
@@ -447,7 +439,7 @@ mod tests {
                     params: vec![],
                     body: vec![
                         Statement::Assign {
-                            name: "n".to_string(),
+                            target: AssignTarget::Name("n".to_string()),
                             value: Expression::BinaryOp {
                                 left: Box::new(Expression::Integer(4)),
                                 op: BinaryOperator::Add,
@@ -539,7 +531,7 @@ mod tests {
                 Statement::While {
                     condition: Expression::Boolean(false),
                     body: vec![Statement::Assign {
-                        name: "x".to_string(),
+                        target: AssignTarget::Name("x".to_string()),
                         value: Expression::Integer(1),
                     }],
                 },
@@ -676,9 +668,11 @@ mod tests {
             program,
             Program {
                 statements: vec![
-                    Statement::AssignIndex {
-                        name: "values".to_string(),
-                        index: Expression::Integer(1),
+                    Statement::Assign {
+                        target: AssignTarget::Index {
+                            name: "values".to_string(),
+                            index: Expression::Integer(1),
+                        },
                         value: Expression::Integer(7),
                     },
                     Statement::Expr(Expression::Call {
