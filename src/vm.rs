@@ -528,45 +528,34 @@ impl VmRuntime<'_> {
                 self.stack = parent_stack;
                 result
             }
-            Value::BoundMethod { receiver, method } => {
-                self.call_bound_method(*receiver, method, args)
-            }
-            other => Err(VmError::ObjectNotCallable {
-                type_name: other.type_name().to_string(),
-            }),
-        }
-    }
-
-    fn call_bound_method(
-        &self,
-        receiver: Value,
-        method: String,
-        mut args: Vec<Value>,
-    ) -> VmResult<Value> {
-        match receiver {
-            Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                match method.as_str() {
-                    "append" => {
-                        if args.len() != 1 {
-                            return Err(VmError::MethodArityMismatch {
-                                method: "append".to_string(),
-                                expected: 1,
-                                found: args.len(),
-                            });
+            Value::BoundMethod { receiver, method } => match *receiver {
+                Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
+                    match method.as_str() {
+                        "append" => {
+                            if args.len() != 1 {
+                                return Err(VmError::MethodArityMismatch {
+                                    method: "append".to_string(),
+                                    expected: 1,
+                                    found: args.len(),
+                                });
+                            }
+                            let mut borrowed = object.borrow_mut();
+                            let ObjectKind::List(values) = &mut borrowed.kind;
+                            values.push(args.into_iter().next().expect("len checked above"));
+                            Ok(Value::None)
                         }
-                        let mut borrowed = object.borrow_mut();
-                        let ObjectKind::List(values) = &mut borrowed.kind;
-                        values.push(args.pop().expect("len checked above"));
-                        Ok(Value::None)
+                        _ => Err(VmError::UnknownMethod {
+                            method,
+                            type_name: "list".to_string(),
+                        }),
                     }
-                    _ => Err(VmError::UnknownMethod {
-                        method,
-                        type_name: "list".to_string(),
-                    }),
                 }
-            }
-            other => Err(VmError::UnknownMethod {
-                method,
+                other => Err(VmError::UnknownMethod {
+                    method,
+                    type_name: other.type_name().to_string(),
+                }),
+            },
+            other => Err(VmError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
         }

@@ -369,44 +369,34 @@ impl<'a> InterpreterRuntime<'a> {
                     ExecResult::Return(value) => Ok(value),
                 }
             }
-            Value::BoundMethod { receiver, method } => {
-                Self::call_bound_method(*receiver, method, args)
-            }
-            other => Err(InterpreterError::ObjectNotCallable {
-                type_name: other.type_name().to_string(),
-            }),
-        }
-    }
-
-    fn call_bound_method(
-        receiver: Value,
-        method: String,
-        mut args: Vec<Value>,
-    ) -> std::result::Result<Value, InterpreterError> {
-        match receiver {
-            Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
-                match method.as_str() {
-                    "append" => {
-                        if args.len() != 1 {
-                            return Err(InterpreterError::MethodArityMismatch {
-                                method: "append".to_string(),
-                                expected: 1,
-                                found: args.len(),
-                            });
+            Value::BoundMethod { receiver, method } => match *receiver {
+                Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
+                    match method.as_str() {
+                        "append" => {
+                            if args.len() != 1 {
+                                return Err(InterpreterError::MethodArityMismatch {
+                                    method: "append".to_string(),
+                                    expected: 1,
+                                    found: args.len(),
+                                });
+                            }
+                            let mut borrowed = object.borrow_mut();
+                            let ObjectKind::List(values) = &mut borrowed.kind;
+                            values.push(args.into_iter().next().expect("len checked above"));
+                            Ok(Value::None)
                         }
-                        let mut borrowed = object.borrow_mut();
-                        let ObjectKind::List(values) = &mut borrowed.kind;
-                        values.push(args.pop().expect("len checked above"));
-                        Ok(Value::None)
+                        _ => Err(InterpreterError::UnknownMethod {
+                            method,
+                            type_name: "list".to_string(),
+                        }),
                     }
-                    _ => Err(InterpreterError::UnknownMethod {
-                        method,
-                        type_name: "list".to_string(),
-                    }),
                 }
-            }
-            other => Err(InterpreterError::UnknownMethod {
-                method,
+                other => Err(InterpreterError::UnknownMethod {
+                    method,
+                    type_name: other.type_name().to_string(),
+                }),
+            },
+            other => Err(InterpreterError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
         }
