@@ -278,8 +278,28 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let value = self.load_attribute(object, attribute)?;
-                    self.stack.push(value);
+                    if let Value::Object(object_ref) = &object {
+                        let method = ObjectWrapper::new(object_ref.clone())
+                            .get_attribute_method_name(&attribute)
+                            .map_err(|error| match error {
+                                AttributeError::UnknownAttribute {
+                                    attribute,
+                                    type_name,
+                                } => VmError::UnknownAttribute {
+                                    attribute,
+                                    type_name,
+                                },
+                            })?;
+                        self.stack.push(Value::BoundMethod {
+                            receiver: Box::new(object),
+                            method,
+                        });
+                    } else {
+                        return Err(VmError::UnknownAttribute {
+                            attribute,
+                            type_name: object.type_name().to_string(),
+                        });
+                    }
                 }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
@@ -311,9 +331,16 @@ impl VmRuntime<'_> {
                             });
                         }
                     };
-                    let value = ObjectWrapper::new(object)
-                        .get_item(index_raw)
-                        .map_err(Self::map_list_error)?;
+                    let value = ObjectWrapper::new(object).get_item(index_raw).map_err(
+                        |error| match error {
+                            ListError::NegativeIndex { index } => {
+                                VmError::NegativeListIndex { index }
+                            }
+                            ListError::OutOfBounds { index, len } => {
+                                VmError::ListIndexOutOfBounds { index, len }
+                            }
+                        },
+                    )?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
@@ -333,7 +360,14 @@ impl VmRuntime<'_> {
                     };
                     ObjectWrapper::new(object)
                         .set_item(index_raw, value)
-                        .map_err(Self::map_list_error)?;
+                        .map_err(|error| match error {
+                            ListError::NegativeIndex { index } => {
+                                VmError::NegativeListIndex { index }
+                            }
+                            ListError::OutOfBounds { index, len } => {
+                                VmError::ListIndexOutOfBounds { index, len }
+                            }
+                        })?;
                 }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
@@ -377,22 +411,6 @@ impl VmRuntime<'_> {
 
     fn pop_stack(&mut self) -> VmResult<Value> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
-    }
-
-    fn load_attribute(&self, object: Value, attribute: String) -> VmResult<Value> {
-        if let Value::Object(object_ref) = &object {
-            let method = ObjectWrapper::new(object_ref.clone())
-                .get_attribute_method_name(&attribute)
-                .map_err(Self::map_attribute_error)?;
-            return Ok(Value::BoundMethod {
-                receiver: Box::new(object),
-                method,
-            });
-        }
-        Err(VmError::UnknownAttribute {
-            attribute,
-            type_name: object.type_name().to_string(),
-        })
     }
 
     fn call_value(
@@ -452,7 +470,20 @@ impl VmRuntime<'_> {
                 Value::Object(object) => {
                     ObjectWrapper::new(object.clone())
                         .call_method(&method, args)
-                        .map_err(Self::map_method_error)?;
+                        .map_err(|error| match error {
+                            MethodError::ArityMismatch {
+                                method,
+                                expected,
+                                found,
+                            } => VmError::MethodArityMismatch {
+                                method,
+                                expected,
+                                found,
+                            },
+                            MethodError::UnknownMethod { method, type_name } => {
+                                VmError::UnknownMethod { method, type_name }
+                            }
+                        })?;
                     Ok(Value::None)
                 }
                 other => Err(VmError::UnknownMethod {
@@ -463,42 +494,6 @@ impl VmRuntime<'_> {
             other => Err(VmError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
-        }
-    }
-
-    fn map_list_error(error: ListError) -> VmError {
-        match error {
-            ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
-            ListError::OutOfBounds { index, len } => VmError::ListIndexOutOfBounds { index, len },
-        }
-    }
-
-    fn map_attribute_error(error: AttributeError) -> VmError {
-        match error {
-            AttributeError::UnknownAttribute {
-                attribute,
-                type_name,
-            } => VmError::UnknownAttribute {
-                attribute,
-                type_name,
-            },
-        }
-    }
-
-    fn map_method_error(error: MethodError) -> VmError {
-        match error {
-            MethodError::ArityMismatch {
-                method,
-                expected,
-                found,
-            } => VmError::MethodArityMismatch {
-                method,
-                expected,
-                found,
-            },
-            MethodError::UnknownMethod { method, type_name } => {
-                VmError::UnknownMethod { method, type_name }
-            }
         }
     }
 }

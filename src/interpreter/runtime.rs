@@ -119,7 +119,14 @@ impl<'a> InterpreterRuntime<'a> {
                             Value::Object(object) => {
                                 ObjectWrapper::new(object.clone())
                                     .set_item(raw_index, value)
-                                    .map_err(Self::map_list_error)?;
+                                    .map_err(|error| match error {
+                                        ListError::NegativeIndex { index } => {
+                                            InterpreterError::NegativeListIndex { index }
+                                        }
+                                        ListError::OutOfBounds { index, len } => {
+                                            InterpreterError::ListIndexOutOfBounds { index, len }
+                                        }
+                                    })?;
                             }
                             other => {
                                 return Err(InterpreterError::ExpectedListType {
@@ -203,7 +210,14 @@ impl<'a> InterpreterRuntime<'a> {
                 match object {
                     Value::Object(object) => ObjectWrapper::new(object.clone())
                         .get_item(raw_index)
-                        .map_err(Self::map_list_error),
+                        .map_err(|error| match error {
+                            ListError::NegativeIndex { index } => {
+                                InterpreterError::NegativeListIndex { index }
+                            }
+                            ListError::OutOfBounds { index, len } => {
+                                InterpreterError::ListIndexOutOfBounds { index, len }
+                            }
+                        }),
                     other => Err(InterpreterError::ExpectedListType {
                         got: format!("{other:?}"),
                     }),
@@ -232,7 +246,29 @@ impl<'a> InterpreterRuntime<'a> {
             }
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
-                Self::load_attribute(object, name.to_string())
+                let attribute = name.to_string();
+                if let Value::Object(object_ref) = &object {
+                    let method = ObjectWrapper::new(object_ref.clone())
+                        .get_attribute_method_name(&attribute)
+                        .map_err(|error| match error {
+                            AttributeError::UnknownAttribute {
+                                attribute,
+                                type_name,
+                            } => InterpreterError::UnknownAttribute {
+                                attribute,
+                                type_name,
+                            },
+                        })?;
+                    Ok(Value::BoundMethod {
+                        receiver: Box::new(object),
+                        method,
+                    })
+                } else {
+                    Err(InterpreterError::UnknownAttribute {
+                        attribute,
+                        type_name: object.type_name().to_string(),
+                    })
+                }
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -272,25 +308,6 @@ impl<'a> InterpreterRuntime<'a> {
             });
         }
         self.eval_expression(callee, environment)
-    }
-
-    fn load_attribute(
-        object: Value,
-        attribute: String,
-    ) -> std::result::Result<Value, InterpreterError> {
-        if let Value::Object(object_ref) = &object {
-            let method = ObjectWrapper::new(object_ref.clone())
-                .get_attribute_method_name(&attribute)
-                .map_err(Self::map_attribute_error)?;
-            return Ok(Value::BoundMethod {
-                receiver: Box::new(object),
-                method,
-            });
-        }
-        Err(InterpreterError::UnknownAttribute {
-            attribute,
-            type_name: object.type_name().to_string(),
-        })
     }
 
     fn call_value(
@@ -348,7 +365,20 @@ impl<'a> InterpreterRuntime<'a> {
                 Value::Object(object) => {
                     ObjectWrapper::new(object.clone())
                         .call_method(&method, args)
-                        .map_err(Self::map_method_error)?;
+                        .map_err(|error| match error {
+                            MethodError::ArityMismatch {
+                                method,
+                                expected,
+                                found,
+                            } => InterpreterError::MethodArityMismatch {
+                                method,
+                                expected,
+                                found,
+                            },
+                            MethodError::UnknownMethod { method, type_name } => {
+                                InterpreterError::UnknownMethod { method, type_name }
+                            }
+                        })?;
                     Ok(Value::None)
                 }
                 other => Err(InterpreterError::UnknownMethod {
@@ -359,44 +389,6 @@ impl<'a> InterpreterRuntime<'a> {
             other => Err(InterpreterError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
             }),
-        }
-    }
-
-    fn map_list_error(error: ListError) -> InterpreterError {
-        match error {
-            ListError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
-            ListError::OutOfBounds { index, len } => {
-                InterpreterError::ListIndexOutOfBounds { index, len }
-            }
-        }
-    }
-
-    fn map_attribute_error(error: AttributeError) -> InterpreterError {
-        match error {
-            AttributeError::UnknownAttribute {
-                attribute,
-                type_name,
-            } => InterpreterError::UnknownAttribute {
-                attribute,
-                type_name,
-            },
-        }
-    }
-
-    fn map_method_error(error: MethodError) -> InterpreterError {
-        match error {
-            MethodError::ArityMismatch {
-                method,
-                expected,
-                found,
-            } => InterpreterError::MethodArityMismatch {
-                method,
-                expected,
-                found,
-            },
-            MethodError::UnknownMethod { method, type_name } => {
-                InterpreterError::UnknownMethod { method, type_name }
-            }
         }
     }
 }
