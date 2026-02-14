@@ -1,10 +1,47 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::collections::HashMap;
+use thiserror::Error;
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
+
+type VmResult<T> = std::result::Result<T, VmError>;
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+enum VmError {
+    #[error("Stack underflow")]
+    StackUnderflow,
+    #[error("Expected integer, got {got}")]
+    ExpectedIntegerType { got: String },
+    #[error("Expected list, got {got}")]
+    ExpectedListType { got: String },
+    #[error("Undefined variable '{name}'")]
+    UndefinedVariable { name: String },
+    #[error("Undefined function '{name}'")]
+    UndefinedFunction { name: String },
+    #[error("Function '{name}' expected {expected} arguments, got {found}")]
+    FunctionArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("List index must be non-negative, got {index}")]
+    NegativeListIndex { index: i64 },
+    #[error("List index out of bounds: index {index}, len {len}")]
+    ListIndexOutOfBounds { index: usize, len: usize },
+    #[error("Method '{method}' expected {expected} arguments, got {found}")]
+    MethodArityMismatch {
+        method: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("Unknown method '{method}' for type {type_name}")]
+    UnknownMethod { method: String, type_name: String },
+    #[error("Invalid jump target")]
+    InvalidJumpTarget,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
@@ -16,26 +53,32 @@ enum Value {
 }
 
 impl Value {
-    fn as_int(&self) -> Result<i64> {
+    fn as_int(&self) -> VmResult<i64> {
         match self {
             Value::Integer(value) => Ok(*value),
             Value::Boolean(_) | Value::String(_) | Value::List(_) | Value::None => {
-                bail!("Expected integer, got {self:?}")
+                Err(VmError::ExpectedIntegerType {
+                    got: format!("{self:?}"),
+                })
             }
         }
     }
 
-    fn as_list(&self) -> Result<&Vec<Value>> {
+    fn as_list(&self) -> VmResult<&Vec<Value>> {
         match self {
             Value::List(values) => Ok(values),
-            other => bail!("Expected list, got {other:?}"),
+            other => Err(VmError::ExpectedListType {
+                got: format!("{other:?}"),
+            }),
         }
     }
 
-    fn as_list_mut(&mut self) -> Result<&mut Vec<Value>> {
+    fn as_list_mut(&mut self) -> VmResult<&mut Vec<Value>> {
         match self {
             Value::List(values) => Ok(values),
-            other => bail!("Expected list, got {other:?}"),
+            other => Err(VmError::ExpectedListType {
+                got: format!("{other:?}"),
+            }),
         }
     }
 
@@ -90,16 +133,9 @@ impl VM {
         }
     }
 
-    fn execute_program(&mut self, program: &CompiledProgram) -> Result<()> {
+    fn run_compiled(&mut self, program: &CompiledProgram) -> VmResult<String> {
         let mut stack = Vec::new();
         self.execute_code(&program.main, &mut stack, None, program)?;
-        Ok(())
-    }
-
-    pub fn run_compiled(&mut self, program: &CompiledProgram) -> Result<String> {
-        self.globals.clear();
-        self.output.clear();
-        self.execute_program(program)?;
         Ok(self.output.join("\n"))
     }
 
@@ -109,7 +145,7 @@ impl VM {
         stack: &mut Vec<Value>,
         mut locals: Option<&mut HashMap<String, Value>>,
         program: &CompiledProgram,
-    ) -> Result<Value> {
+    ) -> VmResult<Value> {
         let mut ip = 0;
         loop {
             let instruction = match code.get(ip) {
@@ -124,9 +160,7 @@ impl VM {
                 Instruction::BuildList(count) => {
                     let mut values = Vec::with_capacity(count);
                     for _ in 0..count {
-                        let value = stack
-                            .pop()
-                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        let value = Self::pop_stack(stack)?;
                         values.push(value);
                     }
                     values.reverse();
@@ -144,80 +178,54 @@ impl VM {
                         .globals
                         .get(&name)
                         .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("Undefined variable '{name}'"))?;
+                        .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
                     stack.push(value);
                 }
                 Instruction::StoreName(name) => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    if let Some(locals) = locals.as_mut() {
-                        locals.insert(name, value);
-                    } else {
-                        self.globals.insert(name, value);
-                    }
+                    let value = Self::pop_stack(stack)?;
+                    Self::store_name(&mut locals, &mut self.globals, name, value);
                 }
                 Instruction::Add => {
-                    let right = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    let left = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let right = Self::pop_stack(stack)?;
+                    let left = Self::pop_stack(stack)?;
                     let result = left.as_int()? + right.as_int()?;
                     stack.push(Value::Integer(result));
                 }
                 Instruction::Sub => {
-                    let right = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    let left = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let right = Self::pop_stack(stack)?;
+                    let left = Self::pop_stack(stack)?;
                     let result = left.as_int()? - right.as_int()?;
                     stack.push(Value::Integer(result));
                 }
                 Instruction::LessThan => {
-                    let right = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    let left = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let right = Self::pop_stack(stack)?;
+                    let left = Self::pop_stack(stack)?;
                     let result = left.as_int()? < right.as_int()?;
                     stack.push(Value::Boolean(result));
                 }
                 Instruction::LoadIndex => {
-                    let index_value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    let object = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let index_value = Self::pop_stack(stack)?;
+                    let object = Self::pop_stack(stack)?;
                     let index_raw = index_value.as_int()?;
                     if index_raw < 0 {
-                        bail!("List index must be non-negative, got {index_raw}");
+                        return Err(VmError::NegativeListIndex { index: index_raw });
                     }
                     let index = index_raw as usize;
                     let values = object.as_list()?;
-                    let value = values.get(index).cloned().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "List index out of bounds: index {index}, len {}",
-                            values.len()
-                        )
+                    let value = values.get(index).cloned().ok_or({
+                        VmError::ListIndexOutOfBounds {
+                            index,
+                            len: values.len(),
+                        }
                     })?;
                     stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                    let index_value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let value = Self::pop_stack(stack)?;
+                    let index_value = Self::pop_stack(stack)?;
                     let index_raw = index_value.as_int()?;
                     if index_raw < 0 {
-                        bail!("List index must be non-negative, got {index_raw}");
+                        return Err(VmError::NegativeListIndex { index: index_raw });
                     }
                     let index = index_raw as usize;
                     let target = if let Some(locals) = locals.as_mut() {
@@ -229,13 +237,13 @@ impl VM {
                     } else {
                         self.globals.get_mut(&name)
                     }
-                    .ok_or_else(|| anyhow::anyhow!("Undefined variable '{name}'"))?;
+                    .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
                     let values = target.as_list_mut()?;
                     if index >= values.len() {
-                        bail!(
-                            "List index out of bounds: index {index}, len {}",
-                            values.len()
-                        );
+                        return Err(VmError::ListIndexOutOfBounds {
+                            index,
+                            len: values.len(),
+                        });
                     }
                     values[index] = value;
                 }
@@ -245,9 +253,7 @@ impl VM {
                             BuiltinFunction::Print => {
                                 let mut values = Vec::with_capacity(argc);
                                 for _ in 0..argc {
-                                    let value = stack
-                                        .pop()
-                                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                                    let value = Self::pop_stack(stack)?;
                                     values.push(value.to_output());
                                 }
                                 values.reverse();
@@ -257,11 +263,13 @@ impl VM {
                             }
                             BuiltinFunction::Len => {
                                 if argc != 1 {
-                                    bail!("Function 'len' expected 1 arguments, got {argc}");
+                                    return Err(VmError::FunctionArityMismatch {
+                                        name: "len".to_string(),
+                                        expected: 1,
+                                        found: argc,
+                                    });
                                 }
-                                let value = stack
-                                    .pop()
-                                    .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                                let value = Self::pop_stack(stack)?;
                                 let values = value.as_list()?;
                                 stack.push(Value::Integer(values.len() as i64));
                                 continue;
@@ -271,19 +279,18 @@ impl VM {
                     let function = program
                         .functions
                         .get(&name)
-                        .ok_or_else(|| anyhow::anyhow!("Undefined function '{name}'"))?
+                        .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
                         .clone();
                     if argc != function.params.len() {
-                        bail!(
-                            "Function '{name}' expected {} arguments, got {argc}",
-                            function.params.len()
-                        );
+                        return Err(VmError::FunctionArityMismatch {
+                            name,
+                            expected: function.params.len(),
+                            found: argc,
+                        });
                     }
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
-                        let value = stack
-                            .pop()
-                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        let value = Self::pop_stack(stack)?;
                         args.push(value);
                     }
                     args.reverse();
@@ -306,9 +313,7 @@ impl VM {
                 } => {
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
-                        let value = stack
-                            .pop()
-                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                        let value = Self::pop_stack(stack)?;
                         args.push(value);
                     }
                     args.reverse();
@@ -321,32 +326,61 @@ impl VM {
                     } else {
                         self.globals.get_mut(&receiver)
                     }
-                    .ok_or_else(|| anyhow::anyhow!("Undefined variable '{receiver}'"))?;
+                    .ok_or_else(|| VmError::UndefinedVariable {
+                        name: receiver.clone(),
+                    })?;
                     match target {
                         Value::List(values) => match method.as_str() {
                             "append" => {
                                 if argc != 1 {
-                                    bail!("Method 'append' expected 1 arguments, got {argc}");
+                                    return Err(VmError::MethodArityMismatch {
+                                        method: "append".to_string(),
+                                        expected: 1,
+                                        found: argc,
+                                    });
                                 }
                                 values.push(args.pop().expect("argc checked above"));
                                 stack.push(Value::None);
                             }
-                            _ => bail!("Unknown method '{method}' for type list"),
+                            _ => {
+                                return Err(VmError::UnknownMethod {
+                                    method,
+                                    type_name: "list".to_string(),
+                                });
+                            }
                         },
-                        Value::Integer(_) => bail!("Unknown method '{method}' for type int"),
-                        Value::Boolean(_) => bail!("Unknown method '{method}' for type bool"),
-                        Value::String(_) => bail!("Unknown method '{method}' for type str"),
-                        Value::None => bail!("Unknown method '{method}' for type NoneType"),
+                        Value::Integer(_) => {
+                            return Err(VmError::UnknownMethod {
+                                method,
+                                type_name: "int".to_string(),
+                            });
+                        }
+                        Value::Boolean(_) => {
+                            return Err(VmError::UnknownMethod {
+                                method,
+                                type_name: "bool".to_string(),
+                            });
+                        }
+                        Value::String(_) => {
+                            return Err(VmError::UnknownMethod {
+                                method,
+                                type_name: "str".to_string(),
+                            });
+                        }
+                        Value::None => {
+                            return Err(VmError::UnknownMethod {
+                                method,
+                                type_name: "NoneType".to_string(),
+                            });
+                        }
                     }
                 }
                 Instruction::JumpIfFalse(target) => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let value = Self::pop_stack(stack)?;
                     if !value.is_truthy() {
                         let next_ip = (ip as isize) + target;
                         if next_ip < 0 || (next_ip as usize) > code.len() {
-                            bail!("Invalid jump target");
+                            return Err(VmError::InvalidJumpTarget);
                         }
                         ip = next_ip as usize;
                     }
@@ -354,23 +388,36 @@ impl VM {
                 Instruction::Jump(target) => {
                     let next_ip = (ip as isize) + target;
                     if next_ip < 0 || (next_ip as usize) > code.len() {
-                        bail!("Invalid jump target");
+                        return Err(VmError::InvalidJumpTarget);
                     }
                     ip = next_ip as usize;
                 }
                 Instruction::Pop => {
-                    stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    Self::pop_stack(stack)?;
                 }
                 Instruction::Return => return Ok(Value::None),
                 Instruction::ReturnValue => {
-                    let value = stack
-                        .pop()
-                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let value = Self::pop_stack(stack)?;
                     return Ok(value);
                 }
             }
+        }
+    }
+
+    fn pop_stack(stack: &mut Vec<Value>) -> VmResult<Value> {
+        stack.pop().ok_or(VmError::StackUnderflow)
+    }
+
+    fn store_name(
+        locals: &mut Option<&mut HashMap<String, Value>>,
+        globals: &mut HashMap<String, Value>,
+        name: String,
+        value: Value,
+    ) {
+        if let Some(locals) = locals.as_mut() {
+            locals.insert(name, value);
+        } else {
+            globals.insert(name, value);
         }
     }
 }
@@ -390,7 +437,7 @@ impl Backend for VM {
 impl PreparedBackend for PreparedVM {
     fn run(&self) -> Result<String> {
         let mut vm = VM::new();
-        vm.run_compiled(&self.compiled)
+        Ok(vm.run_compiled(&self.compiled)?)
     }
 }
 
