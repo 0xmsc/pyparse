@@ -333,6 +333,7 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenKind::Dedent, "dedent")?;
         Ok(body)
     }
+
     fn expect_identifier(&mut self) -> ParseResult<String> {
         if let TokenKind::Identifier(name) = self.current_kind() {
             self.advance();
