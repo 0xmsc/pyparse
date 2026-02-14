@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod backend;
+pub(crate) mod builtins;
 pub(crate) mod bytecode;
 pub mod fixtures;
 pub mod interpreter;

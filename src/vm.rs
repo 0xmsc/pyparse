@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
+use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,19 +152,24 @@ impl VM {
                     let result = left.as_int()? < right.as_int()?;
                     stack.push(Value::Boolean(result));
                 }
-                Instruction::CallBuiltinPrint(argc) => {
-                    let mut values = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        let value = stack
-                            .pop()
-                            .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
-                        values.push(value.to_output());
-                    }
-                    values.reverse();
-                    self.output.push(values.join(" "));
-                    stack.push(Value::None);
-                }
                 Instruction::CallFunction { name, argc } => {
+                    if let Some(builtin) = BuiltinFunction::from_name(&name) {
+                        match builtin {
+                            BuiltinFunction::Print => {
+                                let mut values = Vec::with_capacity(argc);
+                                for _ in 0..argc {
+                                    let value = stack
+                                        .pop()
+                                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                                    values.push(value.to_output());
+                                }
+                                values.reverse();
+                                self.output.push(values.join(" "));
+                                stack.push(Value::None);
+                                continue;
+                            }
+                        }
+                    }
                     let function = program
                         .functions
                         .get(&name)

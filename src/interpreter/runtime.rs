@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{BinaryOperator, Expression, Statement};
+use crate::builtins::BuiltinFunction;
 
 use super::{Function, InterpreterError, Value};
 
@@ -193,38 +194,40 @@ impl<'a> InterpreterRuntime<'a> {
         }
 
         match callee {
-            Expression::Identifier(name) => match name.as_str() {
-                "print" => {
-                    let outputs: Vec<String> =
-                        evaluated_args.iter().map(Value::to_output).collect();
-                    self.output.push(outputs.join(" "));
-                    Ok(Value::None)
-                }
-                _ => {
-                    let function = self.functions.get(name).cloned().ok_or_else(|| {
-                        InterpreterError::UndefinedFunction {
-                            name: name.to_string(),
+            Expression::Identifier(name) => {
+                if let Some(builtin) = BuiltinFunction::from_name(name) {
+                    match builtin {
+                        BuiltinFunction::Print => {
+                            let outputs: Vec<String> =
+                                evaluated_args.iter().map(Value::to_output).collect();
+                            self.output.push(outputs.join(" "));
+                            return Ok(Value::None);
                         }
-                    })?;
-                    if evaluated_args.len() != function.params.len() {
-                        return Err(InterpreterError::FunctionArityMismatch {
-                            name: name.to_string(),
-                            expected: function.params.len(),
-                            found: evaluated_args.len(),
-                        });
-                    }
-                    let mut local_scope = HashMap::new();
-                    for (param, value) in function.params.iter().zip(evaluated_args) {
-                        local_scope.insert(param.clone(), value);
-                    }
-                    // Function calls switch from expression evaluation back to statement execution.
-                    let mut local_environment = environment.child_with_locals(&mut local_scope);
-                    match self.exec_block(&function.body, &mut local_environment)? {
-                        ExecResult::Continue => Ok(Value::None),
-                        ExecResult::Return(value) => Ok(value),
                     }
                 }
-            },
+                let function = self.functions.get(name).cloned().ok_or_else(|| {
+                    InterpreterError::UndefinedFunction {
+                        name: name.to_string(),
+                    }
+                })?;
+                if evaluated_args.len() != function.params.len() {
+                    return Err(InterpreterError::FunctionArityMismatch {
+                        name: name.to_string(),
+                        expected: function.params.len(),
+                        found: evaluated_args.len(),
+                    });
+                }
+                let mut local_scope = HashMap::new();
+                for (param, value) in function.params.iter().zip(evaluated_args) {
+                    local_scope.insert(param.clone(), value);
+                }
+                // Function calls switch from expression evaluation back to statement execution.
+                let mut local_environment = environment.child_with_locals(&mut local_scope);
+                match self.exec_block(&function.body, &mut local_environment)? {
+                    ExecResult::Continue => Ok(Value::None),
+                    ExecResult::Return(value) => Ok(value),
+                }
+            }
             _ => Err(InterpreterError::NonIdentifierCallTarget),
         }
     }

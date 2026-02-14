@@ -9,6 +9,7 @@ use self::c_runtime::{
 };
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
+use crate::builtins::BuiltinFunction;
 
 mod c_runtime;
 
@@ -273,22 +274,25 @@ impl Transpiler {
                 }
             }
             Expression::Call { callee, args } => match callee.as_ref() {
-                Expression::Identifier(name) if name == "print" => {
-                    if args.is_empty() {
-                        Ok("builtin_print(NULL, 0)".to_string())
-                    } else {
-                        let mut rendered_args = Vec::with_capacity(args.len());
-                        for arg in args {
-                            rendered_args.push(self.emit_expression(arg)?);
-                        }
-                        Ok(format!(
-                            "builtin_print((Value[]){{{}}}, {})",
-                            rendered_args.join(", "),
-                            args.len()
-                        ))
-                    }
-                }
                 Expression::Identifier(name) => {
+                    if let Some(builtin) = BuiltinFunction::from_name(name) {
+                        match builtin {
+                            BuiltinFunction::Print => {
+                                if args.is_empty() {
+                                    return Ok("builtin_print(NULL, 0)".to_string());
+                                }
+                                let mut rendered_args = Vec::with_capacity(args.len());
+                                for arg in args {
+                                    rendered_args.push(self.emit_expression(arg)?);
+                                }
+                                return Ok(format!(
+                                    "builtin_print((Value[]){{{}}}, {})",
+                                    rendered_args.join(", "),
+                                    args.len()
+                                ));
+                            }
+                        }
+                    }
                     if args.is_empty() {
                         Ok(format!("{name}()"))
                     } else {

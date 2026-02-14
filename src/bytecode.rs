@@ -14,7 +14,6 @@ pub enum Instruction {
     Add,
     Sub,
     LessThan,
-    CallBuiltinPrint(usize),
     CallFunction { name: String, argc: usize },
     JumpIfFalse(usize),
     Jump(usize),
@@ -167,12 +166,6 @@ fn compile_expression(expr: &Expression, code: &mut Vec<Instruction>) -> Result<
             }
         }
         Expression::Call { callee, args } => match callee.as_ref() {
-            Expression::Identifier(name) if name == "print" => {
-                for arg in args {
-                    compile_expression(arg, code)?;
-                }
-                code.push(Instruction::CallBuiltinPrint(args.len()));
-            }
             Expression::Identifier(name) => {
                 for arg in args {
                     compile_expression(arg, code)?;
@@ -247,7 +240,10 @@ mod tests {
         let compiled = compile(&program).expect("compile should succeed");
         assert!(compiled.functions.is_empty());
         assert_eq!(compiled.main.len(), 2);
-        assert!(matches!(compiled.main[0], Instruction::CallBuiltinPrint(0)));
+        assert!(matches!(
+            compiled.main[0],
+            Instruction::CallFunction { ref name, argc } if name == "print" && argc == 0
+        ));
         assert!(matches!(compiled.main[1], Instruction::Pop));
     }
 

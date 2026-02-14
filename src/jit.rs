@@ -10,6 +10,7 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
+use crate::builtins::BuiltinFunction;
 use crate::bytecode::{Instruction, compile};
 
 type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
@@ -853,33 +854,43 @@ fn define_function(
                 builder.switch_to_block(ok_block);
                 push_value(&mut builder, result);
             }
-            Instruction::CallBuiltinPrint(argc) => {
-                let values_base = if *argc == 0 {
-                    builder.ins().iconst(ptr_type, 0)
-                } else {
-                    let args_slot =
-                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            (*argc as u32) * (ptr_size as u32),
-                            ptr_align_shift,
-                        ));
-                    let args_base = builder.ins().stack_addr(ptr_type, args_slot, 0);
-                    for idx in (0..*argc).rev() {
-                        let value = pop_value(&mut builder);
-                        let arg_addr = builder.ins().iadd_imm(args_base, (idx as i64) * ptr_size);
-                        builder.ins().store(MemFlags::new(), value, arg_addr, 0);
-                    }
-                    args_base
-                };
-                let argc_value = builder.ins().iconst(types::I64, *argc as i64);
-                let call = builder
-                    .ins()
-                    .call(print, &[ctx_param, values_base, argc_value]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
             Instruction::CallFunction { name, argc } => {
-                if let Some(&callee_id) = function_ids.get(name) {
+                let mut handled_builtin = false;
+                if let Some(builtin) = BuiltinFunction::from_name(name) {
+                    match builtin {
+                        BuiltinFunction::Print => {
+                            let values_base = if *argc == 0 {
+                                builder.ins().iconst(ptr_type, 0)
+                            } else {
+                                let args_slot = builder.create_sized_stack_slot(
+                                    cranelift_codegen::ir::StackSlotData::new(
+                                        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                        (*argc as u32) * (ptr_size as u32),
+                                        ptr_align_shift,
+                                    ),
+                                );
+                                let args_base = builder.ins().stack_addr(ptr_type, args_slot, 0);
+                                for idx in (0..*argc).rev() {
+                                    let value = pop_value(&mut builder);
+                                    let arg_addr =
+                                        builder.ins().iadd_imm(args_base, (idx as i64) * ptr_size);
+                                    builder.ins().store(MemFlags::new(), value, arg_addr, 0);
+                                }
+                                args_base
+                            };
+                            let argc_value = builder.ins().iconst(types::I64, *argc as i64);
+                            let call = builder
+                                .ins()
+                                .call(print, &[ctx_param, values_base, argc_value]);
+                            let result = builder.inst_results(call)[0];
+                            push_value(&mut builder, result);
+                            handled_builtin = true;
+                        }
+                    }
+                }
+                if handled_builtin {
+                    // builtins follow the normal fallthrough jump to the next block
+                } else if let Some(&callee_id) = function_ids.get(name) {
                     let expected = function_arities.get(name).copied().unwrap_or(0);
                     if expected != *argc {
                         emit_error(
@@ -1077,7 +1088,6 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::PushString(_)
         | Instruction::PushNone
         | Instruction::LoadName(_) => 1,
-        Instruction::CallBuiltinPrint(argc) => 1 - (*argc as i32),
         Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,
