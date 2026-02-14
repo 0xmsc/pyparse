@@ -114,6 +114,16 @@ impl Value {
             Value::None => false,
         }
     }
+
+    fn type_name(&self) -> &'static str {
+        match self {
+            Value::Integer(_) => "int",
+            Value::Boolean(_) => "bool",
+            Value::String(_) => "str",
+            Value::List(_) => "list",
+            Value::None => "NoneType",
+        }
+    }
 }
 
 pub struct VM {
@@ -349,28 +359,10 @@ impl VM {
                                 });
                             }
                         },
-                        Value::Integer(_) => {
+                        _ => {
                             return Err(VmError::UnknownMethod {
                                 method,
-                                type_name: "int".to_string(),
-                            });
-                        }
-                        Value::Boolean(_) => {
-                            return Err(VmError::UnknownMethod {
-                                method,
-                                type_name: "bool".to_string(),
-                            });
-                        }
-                        Value::String(_) => {
-                            return Err(VmError::UnknownMethod {
-                                method,
-                                type_name: "str".to_string(),
-                            });
-                        }
-                        Value::None => {
-                            return Err(VmError::UnknownMethod {
-                                method,
-                                type_name: "NoneType".to_string(),
+                                type_name: target.type_name().to_string(),
                             });
                         }
                     }
