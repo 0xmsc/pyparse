@@ -1,7 +1,9 @@
 use thiserror::Error;
 
-use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::token::{Span, Token, TokenKind};
+pub mod ast;
+
+use self::ast::{BinaryOperator, Expression, Program, Statement};
+use crate::lexer::{Span, Token, TokenKind};
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseError {
@@ -345,7 +347,7 @@ pub fn parse_tokens<'a>(tokens: Vec<Token<'a>>) -> ParseResult<Program> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::token::Span;
+    use crate::lexer::Span;
 
     fn tok<'a>(kind: TokenKind<'a>) -> Token<'a> {
         Token::new(kind, Span::default())
