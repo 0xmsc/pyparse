@@ -122,18 +122,6 @@ impl Value {
         self.0.borrow().get_attribute(self.object_ref(), attribute)
     }
 
-    pub(crate) fn len(&self) -> Result<usize, ListError> {
-        let object = self.0.borrow();
-        let any = &**object as &dyn Any;
-        if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
-            Ok(list.__len__())
-        } else {
-            Err(ListError::ExpectedListType {
-                got: self.type_name().to_string(),
-            })
-        }
-    }
-
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, ListError> {
         let object = self.0.borrow();
         let any = &**object as &dyn Any;

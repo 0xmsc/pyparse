@@ -78,6 +78,25 @@ pub(super) struct InterpreterRuntime<'a> {
 }
 
 impl<'a> InterpreterRuntime<'a> {
+    fn map_list_error(operation: &str, error: ListError) -> InterpreterError {
+        match error {
+            ListError::ExpectedIntegerType { got } => InterpreterError::InvalidArgumentType {
+                operation: operation.to_string(),
+                argument: "index".to_string(),
+                expected: "int".to_string(),
+                got,
+            },
+            ListError::ExpectedListType { got } => InterpreterError::UnsupportedOperation {
+                operation: operation.to_string(),
+                type_name: got,
+            },
+            ListError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
+            ListError::OutOfBounds { index, len } => {
+                InterpreterError::ListIndexOutOfBounds { index, len }
+            }
+        }
+    }
+
     pub(super) fn exec_block(
         &mut self,
         body: &[Statement],
@@ -116,20 +135,7 @@ impl<'a> InterpreterRuntime<'a> {
                             }
                         })?;
                         list.set_item(index_value, value)
-                            .map_err(|error| match error {
-                                ListError::ExpectedIntegerType { got } => {
-                                    InterpreterError::ExpectedIntegerType { got }
-                                }
-                                ListError::ExpectedListType { got } => {
-                                    InterpreterError::ExpectedListType { got }
-                                }
-                                ListError::NegativeIndex { index } => {
-                                    InterpreterError::NegativeListIndex { index }
-                                }
-                                ListError::OutOfBounds { index, len } => {
-                                    InterpreterError::ListIndexOutOfBounds { index, len }
-                                }
-                            })?;
+                            .map_err(|error| Self::map_list_error("__setitem__", error))?;
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -205,20 +211,7 @@ impl<'a> InterpreterRuntime<'a> {
                 let index_value = self.eval_expression(index, environment)?;
                 object_value
                     .get_item(index_value)
-                    .map_err(|error| match error {
-                        ListError::ExpectedIntegerType { got } => {
-                            InterpreterError::ExpectedIntegerType { got }
-                        }
-                        ListError::ExpectedListType { got } => {
-                            InterpreterError::ExpectedListType { got }
-                        }
-                        ListError::NegativeIndex { index } => {
-                            InterpreterError::NegativeListIndex { index }
-                        }
-                        ListError::OutOfBounds { index, len } => {
-                            InterpreterError::ListIndexOutOfBounds { index, len }
-                        }
-                    })
+                    .map_err(|error| Self::map_list_error("__getitem__", error))
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -230,7 +223,10 @@ impl<'a> InterpreterRuntime<'a> {
                                 AttributeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => InterpreterError::ExpectedIntegerType { got: type_name },
+                                } => InterpreterError::UnsupportedOperation {
+                                    operation: "__add__".to_string(),
+                                    type_name,
+                                },
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -240,7 +236,10 @@ impl<'a> InterpreterRuntime<'a> {
                                 AttributeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => InterpreterError::ExpectedIntegerType { got: type_name },
+                                } => InterpreterError::UnsupportedOperation {
+                                    operation: "__sub__".to_string(),
+                                    type_name,
+                                },
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -249,7 +248,10 @@ impl<'a> InterpreterRuntime<'a> {
                             AttributeError::UnknownAttribute {
                                 attribute: _,
                                 type_name,
-                            } => InterpreterError::ExpectedIntegerType { got: type_name },
+                            } => InterpreterError::UnsupportedOperation {
+                                operation: "__lt__".to_string(),
+                                type_name,
+                            },
                         })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -335,21 +337,18 @@ impl<'a> InterpreterRuntime<'a> {
                         found: args.len(),
                     });
                 }
-                let len = args[0].len().map_err(|error| match error {
-                    ListError::ExpectedIntegerType { got } => {
-                        InterpreterError::ExpectedIntegerType { got }
-                    }
-                    ListError::ExpectedListType { got } => {
-                        InterpreterError::ExpectedListType { got }
-                    }
-                    ListError::NegativeIndex { index } => {
-                        InterpreterError::NegativeListIndex { index }
-                    }
-                    ListError::OutOfBounds { index, len } => {
-                        InterpreterError::ListIndexOutOfBounds { index, len }
-                    }
-                })?;
-                Ok(Value::int_object(len as i64))
+                let callee = args[0]
+                    .get_attribute("__len__")
+                    .map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => InterpreterError::UnsupportedOperation {
+                            operation: "len".to_string(),
+                            type_name,
+                        },
+                    })?;
+                self.call_value(callee, Vec::new(), environment)
             }
             CallTarget::Function(name) => {
                 let function =
@@ -385,20 +384,7 @@ impl<'a> InterpreterRuntime<'a> {
                         expected,
                         found,
                     },
-                    MethodError::ListOperation(error) => match error {
-                        ListError::ExpectedIntegerType { got } => {
-                            InterpreterError::ExpectedIntegerType { got }
-                        }
-                        ListError::ExpectedListType { got } => {
-                            InterpreterError::ExpectedListType { got }
-                        }
-                        ListError::NegativeIndex { index } => {
-                            InterpreterError::NegativeListIndex { index }
-                        }
-                        ListError::OutOfBounds { index, len } => {
-                            InterpreterError::ListIndexOutOfBounds { index, len }
-                        }
-                    },
+                    MethodError::ListOperation(error) => Self::map_list_error(&method, error),
                     MethodError::UnknownMethod { method, type_name } => {
                         InterpreterError::UnknownMethod { method, type_name }
                     }

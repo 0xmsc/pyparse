@@ -70,7 +70,10 @@ impl<Element: Clone> ListObject<Element> {
 
 impl RuntimeObject for ListObject<Value> {
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, AttributeError> {
-        if matches!(attribute, "append" | "__getitem__" | "__setitem__") {
+        if matches!(
+            attribute,
+            "append" | "__len__" | "__getitem__" | "__setitem__"
+        ) {
             return Ok(Value::bound_method_object(receiver, attribute.to_string()));
         }
         Err(AttributeError::UnknownAttribute {
@@ -115,6 +118,16 @@ impl ListObject<Value> {
                 }
                 self.append(args.pop().expect("len checked above"));
                 Ok(Value::none_object())
+            }
+            "__len__" => {
+                if !args.is_empty() {
+                    return Err(MethodError::ArityMismatch {
+                        method: "__len__".to_string(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::int_object(self.__len__() as i64))
             }
             "__getitem__" => {
                 if args.len() != 1 {

@@ -16,10 +16,20 @@ type VmResult<T> = std::result::Result<T, VmError>;
 enum VmError {
     #[error("Stack underflow")]
     StackUnderflow,
-    #[error("Expected integer, got {got}")]
-    ExpectedIntegerType { got: String },
-    #[error("Expected list, got {got}")]
-    ExpectedListType { got: String },
+    #[error("Operation '{operation}' is not supported for type {type_name}")]
+    UnsupportedOperation {
+        operation: String,
+        type_name: String,
+    },
+    #[error(
+        "Invalid argument type for operation '{operation}': '{argument}' expected {expected}, got {got}"
+    )]
+    InvalidArgumentType {
+        operation: String,
+        argument: String,
+        expected: String,
+        got: String,
+    },
     #[error("Undefined variable '{name}'")]
     UndefinedVariable { name: String },
     #[error("Undefined function '{name}'")]
@@ -145,6 +155,23 @@ impl VM {
 }
 
 impl VmRuntime<'_> {
+    fn map_list_error(operation: &str, error: ListError) -> VmError {
+        match error {
+            ListError::ExpectedIntegerType { got } => VmError::InvalidArgumentType {
+                operation: operation.to_string(),
+                argument: "index".to_string(),
+                expected: "int".to_string(),
+                got,
+            },
+            ListError::ExpectedListType { got } => VmError::UnsupportedOperation {
+                operation: operation.to_string(),
+                type_name: got,
+            },
+            ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
+            ListError::OutOfBounds { index, len } => VmError::ListIndexOutOfBounds { index, len },
+        }
+    }
+
     fn execute_code(
         &mut self,
         code: &[Instruction],
@@ -210,7 +237,10 @@ impl VmRuntime<'_> {
                         AttributeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::ExpectedIntegerType { got: type_name },
+                        } => VmError::UnsupportedOperation {
+                            operation: "__add__".to_string(),
+                            type_name,
+                        },
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -222,7 +252,10 @@ impl VmRuntime<'_> {
                         AttributeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::ExpectedIntegerType { got: type_name },
+                        } => VmError::UnsupportedOperation {
+                            operation: "__sub__".to_string(),
+                            type_name,
+                        },
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -234,7 +267,10 @@ impl VmRuntime<'_> {
                         AttributeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::ExpectedIntegerType { got: type_name },
+                        } => VmError::UnsupportedOperation {
+                            operation: "__lt__".to_string(),
+                            type_name,
+                        },
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -249,7 +285,10 @@ impl VmRuntime<'_> {
                                 AttributeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => VmError::ExpectedListType { got: type_name },
+                                } => VmError::UnsupportedOperation {
+                                    operation: "__getitem__".to_string(),
+                                    type_name,
+                                },
                             })?;
                     let value = self.call_value(callee, vec![index_value], environment)?;
                     self.stack.push(value);
@@ -268,7 +307,10 @@ impl VmRuntime<'_> {
                                 AttributeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => VmError::ExpectedListType { got: type_name },
+                                } => VmError::UnsupportedOperation {
+                                    operation: "__setitem__".to_string(),
+                                    type_name,
+                                },
                             })?;
                     self.call_value(callee, vec![index_value, value], environment)?;
                 }
@@ -339,15 +381,18 @@ impl VmRuntime<'_> {
                         found: args.len(),
                     });
                 }
-                let len = args[0].len().map_err(|error| match error {
-                    ListError::ExpectedIntegerType { got } => VmError::ExpectedIntegerType { got },
-                    ListError::ExpectedListType { got } => VmError::ExpectedListType { got },
-                    ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
-                    ListError::OutOfBounds { index, len } => {
-                        VmError::ListIndexOutOfBounds { index, len }
-                    }
-                })?;
-                Ok(Value::int_object(len as i64))
+                let callee = args[0]
+                    .get_attribute("__len__")
+                    .map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::UnsupportedOperation {
+                            operation: "len".to_string(),
+                            type_name,
+                        },
+                    })?;
+                self.call_value(callee, Vec::new(), environment)
             }
             CallTarget::Function(name) => {
                 let function = self
@@ -385,16 +430,7 @@ impl VmRuntime<'_> {
                         expected,
                         found,
                     },
-                    MethodError::ListOperation(error) => match error {
-                        ListError::ExpectedIntegerType { got } => {
-                            VmError::ExpectedIntegerType { got }
-                        }
-                        ListError::ExpectedListType { got } => VmError::ExpectedListType { got },
-                        ListError::NegativeIndex { index } => VmError::NegativeListIndex { index },
-                        ListError::OutOfBounds { index, len } => {
-                            VmError::ListIndexOutOfBounds { index, len }
-                        }
-                    },
+                    MethodError::ListOperation(error) => Self::map_list_error(&method, error),
                     MethodError::UnknownMethod { method, type_name } => {
                         VmError::UnknownMethod { method, type_name }
                     }

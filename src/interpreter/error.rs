@@ -3,10 +3,20 @@ use thiserror::Error;
 /// Typed errors produced by the tree-walking interpreter backend.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum InterpreterError {
-    #[error("Expected integer, got {got}")]
-    ExpectedIntegerType { got: String },
-    #[error("Expected list, got {got}")]
-    ExpectedListType { got: String },
+    #[error("Operation '{operation}' is not supported for type {type_name}")]
+    UnsupportedOperation {
+        operation: String,
+        type_name: String,
+    },
+    #[error(
+        "Invalid argument type for operation '{operation}': '{argument}' expected {expected}, got {got}"
+    )]
+    InvalidArgumentType {
+        operation: String,
+        argument: String,
+        expected: String,
+        got: String,
+    },
     #[error("List index must be non-negative, got {index}")]
     NegativeListIndex { index: i64 },
     #[error("List index out of bounds: index {index}, len {len}")]
