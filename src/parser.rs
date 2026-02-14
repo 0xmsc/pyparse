@@ -45,6 +45,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> ParseResult<Statement> {
+        // Statements are top-level executable units in this language.
+        // Examples:
+        // - assignment: `x = 1`, `values[0] = 7`
+        // - control flow: `if ...:`, `while ...:`
+        // - declarations: `def f(...):`
+        // - flow markers: `return`, `pass`
+        // - expression statement: `print(x)` (an expression used as a statement)
         if matches!(self.current_kind(), TokenKind::Def) {
             return self.parse_function_def();
         }
@@ -162,6 +169,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> ParseResult<Expression> {
+        // Expressions compute and produce values.
+        // Examples:
+        // - literals: `1`, `"hi"`, `True`, `[1, 2]`
+        // - reads: `x`, `values[0]`
+        // - operators: `a + b`, `n < 10`
+        // - calls: `f(1, 2)`
+        //
+        // Expressions can appear inside statements, and can also form an
+        // expression statement (`Statement::Expr`) such as `print(x)`.
         // Entry point for expressions: parse the lowest-precedence level.
         // Example: `1 + 2 < 4 - 1` parses as `(1 + 2) < (4 - 1)`.
         self.parse_comparison()
