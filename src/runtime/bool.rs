@@ -1,7 +1,5 @@
-use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
+use crate::runtime::object::{AttributeError, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
-use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BoolObject {
@@ -12,76 +10,21 @@ impl BoolObject {
     pub(crate) fn new(value: bool) -> Self {
         Self { value }
     }
+
+    pub(crate) fn value(&self) -> bool {
+        self.value
+    }
 }
 
 impl RuntimeObject for BoolObject {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn type_name(&self) -> &'static str {
-        "bool"
-    }
-
-    fn is_truthy(&self) -> bool {
-        self.value
-    }
-
-    fn to_output(&self, _render_value: &dyn Fn(&Value) -> String) -> String {
-        if self.value {
-            "True".to_string()
-        } else {
-            "False".to_string()
-        }
-    }
-
-    fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError> {
+    fn get_attribute(
+        &self,
+        _receiver: ObjectRef,
+        attribute: &str,
+    ) -> Result<Value, AttributeError> {
         Err(AttributeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "bool".to_string(),
-        })
-    }
-
-    fn len(&self) -> Result<usize, ListError> {
-        Err(ListError::ExpectedListType {
-            got: "bool".to_string(),
-        })
-    }
-
-    fn get_item(&self, _index: Value) -> Result<Value, ListError> {
-        Err(ListError::ExpectedListType {
-            got: "bool".to_string(),
-        })
-    }
-
-    fn set_item(&mut self, _index: Value, _value: Value) -> Result<(), ListError> {
-        Err(ListError::ExpectedListType {
-            got: "bool".to_string(),
-        })
-    }
-
-    fn call_method(&mut self, method: &str, _args: Vec<Value>) -> Result<(), MethodError> {
-        Err(MethodError::UnknownMethod {
-            method: method.to_string(),
-            type_name: "bool".to_string(),
-        })
-    }
-
-    fn add(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "bool".to_string(),
-        })
-    }
-
-    fn sub(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "bool".to_string(),
-        })
-    }
-
-    fn lt(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "bool".to_string(),
         })
     }
 }

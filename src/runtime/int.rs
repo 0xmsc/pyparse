@@ -1,5 +1,4 @@
-use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
+use crate::runtime::object::{AttributeError, MethodError, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 
@@ -16,93 +15,55 @@ impl IntObject {
     pub(crate) fn value(&self) -> i64 {
         self.value
     }
+
+    pub(crate) fn call_method(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, MethodError> {
+        if args.len() != 1 {
+            return Err(MethodError::ArityMismatch {
+                method: method.to_string(),
+                expected: 1,
+                found: args.len(),
+            });
+        }
+        let rhs = args.first().expect("len checked above");
+        let Some(rhs_int) = downcast_i64(rhs) else {
+            return Err(MethodError::UnknownMethod {
+                method: method.to_string(),
+                type_name: "int".to_string(),
+            });
+        };
+        match method {
+            "__add__" => Ok(Value::int_object(self.value + rhs_int)),
+            "__sub__" => Ok(Value::int_object(self.value - rhs_int)),
+            "__lt__" => Ok(Value::bool_object(self.value < rhs_int)),
+            _ => Err(MethodError::UnknownMethod {
+                method: method.to_string(),
+                type_name: "int".to_string(),
+            }),
+        }
+    }
 }
 
 pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
     let object_ref = value.object_ref();
     let object = object_ref.borrow();
-    object
-        .as_any()
-        .downcast_ref::<IntObject>()
-        .map(IntObject::value)
+    let any = &**object as &dyn Any;
+    any.downcast_ref::<IntObject>().map(IntObject::value)
 }
 
 impl RuntimeObject for IntObject {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn type_name(&self) -> &'static str {
-        "int"
-    }
-
-    fn is_truthy(&self) -> bool {
-        self.value != 0
-    }
-
-    fn to_output(&self, _render_value: &dyn Fn(&Value) -> String) -> String {
-        self.value.to_string()
-    }
-
-    fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError> {
-        Err(AttributeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "int".to_string(),
-        })
-    }
-
-    fn len(&self) -> Result<usize, ListError> {
-        Err(ListError::ExpectedListType {
-            got: "int".to_string(),
-        })
-    }
-
-    fn get_item(&self, _index: Value) -> Result<Value, ListError> {
-        Err(ListError::ExpectedListType {
-            got: "int".to_string(),
-        })
-    }
-
-    fn set_item(&mut self, _index: Value, _value: Value) -> Result<(), ListError> {
-        Err(ListError::ExpectedListType {
-            got: "int".to_string(),
-        })
-    }
-
-    fn call_method(&mut self, method: &str, _args: Vec<Value>) -> Result<(), MethodError> {
-        Err(MethodError::UnknownMethod {
-            method: method.to_string(),
-            type_name: "int".to_string(),
-        })
-    }
-
-    fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = downcast_i64(rhs) {
-            Ok(Value::int_object(self.value + rhs_int))
-        } else {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: format!("{rhs:?}"),
-            })
-        }
-    }
-
-    fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = downcast_i64(rhs) {
-            Ok(Value::int_object(self.value - rhs_int))
-        } else {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: format!("{rhs:?}"),
-            })
-        }
-    }
-
-    fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        if let Some(rhs_int) = downcast_i64(rhs) {
-            Ok(Value::bool_object(self.value < rhs_int))
-        } else {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: format!("{rhs:?}"),
-            })
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, AttributeError> {
+        match attribute {
+            "__add__" | "__sub__" | "__lt__" => {
+                Ok(Value::bound_method_object(receiver, attribute.to_string()))
+            }
+            _ => Err(AttributeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "int".to_string(),
+            }),
         }
     }
 }

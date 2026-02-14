@@ -1,10 +1,6 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::list::ListError;
-use crate::runtime::object::{
-    AttributeError, BinaryOpError, CallTarget, MethodError, ObjectRef, RuntimeObject,
-};
+use crate::runtime::object::{AttributeError, CallTarget, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
-use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BuiltinFunctionObject {
@@ -14,6 +10,10 @@ pub(crate) struct BuiltinFunctionObject {
 impl BuiltinFunctionObject {
     pub(crate) fn new(builtin: BuiltinFunction) -> Self {
         Self { builtin }
+    }
+
+    pub(crate) fn call_target(&self) -> CallTarget {
+        CallTarget::Builtin(self.builtin)
     }
 }
 
@@ -25,6 +25,14 @@ pub(crate) struct FunctionObject {
 impl FunctionObject {
     pub(crate) fn new(name: String) -> Self {
         Self { name }
+    }
+
+    pub(crate) fn call_target(&self) -> CallTarget {
+        CallTarget::Function(self.name.clone())
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -38,105 +46,38 @@ impl BoundMethodObject {
     pub(crate) fn new(receiver: ObjectRef, method: String) -> Self {
         Self { receiver, method }
     }
+
+    pub(crate) fn call_target(&self) -> CallTarget {
+        CallTarget::BoundMethod {
+            receiver: self.receiver.clone(),
+            method: self.method.clone(),
+        }
+    }
 }
 
 macro_rules! impl_callable_runtime_object {
-    ($type_name:expr, $call_target:expr, $to_output:expr) => {
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-
-        fn type_name(&self) -> &'static str {
-            $type_name
-        }
-
-        fn is_truthy(&self) -> bool {
-            true
-        }
-
-        fn to_output(&self, _render_value: &dyn Fn(&Value) -> String) -> String {
-            $to_output(self)
-        }
-
-        fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError> {
+    ($type_name:expr) => {
+        fn get_attribute(
+            &self,
+            _receiver: ObjectRef,
+            attribute: &str,
+        ) -> Result<Value, AttributeError> {
             Err(AttributeError::UnknownAttribute {
                 attribute: attribute.to_string(),
                 type_name: $type_name.to_string(),
             })
         }
-
-        fn len(&self) -> Result<usize, ListError> {
-            Err(ListError::ExpectedListType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn get_item(&self, _index: Value) -> Result<Value, ListError> {
-            Err(ListError::ExpectedListType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn set_item(&mut self, _index: Value, _value: Value) -> Result<(), ListError> {
-            Err(ListError::ExpectedListType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn call_method(&mut self, method: &str, _args: Vec<Value>) -> Result<(), MethodError> {
-            Err(MethodError::UnknownMethod {
-                method: method.to_string(),
-                type_name: $type_name.to_string(),
-            })
-        }
-
-        fn add(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn sub(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn lt(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-            Err(BinaryOpError::ExpectedIntegerType {
-                got: $type_name.to_string(),
-            })
-        }
-
-        fn call_target(&self) -> Option<CallTarget> {
-            Some($call_target(self))
-        }
     };
 }
 
 impl RuntimeObject for BuiltinFunctionObject {
-    impl_callable_runtime_object!(
-        "builtin_function_or_method",
-        |this: &BuiltinFunctionObject| CallTarget::Builtin(this.builtin),
-        |_this: &BuiltinFunctionObject| "<built-in function>".to_string()
-    );
+    impl_callable_runtime_object!("builtin_function_or_method");
 }
 
 impl RuntimeObject for FunctionObject {
-    impl_callable_runtime_object!(
-        "function",
-        |this: &FunctionObject| CallTarget::Function(this.name.clone()),
-        |this: &FunctionObject| format!("<function {}>", this.name)
-    );
+    impl_callable_runtime_object!("function");
 }
 
 impl RuntimeObject for BoundMethodObject {
-    impl_callable_runtime_object!(
-        "method",
-        |this: &BoundMethodObject| CallTarget::BoundMethod {
-            receiver: this.receiver.clone(),
-            method: this.method.clone(),
-        },
-        |_this: &BoundMethodObject| "<bound method>".to_string()
-    );
+    impl_callable_runtime_object!("method");
 }

@@ -198,48 +198,54 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let method = object
-                        .get_attribute_method_name(&attribute)
-                        .map_err(|error| match error {
-                            AttributeError::UnknownAttribute {
-                                attribute,
-                                type_name,
-                            } => VmError::UnknownAttribute {
-                                attribute,
-                                type_name,
-                            },
-                        })?;
-                    self.stack
-                        .push(Value::bound_method_object(object.object_ref(), method));
+                    let attribute_value =
+                        object
+                            .get_attribute(&attribute)
+                            .map_err(|error| match error {
+                                AttributeError::UnknownAttribute {
+                                    attribute,
+                                    type_name,
+                                } => VmError::UnknownAttribute {
+                                    attribute,
+                                    type_name,
+                                },
+                            })?;
+                    self.stack.push(attribute_value);
                 }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.add(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            VmError::ExpectedIntegerType { got }
-                        }
+                    let callee = left.get_attribute("__add__").map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::ExpectedIntegerType { got: type_name },
                     })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
                 }
                 Instruction::Sub => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.sub(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            VmError::ExpectedIntegerType { got }
-                        }
+                    let callee = left.get_attribute("__sub__").map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::ExpectedIntegerType { got: type_name },
                     })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
                 }
                 Instruction::LessThan => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let result = left.lt(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            VmError::ExpectedIntegerType { got }
-                        }
+                    let callee = left.get_attribute("__lt__").map_err(|error| match error {
+                        AttributeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::ExpectedIntegerType { got: type_name },
                     })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
                 }
                 Instruction::LoadIndex => {
@@ -388,25 +394,22 @@ impl VmRuntime<'_> {
                 self.stack = parent_stack;
                 result
             }
-            CallTarget::BoundMethod { receiver, method } => {
-                Value::from_object(receiver)
-                    .call_method(&method, args)
-                    .map_err(|error| match error {
-                        MethodError::ArityMismatch {
-                            method,
-                            expected,
-                            found,
-                        } => VmError::MethodArityMismatch {
-                            method,
-                            expected,
-                            found,
-                        },
-                        MethodError::UnknownMethod { method, type_name } => {
-                            VmError::UnknownMethod { method, type_name }
-                        }
-                    })?;
-                Ok(Value::none_object())
-            }
+            CallTarget::BoundMethod { receiver, method } => Value::from_object(receiver)
+                .call_method(&method, args)
+                .map_err(|error| match error {
+                    MethodError::ArityMismatch {
+                        method,
+                        expected,
+                        found,
+                    } => VmError::MethodArityMismatch {
+                        method,
+                        expected,
+                        found,
+                    },
+                    MethodError::UnknownMethod { method, type_name } => {
+                        VmError::UnknownMethod { method, type_name }
+                    }
+                }),
         }
     }
 }

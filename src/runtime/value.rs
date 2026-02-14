@@ -2,12 +2,11 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::BoolObject;
 use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
 use crate::runtime::int::IntObject;
-use crate::runtime::list::ListError;
+use crate::runtime::list::{ListError, ListObject};
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{
-    AttributeError, BinaryOpError, CallTarget, MethodError, ObjectRef, new_list_object,
-};
+use crate::runtime::object::{AttributeError, CallTarget, MethodError, ObjectRef, new_list_object};
 use crate::runtime::string::StringObject;
+use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -28,44 +27,150 @@ impl Value {
         self.0.clone()
     }
 
+    pub(crate) fn type_name(&self) -> &'static str {
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if any.is::<IntObject>() {
+            "int"
+        } else if any.is::<BoolObject>() {
+            "bool"
+        } else if any.is::<StringObject>() {
+            "str"
+        } else if any.is::<NoneObject>() {
+            "NoneType"
+        } else if any.is::<ListObject<Value>>() {
+            "list"
+        } else if any.is::<BuiltinFunctionObject>() {
+            "builtin_function_or_method"
+        } else if any.is::<FunctionObject>() {
+            "function"
+        } else if any.is::<BoundMethodObject>() {
+            "method"
+        } else {
+            "object"
+        }
+    }
+
     pub(crate) fn to_output(&self) -> String {
-        self.0.borrow().to_output(&Value::to_output)
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if let Some(int) = any.downcast_ref::<IntObject>() {
+            int.value().to_string()
+        } else if let Some(boolean) = any.downcast_ref::<BoolObject>() {
+            if boolean.value() {
+                "True".to_string()
+            } else {
+                "False".to_string()
+            }
+        } else if let Some(string) = any.downcast_ref::<StringObject>() {
+            string.value().to_string()
+        } else if any.is::<NoneObject>() {
+            "None".to_string()
+        } else if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+            let rendered = list
+                .iter()
+                .map(Value::to_output)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{rendered}]")
+        } else if any.is::<BuiltinFunctionObject>() {
+            "<built-in function>".to_string()
+        } else if let Some(function) = any.downcast_ref::<FunctionObject>() {
+            format!("<function {}>", function.name())
+        } else if any.is::<BoundMethodObject>() {
+            "<bound method>".to_string()
+        } else {
+            format!("<{} object>", self.type_name())
+        }
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
-        self.0.borrow().is_truthy()
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if let Some(int) = any.downcast_ref::<IntObject>() {
+            int.value() != 0
+        } else if let Some(boolean) = any.downcast_ref::<BoolObject>() {
+            boolean.value()
+        } else if let Some(string) = any.downcast_ref::<StringObject>() {
+            !string.value().is_empty()
+        } else if any.is::<NoneObject>() {
+            false
+        } else if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+            !list.is_empty()
+        } else {
+            true
+        }
     }
 
     pub(crate) fn call_target(&self) -> Result<CallTarget, CallTargetError> {
-        self.0
-            .borrow()
-            .call_target()
-            .ok_or_else(|| CallTargetError {
-                type_name: self.0.borrow().type_name().to_string(),
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if let Some(builtin) = any.downcast_ref::<BuiltinFunctionObject>() {
+            Ok(builtin.call_target())
+        } else if let Some(function) = any.downcast_ref::<FunctionObject>() {
+            Ok(function.call_target())
+        } else if let Some(bound_method) = any.downcast_ref::<BoundMethodObject>() {
+            Ok(bound_method.call_target())
+        } else {
+            Err(CallTargetError {
+                type_name: self.type_name().to_string(),
             })
+        }
     }
 
-    pub(crate) fn get_attribute_method_name(
-        &self,
-        attribute: &str,
-    ) -> Result<String, AttributeError> {
-        self.0.borrow().get_attribute_method_name(attribute)
+    pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, AttributeError> {
+        self.0.borrow().get_attribute(self.object_ref(), attribute)
     }
 
     pub(crate) fn len(&self) -> Result<usize, ListError> {
-        self.0.borrow().len()
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+            Ok(list.__len__())
+        } else {
+            Err(ListError::ExpectedListType {
+                got: self.type_name().to_string(),
+            })
+        }
     }
 
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, ListError> {
-        self.0.borrow().get_item(index)
+        let object = self.0.borrow();
+        let any = &**object as &dyn Any;
+        if let Some(list) = any.downcast_ref::<ListObject<Value>>() {
+            list.get_item_value(index)
+        } else {
+            Err(ListError::ExpectedListType {
+                got: self.type_name().to_string(),
+            })
+        }
     }
 
     pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), ListError> {
-        self.0.borrow_mut().set_item(index, value)
+        let type_name = self.type_name().to_string();
+        let mut object = self.0.borrow_mut();
+        let any = &mut **object as &mut dyn Any;
+        if let Some(list) = any.downcast_mut::<ListObject<Value>>() {
+            list.set_item_value(index, value)
+        } else {
+            Err(ListError::ExpectedListType { got: type_name })
+        }
     }
 
-    pub(crate) fn call_method(&self, method: &str, args: Vec<Value>) -> Result<(), MethodError> {
-        self.0.borrow_mut().call_method(method, args)
+    pub(crate) fn call_method(&self, method: &str, args: Vec<Value>) -> Result<Value, MethodError> {
+        let type_name = self.type_name().to_string();
+        let mut object = self.0.borrow_mut();
+        let any = &mut **object as &mut dyn Any;
+        if let Some(list) = any.downcast_mut::<ListObject<Value>>() {
+            list.call_method(method, args)
+        } else if let Some(int) = any.downcast_mut::<IntObject>() {
+            int.call_method(method, args)
+        } else {
+            Err(MethodError::UnknownMethod {
+                method: method.to_string(),
+                type_name,
+            })
+        }
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
@@ -102,17 +207,5 @@ impl Value {
         Self(Rc::new(RefCell::new(Box::new(BoundMethodObject::new(
             receiver, method,
         )))))
-    }
-
-    pub(crate) fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        self.0.borrow().add(rhs)
-    }
-
-    pub(crate) fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        self.0.borrow().sub(rhs)
-    }
-
-    pub(crate) fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        self.0.borrow().lt(rhs)
     }
 }

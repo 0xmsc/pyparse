@@ -224,30 +224,42 @@ impl<'a> InterpreterRuntime<'a> {
                 let left = self.eval_expression(left, environment)?;
                 let right = self.eval_expression(right, environment)?;
                 match op {
-                    BinaryOperator::Add => left.add(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            InterpreterError::ExpectedIntegerType { got }
-                        }
-                    }),
-                    BinaryOperator::Sub => left.sub(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            InterpreterError::ExpectedIntegerType { got }
-                        }
-                    }),
-                    BinaryOperator::LessThan => left.lt(&right).map_err(|error| match error {
-                        crate::runtime::object::BinaryOpError::ExpectedIntegerType { got } => {
-                            InterpreterError::ExpectedIntegerType { got }
-                        }
-                    }),
+                    BinaryOperator::Add => {
+                        let callee =
+                            left.get_attribute("__add__").map_err(|error| match error {
+                                AttributeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => InterpreterError::ExpectedIntegerType { got: type_name },
+                            })?;
+                        self.call_value(callee, vec![right], environment)
+                    }
+                    BinaryOperator::Sub => {
+                        let callee =
+                            left.get_attribute("__sub__").map_err(|error| match error {
+                                AttributeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => InterpreterError::ExpectedIntegerType { got: type_name },
+                            })?;
+                        self.call_value(callee, vec![right], environment)
+                    }
+                    BinaryOperator::LessThan => {
+                        let callee = left.get_attribute("__lt__").map_err(|error| match error {
+                            AttributeError::UnknownAttribute {
+                                attribute: _,
+                                type_name,
+                            } => InterpreterError::ExpectedIntegerType { got: type_name },
+                        })?;
+                        self.call_value(callee, vec![right], environment)
+                    }
                 }
             }
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
                 let attribute = name.to_string();
-                let object_ref = object.object_ref();
-                let method = object_ref
-                    .borrow()
-                    .get_attribute_method_name(&attribute)
+                object
+                    .get_attribute(&attribute)
                     .map_err(|error| match error {
                         AttributeError::UnknownAttribute {
                             attribute,
@@ -256,8 +268,7 @@ impl<'a> InterpreterRuntime<'a> {
                             attribute,
                             type_name,
                         },
-                    })?;
-                Ok(Value::bound_method_object(object_ref.clone(), method))
+                    })
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -362,25 +373,22 @@ impl<'a> InterpreterRuntime<'a> {
                     ExecResult::Return(value) => Ok(value),
                 }
             }
-            CallTarget::BoundMethod { receiver, method } => {
-                Value::from_object(receiver)
-                    .call_method(&method, args)
-                    .map_err(|error| match error {
-                        MethodError::ArityMismatch {
-                            method,
-                            expected,
-                            found,
-                        } => InterpreterError::MethodArityMismatch {
-                            method,
-                            expected,
-                            found,
-                        },
-                        MethodError::UnknownMethod { method, type_name } => {
-                            InterpreterError::UnknownMethod { method, type_name }
-                        }
-                    })?;
-                Ok(Value::none_object())
-            }
+            CallTarget::BoundMethod { receiver, method } => Value::from_object(receiver)
+                .call_method(&method, args)
+                .map_err(|error| match error {
+                    MethodError::ArityMismatch {
+                        method,
+                        expected,
+                        found,
+                    } => InterpreterError::MethodArityMismatch {
+                        method,
+                        expected,
+                        found,
+                    },
+                    MethodError::UnknownMethod { method, type_name } => {
+                        InterpreterError::UnknownMethod { method, type_name }
+                    }
+                }),
         }
     }
 }

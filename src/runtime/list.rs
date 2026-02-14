@@ -1,7 +1,6 @@
 use crate::runtime::int::downcast_i64;
-use crate::runtime::object::{AttributeError, BinaryOpError, MethodError, RuntimeObject};
+use crate::runtime::object::{AttributeError, MethodError, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
-use std::any::Any;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ListError {
@@ -70,38 +69,19 @@ impl<Element: Clone> ListObject<Element> {
 }
 
 impl RuntimeObject for ListObject<Value> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn type_name(&self) -> &'static str {
-        "list"
-    }
-
-    fn is_truthy(&self) -> bool {
-        !self.is_empty()
-    }
-
-    fn to_output(&self, render_value: &dyn Fn(&Value) -> String) -> String {
-        let rendered = self.iter().map(render_value).collect::<Vec<_>>().join(", ");
-        format!("[{rendered}]")
-    }
-
-    fn get_attribute_method_name(&self, attribute: &str) -> Result<String, AttributeError> {
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, AttributeError> {
         if attribute == "append" {
-            return Ok(attribute.to_string());
+            return Ok(Value::bound_method_object(receiver, attribute.to_string()));
         }
         Err(AttributeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "list".to_string(),
         })
     }
+}
 
-    fn len(&self) -> Result<usize, ListError> {
-        Ok(self.__len__())
-    }
-
-    fn get_item(&self, index: Value) -> Result<Value, ListError> {
+impl ListObject<Value> {
+    pub(crate) fn get_item_value(&self, index: Value) -> Result<Value, ListError> {
         let Some(index) = downcast_i64(&index) else {
             return Err(ListError::ExpectedIntegerType {
                 got: format!("{index:?}"),
@@ -110,7 +90,7 @@ impl RuntimeObject for ListObject<Value> {
         self.__getitem__(index)
     }
 
-    fn set_item(&mut self, index: Value, value: Value) -> Result<(), ListError> {
+    pub(crate) fn set_item_value(&mut self, index: Value, value: Value) -> Result<(), ListError> {
         let Some(index) = downcast_i64(&index) else {
             return Err(ListError::ExpectedIntegerType {
                 got: format!("{index:?}"),
@@ -119,7 +99,11 @@ impl RuntimeObject for ListObject<Value> {
         self.__setitem__(index, value)
     }
 
-    fn call_method(&mut self, method: &str, mut args: Vec<Value>) -> Result<(), MethodError> {
+    pub(crate) fn call_method(
+        &mut self,
+        method: &str,
+        mut args: Vec<Value>,
+    ) -> Result<Value, MethodError> {
         match method {
             "append" => {
                 if args.len() != 1 {
@@ -130,31 +114,13 @@ impl RuntimeObject for ListObject<Value> {
                     });
                 }
                 self.append(args.pop().expect("len checked above"));
-                Ok(())
+                Ok(Value::none_object())
             }
             _ => Err(MethodError::UnknownMethod {
                 method: method.to_string(),
                 type_name: "list".to_string(),
             }),
         }
-    }
-
-    fn add(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "list".to_string(),
-        })
-    }
-
-    fn sub(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "list".to_string(),
-        })
-    }
-
-    fn lt(&self, _rhs: &Value) -> Result<Value, BinaryOpError> {
-        Err(BinaryOpError::ExpectedIntegerType {
-            got: "list".to_string(),
-        })
     }
 }
 
