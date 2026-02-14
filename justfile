@@ -11,4 +11,8 @@ bench:
 # Run benchmark targets concurrently across available cores with non-interleaved output.
 bench-parallel:
     cargo bench --no-run
-    parallel 'cargo bench --bench "{}"' ::: frontend interpreter vm jit transpiler python
+    parallel --jobs 0 --group --keep-order 'cargo bench --bench "{}" -- --quick --noplot' \
+        ::: frontend interpreter vm jit transpiler python
+
+bench-summary: bench-parallel
+    python3 scripts/bench_summary.py
