@@ -1,20 +1,20 @@
+use anyhow::{Context, Result, ensure};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-use anyhow::{Context, Result, ensure};
+use pyparse::backend::Backend;
+use pyparse::backend::interpreter::Interpreter;
+use pyparse::backend::jit::JIT;
+use pyparse::backend::transpiler::Transpiler;
+use pyparse::backend::vm::VM;
+use pyparse::{lexer, parser};
+use test_support::{
+    Case, CaseClass, detect_python_interpreter as detect_python_interpreter_base,
+    is_backend_unsupported, load_cases, normalize_output, run_python_file,
+    validate_unsupported_backends,
+};
 
-use crate::backend::Backend;
-use crate::backend::interpreter::Interpreter;
-use crate::backend::jit::JIT;
-use crate::backend::transpiler::Transpiler;
-use crate::backend::vm::VM;
-use crate::fixtures::{self, Case, CaseClass};
-use crate::{lexer, parser};
-
-fn normalize_output(output: &str) -> String {
-    output.replace("\r\n", "\n").trim_end().to_string()
-}
+const KNOWN_BACKENDS: [&str; 5] = ["interpreter", "vm", "jit", "transpiler", "cpython"];
 
 fn python_parity_required() -> bool {
     std::env::var("PYTHON_PARITY_REQUIRED")
@@ -23,24 +23,8 @@ fn python_parity_required() -> bool {
 }
 
 fn detect_python_interpreter() -> Result<Option<String>> {
-    if let Ok(python) = std::env::var("PYTHON") {
-        let status = Command::new(&python)
-            .arg("--version")
-            .status()
-            .with_context(|| format!("Running '{python} --version'"))?;
-        ensure!(
-            status.success(),
-            "Configured PYTHON interpreter '{}' is not executable",
-            python
-        );
+    if let Some(python) = detect_python_interpreter_base() {
         return Ok(Some(python));
-    }
-
-    let status = Command::new("python3").arg("--version").status();
-    if let Ok(status) = status
-        && status.success()
-    {
-        return Ok(Some("python3".to_string()));
     }
 
     if python_parity_required() {
@@ -54,23 +38,18 @@ fn detect_python_interpreter() -> Result<Option<String>> {
 }
 
 fn run_python_program(interpreter: &str, case: &Case) -> Result<String> {
-    let output = Command::new(interpreter)
-        .arg(&case.program_path)
-        .output()
-        .with_context(|| format!("Running CPython for {}", case.name))?;
-    ensure!(
-        output.status.success(),
-        "CPython failed for {}: {}",
-        case.name,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    run_python_file(interpreter, &case.program_path)
+        .with_context(|| format!("Running CPython for {}", case.name))
 }
 
 fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
-    let cases = fixtures::load_cases(Path::new("tests/programs"))?;
+    let cases = load_cases(Path::new("tests/programs"))?;
 
     for case in cases {
+        validate_unsupported_backends(&case, &KNOWN_BACKENDS)?;
+        if is_backend_unsupported(&case, backend.name()) {
+            continue;
+        }
         if case.spec.bench.enabled {
             ensure!(
                 !case.spec.bench.tags.is_empty(),
@@ -193,9 +172,13 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
 }
 
 fn run_programs_for_cpython_backend(interpreter: &str) -> Result<()> {
-    let cases = fixtures::load_cases(Path::new("tests/programs"))?;
+    let cases = load_cases(Path::new("tests/programs"))?;
 
     for case in cases {
+        validate_unsupported_backends(&case, &KNOWN_BACKENDS)?;
+        if is_backend_unsupported(&case, "cpython") {
+            continue;
+        }
         if !matches!(case.spec.class, CaseClass::RuntimeSuccess) {
             continue;
         }

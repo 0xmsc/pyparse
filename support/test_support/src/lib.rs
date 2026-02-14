@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
@@ -30,7 +31,10 @@ pub struct ExpectedOutcome {
 #[derive(Debug, Deserialize, Clone)]
 pub struct CaseSpec {
     pub class: CaseClass,
+    #[allow(dead_code)]
     pub parity: bool,
+    #[serde(default)]
+    pub unsupported_backends: Vec<String>,
     pub bench: BenchConfig,
     pub expected: ExpectedOutcome,
 }
@@ -98,4 +102,67 @@ pub fn load_cases(programs_dir: &Path) -> Result<Vec<Case>> {
     );
     cases.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(cases)
+}
+
+pub fn normalize_output(output: &str) -> String {
+    output.replace("\r\n", "\n").trim_end().to_string()
+}
+
+pub fn detect_python_interpreter() -> Option<String> {
+    if let Ok(python) = std::env::var("PYTHON") {
+        let status = Command::new(&python).arg("--version").status().ok()?;
+        if status.success() {
+            return Some(python);
+        }
+    }
+
+    let status = Command::new("python3").arg("--version").status().ok()?;
+    if status.success() {
+        return Some("python3".to_string());
+    }
+
+    None
+}
+
+pub fn run_python_file(interpreter: &str, path: &Path) -> Result<String> {
+    let output = Command::new(interpreter)
+        .arg(path)
+        .output()
+        .with_context(|| format!("Running python file {}", path.display()))?;
+    ensure!(
+        output.status.success(),
+        "python failed for {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+pub fn run_python_startup(interpreter: &str) -> Result<()> {
+    let status = Command::new(interpreter)
+        .arg("-c")
+        .arg("pass")
+        .status()
+        .with_context(|| format!("Running '{interpreter} -c pass'"))?;
+    ensure!(status.success(), "python startup command failed");
+    Ok(())
+}
+
+pub fn validate_unsupported_backends(case: &Case, known_backends: &[&str]) -> Result<()> {
+    for backend in &case.spec.unsupported_backends {
+        ensure!(
+            known_backends.contains(&backend.as_str()),
+            "Case {} contains unknown unsupported backend '{}'",
+            case.name,
+            backend
+        );
+    }
+    Ok(())
+}
+
+pub fn is_backend_unsupported(case: &Case, backend_name: &str) -> bool {
+    case.spec
+        .unsupported_backends
+        .iter()
+        .any(|name| name == backend_name)
 }

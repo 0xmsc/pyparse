@@ -1,15 +1,16 @@
 #![allow(dead_code)]
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use pyparse::ast::Program;
-use pyparse::fixtures::{self, CaseClass};
 use pyparse::{lexer, parser};
+use test_support::{
+    CaseClass, detect_python_interpreter as detect_python_interpreter_base, load_cases,
+    run_python_file as run_python_file_base, run_python_startup as run_python_startup_base,
+};
 
 pub fn workloads() -> Vec<(String, String)> {
-    let cases =
-        fixtures::load_cases(Path::new("tests/programs")).expect("load fixture cases for benches");
+    let cases = load_cases(Path::new("tests/programs")).expect("load fixture cases for benches");
     cases
         .into_iter()
         .filter(|case| {
@@ -38,39 +39,14 @@ pub fn load_program(path: &str) -> Program {
 }
 
 pub fn detect_python_interpreter() -> Option<String> {
-    if let Ok(python) = std::env::var("PYTHON") {
-        let status = Command::new(&python).arg("--version").status().ok()?;
-        if status.success() {
-            return Some(python);
-        }
-    }
-
-    let status = Command::new("python3").arg("--version").status().ok()?;
-    if status.success() {
-        return Some("python3".to_string());
-    }
-
-    None
+    detect_python_interpreter_base()
 }
 
 pub fn run_python_file(interpreter: &str, path: &str) -> String {
-    let output = Command::new(interpreter)
-        .arg(path)
-        .output()
-        .unwrap_or_else(|err| panic!("run python file {path}: {err}"));
-    assert!(
-        output.status.success(),
-        "python failed for {path}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).expect("utf8 python stdout")
+    run_python_file_base(interpreter, Path::new(path))
+        .unwrap_or_else(|err| panic!("run python file {path}: {err}"))
 }
 
 pub fn run_python_startup(interpreter: &str) {
-    let status = Command::new(interpreter)
-        .arg("-c")
-        .arg("pass")
-        .status()
-        .expect("run python startup");
-    assert!(status.success(), "python startup command failed");
+    run_python_startup_base(interpreter).expect("run python startup");
 }
