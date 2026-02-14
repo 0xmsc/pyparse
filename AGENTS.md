@@ -1,5 +1,20 @@
 # Agent Instructions
 
+## Project Overview
+
+`pyparse` is a small Python-like language implementation focused on CPython-compatible semantics.
+
+The frontend is:
+`src/lexer.rs` -> `src/parser.rs` + `src/parser/ast.rs` -> `Program` AST.
+
+Backends:
+- `interpreter`: AST-walking runtime (`src/interpreter.rs` + `src/interpreter/`)
+- `vm`: bytecode compiler + VM (`src/bytecode.rs`, `src/vm.rs`)
+- `jit`: Cranelift-based execution path (`src/jit.rs`)
+- `transpiler`: C code generation/runtime (`src/transpiler.rs`, `src/transpiler/c_runtime.rs`)
+
+End-to-end behavior is validated primarily through fixture-based runtime tests in `tests/programs/`.
+
 - Prefer project `just` commands for routine validation tasks.
 - Run tests with `just test`.
 - Run lint/format checks with `just lint`.
