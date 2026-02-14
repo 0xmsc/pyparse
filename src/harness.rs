@@ -69,16 +69,8 @@ fn run_python_program(interpreter: &str, case: &Case) -> Result<String> {
 
 fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
     let cases = fixtures::load_cases(Path::new("tests/programs"))?;
-    let python_interpreter = detect_python_interpreter()?;
 
     for case in cases {
-        if case.spec.parity {
-            ensure!(
-                matches!(case.spec.class, CaseClass::RuntimeSuccess),
-                "Case {} has parity enabled but is not runtime_success",
-                case.name
-            );
-        }
         if case.spec.bench.enabled {
             ensure!(
                 !case.spec.bench.tags.is_empty(),
@@ -118,20 +110,6 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
                     backend.name(),
                     case.name
                 );
-
-                if case.spec.parity
-                    && let Some(interpreter) = python_interpreter.as_deref()
-                {
-                    let python_output = run_python_program(interpreter, &case)?;
-                    let expected_output = normalize_output(&python_output);
-                    assert_eq!(
-                        actual_output,
-                        expected_output,
-                        "Parity mismatch for backend {} in {}",
-                        backend.name(),
-                        case.name
-                    );
-                }
             }
             CaseClass::FrontendError => {
                 ensure!(
@@ -214,6 +192,37 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
     Ok(())
 }
 
+fn run_programs_for_cpython_backend(interpreter: &str) -> Result<()> {
+    let cases = fixtures::load_cases(Path::new("tests/programs"))?;
+
+    for case in cases {
+        if !matches!(case.spec.class, CaseClass::RuntimeSuccess) {
+            continue;
+        }
+        ensure!(
+            case.spec.expected.exit_code == 0,
+            "Case {} expected exit code must be 0 for runtime_success",
+            case.name
+        );
+        let stdout_file = case
+            .spec
+            .expected
+            .stdout_file
+            .as_deref()
+            .with_context(|| format!("Missing stdout_file in {}", case.name))?;
+        let expected = case.read_text(stdout_file)?;
+        let actual_output = normalize_output(&run_python_program(interpreter, &case)?);
+        let expected_output = normalize_output(&expected);
+        assert_eq!(
+            actual_output, expected_output,
+            "Backend cpython mismatch for {}",
+            case.name
+        );
+    }
+
+    Ok(())
+}
+
 #[test]
 fn runs_programs_interpreter_backend() -> Result<()> {
     run_programs_for_backend(&Interpreter::new())
@@ -232,4 +241,12 @@ fn runs_programs_jit_backend() -> Result<()> {
 #[test]
 fn runs_programs_transpiler_backend() -> Result<()> {
     run_programs_for_backend(&Transpiler)
+}
+
+#[test]
+fn runs_programs_cpython_backend() -> Result<()> {
+    let Some(interpreter) = detect_python_interpreter()? else {
+        return Ok(());
+    };
+    run_programs_for_cpython_backend(&interpreter)
 }
