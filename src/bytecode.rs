@@ -15,17 +15,10 @@ pub enum Instruction {
     Add,
     Sub,
     LessThan,
+    LoadAttr(String),
     LoadIndex,
     StoreIndex(String),
-    CallFunction {
-        name: String,
-        argc: usize,
-    },
-    CallMethod {
-        receiver: String,
-        method: String,
-        argc: usize,
-    },
+    Call { argc: usize },
     JumpIfFalse(isize),
     Jump(isize),
     Pop,
@@ -183,13 +176,14 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
         Expression::Identifier(name) => {
             code.push(Instruction::LoadName(name.to_string()));
         }
+        Expression::Attribute { object, name } => {
+            code.extend(compile_expression(object)?);
+            code.push(Instruction::LoadAttr(name.to_string()));
+        }
         Expression::Index { object, index } => {
             code.extend(compile_expression(object)?);
             code.extend(compile_expression(index)?);
             code.push(Instruction::LoadIndex);
-        }
-        Expression::Attribute { .. } => {
-            bail!("Standalone attribute access is not supported in the VM");
         }
         Expression::BinaryOp { left, op, right } => {
             code.extend(compile_expression(left)?);
@@ -200,32 +194,13 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
                 BinaryOperator::LessThan => code.push(Instruction::LessThan),
             }
         }
-        Expression::Call { callee, args } => match callee.as_ref() {
-            Expression::Identifier(name) => {
-                for arg in args {
-                    code.extend(compile_expression(arg)?);
-                }
-                code.push(Instruction::CallFunction {
-                    name: name.to_string(),
-                    argc: args.len(),
-                });
+        Expression::Call { callee, args } => {
+            code.extend(compile_expression(callee)?);
+            for arg in args {
+                code.extend(compile_expression(arg)?);
             }
-            Expression::Attribute { object, name } => {
-                let receiver = match object.as_ref() {
-                    Expression::Identifier(receiver) => receiver.to_string(),
-                    _ => bail!("Method receiver must be an identifier in the VM"),
-                };
-                for arg in args {
-                    code.extend(compile_expression(arg)?);
-                }
-                code.push(Instruction::CallMethod {
-                    receiver,
-                    method: name.to_string(),
-                    argc: args.len(),
-                });
-            }
-            _ => bail!("Can only call identifiers or attributes in the VM"),
-        },
+            code.push(Instruction::Call { argc: args.len() });
+        }
     }
     Ok(code)
 }
@@ -246,16 +221,6 @@ mod tests {
     fn call(name: &str, args: Vec<Expression>) -> Expression {
         Expression::Call {
             callee: Box::new(Expression::Identifier(name.to_string())),
-            args,
-        }
-    }
-
-    fn method_call(receiver: &str, method: &str, args: Vec<Expression>) -> Expression {
-        Expression::Call {
-            callee: Box::new(Expression::Attribute {
-                object: Box::new(Expression::Identifier(receiver.to_string())),
-                name: method.to_string(),
-            }),
             args,
         }
     }
@@ -282,12 +247,12 @@ mod tests {
         assert!(matches!(function.code[1], Instruction::ReturnValue));
         assert!(matches!(function.code[2], Instruction::Return));
 
-        assert_eq!(compiled.main.len(), 2);
+        assert_eq!(compiled.main.len(), 3);
         assert!(matches!(
-            compiled.main[0],
-            Instruction::CallFunction { ref name, argc } if name == "foo" && argc == 0
+            compiled.main[0], Instruction::LoadName(ref name) if name == "foo"
         ));
-        assert!(matches!(compiled.main[1], Instruction::Pop));
+        assert!(matches!(compiled.main[1], Instruction::Call { argc: 0 }));
+        assert!(matches!(compiled.main[2], Instruction::Pop));
     }
 
     #[test]
@@ -298,12 +263,12 @@ mod tests {
 
         let compiled = compile(&program).expect("compile should succeed");
         assert!(compiled.functions.is_empty());
-        assert_eq!(compiled.main.len(), 2);
+        assert_eq!(compiled.main.len(), 3);
         assert!(matches!(
-            compiled.main[0],
-            Instruction::CallFunction { ref name, argc } if name == "print" && argc == 0
+            compiled.main[0], Instruction::LoadName(ref name) if name == "print"
         ));
-        assert!(matches!(compiled.main[1], Instruction::Pop));
+        assert!(matches!(compiled.main[1], Instruction::Call { argc: 0 }));
+        assert!(matches!(compiled.main[2], Instruction::Pop));
     }
 
     #[test]
@@ -374,12 +339,12 @@ mod tests {
             .get("sum2")
             .expect("expected compiled function 'sum2'");
         assert_eq!(function.params, vec!["a".to_string(), "b".to_string()]);
-        assert!(matches!(compiled.main[0], Instruction::PushInt(1)));
-        assert!(matches!(compiled.main[1], Instruction::PushInt(2)));
         assert!(matches!(
-            compiled.main[2],
-            Instruction::CallFunction { ref name, argc } if name == "sum2" && argc == 2
+            compiled.main[0], Instruction::LoadName(ref name) if name == "sum2"
         ));
+        assert!(matches!(compiled.main[1], Instruction::PushInt(1)));
+        assert!(matches!(compiled.main[2], Instruction::PushInt(2)));
+        assert!(matches!(compiled.main[3], Instruction::Call { argc: 2 }));
     }
 
     #[test]
@@ -395,13 +360,13 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert!(matches!(compiled.main[0], Instruction::PushInt(1)));
-        assert!(matches!(compiled.main[1], Instruction::PushInt(2)));
-        assert!(matches!(compiled.main[2], Instruction::BuildList(2)));
         assert!(matches!(
-            compiled.main[3],
-            Instruction::CallFunction { ref name, argc } if name == "print" && argc == 1
+            compiled.main[0], Instruction::LoadName(ref name) if name == "print"
         ));
+        assert!(matches!(compiled.main[1], Instruction::PushInt(1)));
+        assert!(matches!(compiled.main[2], Instruction::PushInt(2)));
+        assert!(matches!(compiled.main[3], Instruction::BuildList(2)));
+        assert!(matches!(compiled.main[4], Instruction::Call { argc: 1 }));
     }
 
     #[test]
@@ -449,22 +414,25 @@ mod tests {
                     target: AssignTarget::Name("values".to_string()),
                     value: Expression::List(vec![]),
                 },
-                Statement::Expr(method_call(
-                    "values",
-                    "append",
-                    vec![Expression::Integer(3)],
-                )),
+                Statement::Expr(Expression::Call {
+                    callee: Box::new(Expression::Attribute {
+                        object: Box::new(Expression::Identifier("values".to_string())),
+                        name: "append".to_string(),
+                    }),
+                    args: vec![Expression::Integer(3)],
+                }),
             ],
         };
 
         let compiled = compile(&program).expect("compile should succeed");
         assert!(compiled.main.iter().any(|instruction| matches!(
-            instruction,
-            Instruction::CallMethod {
-                receiver,
-                method,
-                argc
-            } if receiver == "values" && method == "append" && *argc == 1
+            instruction, Instruction::LoadAttr(method) if method == "append"
         )));
+        assert!(
+            compiled
+                .main
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::Call { argc } if *argc == 1))
+        );
     }
 }

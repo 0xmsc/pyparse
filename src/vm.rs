@@ -1,5 +1,7 @@
 use anyhow::Result;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use thiserror::Error;
 
 use crate::ast::Program;
@@ -39,6 +41,13 @@ enum VmError {
     },
     #[error("Unknown method '{method}' for type {type_name}")]
     UnknownMethod { method: String, type_name: String },
+    #[error("Unknown attribute '{attribute}' for type {type_name}")]
+    UnknownAttribute {
+        attribute: String,
+        type_name: String,
+    },
+    #[error("Object of type {type_name} is not callable")]
+    ObjectNotCallable { type_name: String },
     #[error("Invalid jump target")]
     InvalidJumpTarget,
 }
@@ -48,7 +57,13 @@ enum Value {
     Integer(i64),
     Boolean(bool),
     String(String),
-    List(Vec<Value>),
+    List(Rc<RefCell<Vec<Value>>>),
+    BuiltinFunction(BuiltinFunction),
+    Function(String),
+    BoundMethod {
+        receiver: Box<Value>,
+        method: String,
+    },
     None,
 }
 
@@ -56,28 +71,14 @@ impl Value {
     fn as_int(&self) -> VmResult<i64> {
         match self {
             Value::Integer(value) => Ok(*value),
-            Value::Boolean(_) | Value::String(_) | Value::List(_) | Value::None => {
-                Err(VmError::ExpectedIntegerType {
-                    got: format!("{self:?}"),
-                })
-            }
-        }
-    }
-
-    fn as_list(&self) -> VmResult<&Vec<Value>> {
-        match self {
-            Value::List(values) => Ok(values),
-            other => Err(VmError::ExpectedListType {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    fn as_list_mut(&mut self) -> VmResult<&mut Vec<Value>> {
-        match self {
-            Value::List(values) => Ok(values),
-            other => Err(VmError::ExpectedListType {
-                got: format!("{other:?}"),
+            Value::Boolean(_)
+            | Value::String(_)
+            | Value::List(_)
+            | Value::BuiltinFunction(_)
+            | Value::Function(_)
+            | Value::BoundMethod { .. }
+            | Value::None => Err(VmError::ExpectedIntegerType {
+                got: format!("{self:?}"),
             }),
         }
     }
@@ -95,12 +96,16 @@ impl Value {
             Value::String(value) => value.clone(),
             Value::List(values) => {
                 let rendered = values
+                    .borrow()
                     .iter()
                     .map(Value::to_output)
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{rendered}]")
             }
+            Value::BuiltinFunction(_) => "<built-in function>".to_string(),
+            Value::Function(name) => format!("<function {name}>"),
+            Value::BoundMethod { .. } => "<bound method>".to_string(),
             Value::None => "None".to_string(),
         }
     }
@@ -110,7 +115,8 @@ impl Value {
             Value::Integer(value) => *value != 0,
             Value::Boolean(value) => *value,
             Value::String(value) => !value.is_empty(),
-            Value::List(values) => !values.is_empty(),
+            Value::List(values) => !values.borrow().is_empty(),
+            Value::BuiltinFunction(_) | Value::Function(_) | Value::BoundMethod { .. } => true,
             Value::None => false,
         }
     }
@@ -121,6 +127,9 @@ impl Value {
             Value::Boolean(_) => "bool",
             Value::String(_) => "str",
             Value::List(_) => "list",
+            Value::BuiltinFunction(_) => "builtin_function_or_method",
+            Value::Function(_) => "function",
+            Value::BoundMethod { .. } => "method",
             Value::None => "NoneType",
         }
     }
@@ -238,19 +247,29 @@ impl VM {
                         values.push(value);
                     }
                     values.reverse();
-                    stack.push(Value::List(values));
+                    stack.push(Value::List(Rc::new(RefCell::new(values))));
                 }
                 Instruction::PushNone => stack.push(Value::None),
                 Instruction::LoadName(name) => {
-                    let value = environment
-                        .load(&name)
-                        .cloned()
-                        .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
+                    let value = if let Some(value) = environment.load(&name).cloned() {
+                        value
+                    } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
+                        Value::BuiltinFunction(builtin)
+                    } else if program.functions.contains_key(&name) {
+                        Value::Function(name.clone())
+                    } else {
+                        return Err(VmError::UndefinedVariable { name: name.clone() });
+                    };
                     stack.push(value);
                 }
                 Instruction::StoreName(name) => {
                     let value = Self::pop_stack(stack)?;
                     environment.store(name, value);
+                }
+                Instruction::LoadAttr(attribute) => {
+                    let object = Self::pop_stack(stack)?;
+                    let value = Self::load_attribute(object, attribute)?;
+                    stack.push(value);
                 }
                 Instruction::Add => {
                     let right = Self::pop_stack(stack)?;
@@ -278,13 +297,23 @@ impl VM {
                         return Err(VmError::NegativeListIndex { index: index_raw });
                     }
                     let index = index_raw as usize;
-                    let values = object.as_list()?;
-                    let value = values.get(index).cloned().ok_or({
-                        VmError::ListIndexOutOfBounds {
-                            index,
-                            len: values.len(),
+                    let values = match object {
+                        Value::List(values) => values,
+                        other => {
+                            return Err(VmError::ExpectedListType {
+                                got: format!("{other:?}"),
+                            });
                         }
-                    })?;
+                    };
+                    let borrowed = values.borrow();
+                    let value =
+                        borrowed
+                            .get(index)
+                            .cloned()
+                            .ok_or(VmError::ListIndexOutOfBounds {
+                                index,
+                                len: borrowed.len(),
+                            })?;
                     stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
@@ -298,93 +327,33 @@ impl VM {
                     let target = environment
                         .load_mut(&name)
                         .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
-                    let values = target.as_list_mut()?;
-                    if index >= values.len() {
+                    let values = match target {
+                        Value::List(values) => values,
+                        other => {
+                            return Err(VmError::ExpectedListType {
+                                got: format!("{other:?}"),
+                            });
+                        }
+                    };
+                    let mut borrowed = values.borrow_mut();
+                    if index >= borrowed.len() {
                         return Err(VmError::ListIndexOutOfBounds {
                             index,
-                            len: values.len(),
+                            len: borrowed.len(),
                         });
                     }
-                    values[index] = value;
+                    borrowed[index] = value;
                 }
-                Instruction::CallFunction { name, argc } => {
-                    if let Some(builtin) = BuiltinFunction::from_name(&name) {
-                        match builtin {
-                            BuiltinFunction::Print => {
-                                let mut values = Vec::with_capacity(argc);
-                                for _ in 0..argc {
-                                    let value = Self::pop_stack(stack)?;
-                                    values.push(value.to_output());
-                                }
-                                values.reverse();
-                                output.push(values.join(" "));
-                                stack.push(Value::None);
-                                continue;
-                            }
-                            BuiltinFunction::Len => {
-                                if argc != 1 {
-                                    return Err(VmError::FunctionArityMismatch {
-                                        name: "len".to_string(),
-                                        expected: 1,
-                                        found: argc,
-                                    });
-                                }
-                                let value = Self::pop_stack(stack)?;
-                                let values = value.as_list()?;
-                                stack.push(Value::Integer(values.len() as i64));
-                                continue;
-                            }
-                        }
-                    }
-                    let function = program
-                        .functions
-                        .get(&name)
-                        .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
-                        .clone();
-                    if argc != function.params.len() {
-                        return Err(VmError::FunctionArityMismatch {
-                            name,
-                            expected: function.params.len(),
-                            found: argc,
-                        });
-                    }
+                Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
                         let value = Self::pop_stack(stack)?;
                         args.push(value);
                     }
                     args.reverse();
-                    let mut locals_map = HashMap::new();
-                    for (param, value) in function.params.iter().zip(args) {
-                        locals_map.insert(param.to_string(), value);
-                    }
-                    let mut child_environment = environment.child_with_locals(&mut locals_map);
-                    let return_value = Self::execute_code(
-                        &function.code,
-                        &mut Vec::new(),
-                        &mut child_environment,
-                        output,
-                        program,
-                    )?;
-                    stack.push(return_value);
-                }
-                Instruction::CallMethod {
-                    receiver,
-                    method,
-                    argc,
-                } => {
-                    let mut args = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        let value = Self::pop_stack(stack)?;
-                        args.push(value);
-                    }
-                    args.reverse();
-                    let target = environment.load_mut(&receiver).ok_or_else(|| {
-                        VmError::UndefinedVariable {
-                            name: receiver.clone(),
-                        }
-                    })?;
-                    Self::dispatch_method_call(target, method, argc, &mut args, stack)?;
+                    let callee = Self::pop_stack(stack)?;
+                    let value = Self::call_value(callee, args, environment, output, program)?;
+                    stack.push(value);
                 }
                 Instruction::JumpIfFalse(target) => {
                     let value = Self::pop_stack(stack)?;
@@ -419,41 +388,108 @@ impl VM {
         stack.pop().ok_or(VmError::StackUnderflow)
     }
 
-    fn dispatch_method_call(
-        target: &mut Value,
-        method: String,
-        argc: usize,
-        args: &mut Vec<Value>,
-        stack: &mut Vec<Value>,
-    ) -> VmResult<()> {
-        match target {
+    fn load_attribute(object: Value, attribute: String) -> VmResult<Value> {
+        match object {
+            Value::List(_) if attribute == "append" => Ok(Value::BoundMethod {
+                receiver: Box::new(object),
+                method: attribute,
+            }),
+            other => Err(VmError::UnknownAttribute {
+                attribute,
+                type_name: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn call_value(
+        callee: Value,
+        args: Vec<Value>,
+        environment: &mut Environment<'_>,
+        output: &mut Vec<String>,
+        program: &CompiledProgram,
+    ) -> VmResult<Value> {
+        match callee {
+            Value::BuiltinFunction(BuiltinFunction::Print) => {
+                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                output.push(rendered.join(" "));
+                Ok(Value::None)
+            }
+            Value::BuiltinFunction(BuiltinFunction::Len) => {
+                if args.len() != 1 {
+                    return Err(VmError::FunctionArityMismatch {
+                        name: "len".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                match &args[0] {
+                    Value::List(values) => Ok(Value::Integer(values.borrow().len() as i64)),
+                    other => Err(VmError::ExpectedListType {
+                        got: format!("{other:?}"),
+                    }),
+                }
+            }
+            Value::Function(name) => {
+                let function = program
+                    .functions
+                    .get(&name)
+                    .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
+                    .clone();
+                if args.len() != function.params.len() {
+                    return Err(VmError::FunctionArityMismatch {
+                        name,
+                        expected: function.params.len(),
+                        found: args.len(),
+                    });
+                }
+                let mut locals_map = HashMap::new();
+                for (param, value) in function.params.iter().zip(args) {
+                    locals_map.insert(param.to_string(), value);
+                }
+                let mut child_environment = environment.child_with_locals(&mut locals_map);
+                Self::execute_code(
+                    &function.code,
+                    &mut Vec::new(),
+                    &mut child_environment,
+                    output,
+                    program,
+                )
+            }
+            Value::BoundMethod { receiver, method } => {
+                Self::call_bound_method(*receiver, method, args)
+            }
+            other => Err(VmError::ObjectNotCallable {
+                type_name: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn call_bound_method(receiver: Value, method: String, mut args: Vec<Value>) -> VmResult<Value> {
+        match receiver {
             Value::List(values) => match method.as_str() {
                 "append" => {
-                    if argc != 1 {
+                    if args.len() != 1 {
                         return Err(VmError::MethodArityMismatch {
                             method: "append".to_string(),
                             expected: 1,
-                            found: argc,
+                            found: args.len(),
                         });
                     }
-                    values.push(args.pop().expect("argc checked above"));
-                    stack.push(Value::None);
+                    values
+                        .borrow_mut()
+                        .push(args.pop().expect("len checked above"));
+                    Ok(Value::None)
                 }
-                _ => {
-                    return Err(VmError::UnknownMethod {
-                        method,
-                        type_name: "list".to_string(),
-                    });
-                }
-            },
-            _ => {
-                return Err(VmError::UnknownMethod {
+                _ => Err(VmError::UnknownMethod {
                     method,
-                    type_name: target.type_name().to_string(),
-                });
-            }
+                    type_name: "list".to_string(),
+                }),
+            },
+            other => Err(VmError::UnknownMethod {
+                method,
+                type_name: other.type_name().to_string(),
+            }),
         }
-        Ok(())
     }
 }
 

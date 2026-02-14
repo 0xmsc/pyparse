@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
@@ -119,13 +120,14 @@ impl<'a> InterpreterRuntime<'a> {
                         })?;
                         match list {
                             Value::List(values) => {
-                                if index >= values.len() {
+                                let mut borrowed = values.borrow_mut();
+                                if index >= borrowed.len() {
                                     return Err(InterpreterError::ListIndexOutOfBounds {
                                         index,
-                                        len: values.len(),
+                                        len: borrowed.len(),
                                     });
                                 }
-                                values[index] = value;
+                                borrowed[index] = value;
                             }
                             other => {
                                 return Err(InterpreterError::ExpectedListType {
@@ -193,7 +195,7 @@ impl<'a> InterpreterRuntime<'a> {
                 for element in elements {
                     values.push(self.eval_expression(element, environment)?);
                 }
-                Ok(Value::List(values))
+                Ok(Value::List(Rc::new(RefCell::new(values))))
             }
             Expression::Identifier(name) => {
                 if let Some(value) = environment.load(name) {
@@ -212,10 +214,11 @@ impl<'a> InterpreterRuntime<'a> {
                 let index = raw_index as usize;
                 match object {
                     Value::List(values) => {
-                        let value = values.get(index).cloned().ok_or(
+                        let borrowed = values.borrow();
+                        let value = borrowed.get(index).cloned().ok_or(
                             InterpreterError::ListIndexOutOfBounds {
                                 index,
-                                len: values.len(),
+                                len: borrowed.len(),
                             },
                         )?;
                         Ok(value)
@@ -246,8 +249,9 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                 }
             }
-            Expression::Attribute { .. } => {
-                Err(InterpreterError::StandaloneAttributeAccessUnsupported)
+            Expression::Attribute { object, name } => {
+                let object = self.eval_expression(object, environment)?;
+                Self::load_attribute(object, name.to_string())
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -259,120 +263,139 @@ impl<'a> InterpreterRuntime<'a> {
         args: &[Expression],
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
+        let callee = self.resolve_callee(callee, environment)?;
+        let mut evaluated_args = Vec::with_capacity(args.len());
+        for arg in args {
+            evaluated_args.push(self.eval_expression(arg, environment)?);
+        }
+        self.call_value(callee, evaluated_args, environment)
+    }
+
+    fn resolve_callee(
+        &mut self,
+        callee: &Expression,
+        environment: &mut Environment<'_>,
+    ) -> std::result::Result<Value, InterpreterError> {
+        if let Expression::Identifier(name) = callee {
+            if let Some(value) = environment.load(name) {
+                return Ok(value);
+            }
+            if let Some(builtin) = BuiltinFunction::from_name(name) {
+                return Ok(Value::BuiltinFunction(builtin));
+            }
+            if self.functions.contains_key(name) {
+                return Ok(Value::Function(name.to_string()));
+            }
+            return Err(InterpreterError::UndefinedFunction {
+                name: name.to_string(),
+            });
+        }
+        self.eval_expression(callee, environment)
+    }
+
+    fn load_attribute(
+        object: Value,
+        attribute: String,
+    ) -> std::result::Result<Value, InterpreterError> {
+        match object {
+            Value::List(_) if attribute == "append" => Ok(Value::BoundMethod {
+                receiver: Box::new(object),
+                method: attribute,
+            }),
+            other => Err(InterpreterError::UnknownAttribute {
+                attribute,
+                type_name: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn call_value(
+        &mut self,
+        callee: Value,
+        args: Vec<Value>,
+        environment: &mut Environment<'_>,
+    ) -> std::result::Result<Value, InterpreterError> {
         match callee {
-            Expression::Identifier(name) => {
-                if let Some(builtin) = BuiltinFunction::from_name(name) {
-                    match builtin {
-                        BuiltinFunction::Print => {
-                            // Calls evaluate argument expressions first in the caller environment.
-                            let mut evaluated_args = Vec::with_capacity(args.len());
-                            for arg in args {
-                                evaluated_args.push(self.eval_expression(arg, environment)?);
-                            }
-                            let outputs: Vec<String> =
-                                evaluated_args.iter().map(Value::to_output).collect();
-                            self.output.push(outputs.join(" "));
-                            return Ok(Value::None);
-                        }
-                        BuiltinFunction::Len => {
-                            if args.len() != 1 {
-                                return Err(InterpreterError::FunctionArityMismatch {
-                                    name: "len".to_string(),
-                                    expected: 1,
-                                    found: args.len(),
-                                });
-                            }
-                            let value = self.eval_expression(&args[0], environment)?;
-                            return match value {
-                                Value::List(values) => Ok(Value::Integer(values.len() as i64)),
-                                other => Err(InterpreterError::ExpectedListType {
-                                    got: format!("{other:?}"),
-                                }),
-                            };
-                        }
-                    }
-                }
-                // Calls evaluate argument expressions first in the caller environment.
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    let value = self.eval_expression(arg, environment)?;
-                    evaluated_args.push(value);
-                }
-                let function = self.functions.get(name).cloned().ok_or_else(|| {
-                    InterpreterError::UndefinedFunction {
-                        name: name.to_string(),
-                    }
-                })?;
-                if evaluated_args.len() != function.params.len() {
+            Value::BuiltinFunction(BuiltinFunction::Print) => {
+                let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                self.output.push(outputs.join(" "));
+                Ok(Value::None)
+            }
+            Value::BuiltinFunction(BuiltinFunction::Len) => {
+                if args.len() != 1 {
                     return Err(InterpreterError::FunctionArityMismatch {
-                        name: name.to_string(),
+                        name: "len".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                match &args[0] {
+                    Value::List(values) => Ok(Value::Integer(values.borrow().len() as i64)),
+                    other => Err(InterpreterError::ExpectedListType {
+                        got: format!("{other:?}"),
+                    }),
+                }
+            }
+            Value::Function(name) => {
+                let function =
+                    self.functions.get(&name).cloned().ok_or_else(|| {
+                        InterpreterError::UndefinedFunction { name: name.clone() }
+                    })?;
+                if args.len() != function.params.len() {
+                    return Err(InterpreterError::FunctionArityMismatch {
+                        name,
                         expected: function.params.len(),
-                        found: evaluated_args.len(),
+                        found: args.len(),
                     });
                 }
                 let mut local_scope = HashMap::new();
-                for (param, value) in function.params.iter().zip(evaluated_args) {
+                for (param, value) in function.params.iter().zip(args) {
                     local_scope.insert(param.clone(), value);
                 }
-                // Function calls switch from expression evaluation back to statement execution.
                 let mut local_environment = environment.child_with_locals(&mut local_scope);
                 match self.exec_block(&function.body, &mut local_environment)? {
                     ExecResult::Continue => Ok(Value::None),
                     ExecResult::Return(value) => Ok(value),
                 }
             }
-            Expression::Attribute { object, name } => {
-                let receiver_name = if let Expression::Identifier(receiver_name) = object.as_ref() {
-                    receiver_name
-                } else {
-                    return Err(InterpreterError::MethodReceiverMustBeIdentifier);
-                };
-                let mut evaluated_args = Vec::with_capacity(args.len());
-                for arg in args {
-                    evaluated_args.push(self.eval_expression(arg, environment)?);
-                }
-                let receiver = environment.load_mut(receiver_name).ok_or_else(|| {
-                    InterpreterError::UndefinedVariable {
-                        name: receiver_name.to_string(),
-                    }
-                })?;
-                match receiver {
-                    Value::List(values) => match name.as_str() {
-                        "append" => {
-                            if evaluated_args.len() != 1 {
-                                return Err(InterpreterError::MethodArityMismatch {
-                                    method: "append".to_string(),
-                                    expected: 1,
-                                    found: evaluated_args.len(),
-                                });
-                            }
-                            values.push(evaluated_args.pop().expect("len checked above"));
-                            Ok(Value::None)
-                        }
-                        _ => Err(InterpreterError::UnknownMethod {
-                            method: name.to_string(),
-                            type_name: "list".to_string(),
-                        }),
-                    },
-                    Value::Integer(_) => Err(InterpreterError::UnknownMethod {
-                        method: name.to_string(),
-                        type_name: "int".to_string(),
-                    }),
-                    Value::Boolean(_) => Err(InterpreterError::UnknownMethod {
-                        method: name.to_string(),
-                        type_name: "bool".to_string(),
-                    }),
-                    Value::String(_) => Err(InterpreterError::UnknownMethod {
-                        method: name.to_string(),
-                        type_name: "str".to_string(),
-                    }),
-                    Value::None => Err(InterpreterError::UnknownMethod {
-                        method: name.to_string(),
-                        type_name: "NoneType".to_string(),
-                    }),
-                }
+            Value::BoundMethod { receiver, method } => {
+                Self::call_bound_method(*receiver, method, args)
             }
-            _ => Err(InterpreterError::NonIdentifierCallTarget),
+            other => Err(InterpreterError::ObjectNotCallable {
+                type_name: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn call_bound_method(
+        receiver: Value,
+        method: String,
+        mut args: Vec<Value>,
+    ) -> std::result::Result<Value, InterpreterError> {
+        match receiver {
+            Value::List(values) => match method.as_str() {
+                "append" => {
+                    if args.len() != 1 {
+                        return Err(InterpreterError::MethodArityMismatch {
+                            method: "append".to_string(),
+                            expected: 1,
+                            found: args.len(),
+                        });
+                    }
+                    values
+                        .borrow_mut()
+                        .push(args.pop().expect("len checked above"));
+                    Ok(Value::None)
+                }
+                _ => Err(InterpreterError::UnknownMethod {
+                    method,
+                    type_name: "list".to_string(),
+                }),
+            },
+            other => Err(InterpreterError::UnknownMethod {
+                method,
+                type_name: other.type_name().to_string(),
+            }),
         }
     }
 }

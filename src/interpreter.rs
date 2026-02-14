@@ -297,7 +297,12 @@ mod tests {
             run_program(&interpreter, &invalid_callee_program)
                 .expect_err("expected call target error"),
         );
-        assert_eq!(error, InterpreterError::NonIdentifierCallTarget);
+        assert_eq!(
+            error,
+            InterpreterError::ObjectNotCallable {
+                type_name: "int".to_string()
+            }
+        );
 
         let undefined_function_program = Program {
             statements: vec![Statement::Expr(call("missing", vec![]))],

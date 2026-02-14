@@ -10,7 +10,6 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
-use crate::builtins::BuiltinFunction;
 use crate::bytecode::{Instruction, compile};
 
 type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
@@ -536,8 +535,8 @@ fn define_function(
     module: &mut JITModule,
     runtime_funcs: &RuntimeFunctions,
     string_data: &mut StringData,
-    function_ids: &HashMap<String, FuncId>,
-    function_arities: &HashMap<String, usize>,
+    _function_ids: &HashMap<String, FuncId>,
+    _function_arities: &HashMap<String, usize>,
     global_indices: &HashMap<String, i64>,
     func_id: FuncId,
     param_names: &[String],
@@ -564,7 +563,7 @@ fn define_function(
     let sub = module.declare_func_in_func(runtime_funcs.sub, &mut ctx.func);
     let less_than = module.declare_func_in_func(runtime_funcs.less_than, &mut ctx.func);
     let is_truthy = module.declare_func_in_func(runtime_funcs.is_truthy, &mut ctx.func);
-    let print = module.declare_func_in_func(runtime_funcs.print, &mut ctx.func);
+    let _print = module.declare_func_in_func(runtime_funcs.print, &mut ctx.func);
     let load_global = module.declare_func_in_func(runtime_funcs.load_global, &mut ctx.func);
     let store_global = module.declare_func_in_func(runtime_funcs.store_global, &mut ctx.func);
     let set_error = module.declare_func_in_func(runtime_funcs.set_error, &mut ctx.func);
@@ -863,88 +862,11 @@ fn define_function(
             Instruction::StoreIndex(_) => {
                 bail!("List index assignment is not supported in the JIT backend");
             }
-            Instruction::CallFunction { name, argc } => {
-                let mut handled_builtin = false;
-                if let Some(builtin) = BuiltinFunction::from_name(name) {
-                    match builtin {
-                        BuiltinFunction::Print => {
-                            let values_base = if *argc == 0 {
-                                builder.ins().iconst(ptr_type, 0)
-                            } else {
-                                let args_slot = builder.create_sized_stack_slot(
-                                    cranelift_codegen::ir::StackSlotData::new(
-                                        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                                        (*argc as u32) * (ptr_size as u32),
-                                        ptr_align_shift,
-                                    ),
-                                );
-                                let args_base = builder.ins().stack_addr(ptr_type, args_slot, 0);
-                                for idx in (0..*argc).rev() {
-                                    let value = pop_value(&mut builder);
-                                    let arg_addr =
-                                        builder.ins().iadd_imm(args_base, (idx as i64) * ptr_size);
-                                    builder.ins().store(MemFlags::new(), value, arg_addr, 0);
-                                }
-                                args_base
-                            };
-                            let argc_value = builder.ins().iconst(types::I64, *argc as i64);
-                            let call = builder
-                                .ins()
-                                .call(print, &[ctx_param, values_base, argc_value]);
-                            let result = builder.inst_results(call)[0];
-                            push_value(&mut builder, result);
-                            handled_builtin = true;
-                        }
-                        BuiltinFunction::Len => {
-                            bail!("len is not supported in the JIT backend");
-                        }
-                    }
-                }
-                if handled_builtin {
-                    // builtins follow the normal fallthrough jump to the next block
-                } else if let Some(&callee_id) = function_ids.get(name) {
-                    let expected = function_arities.get(name).copied().unwrap_or(0);
-                    if expected != *argc {
-                        emit_error(
-                            module,
-                            string_data,
-                            &mut builder,
-                            set_error,
-                            ctx_param,
-                            &format!("Function '{name}' expected {expected} arguments, got {argc}"),
-                        )?;
-                        builder.ins().jump(error_block, &[]);
-                        continue;
-                    }
-                    let callee_ref = module.declare_func_in_func(callee_id, builder.func);
-                    let mut call_args = Vec::with_capacity(*argc + 1);
-                    call_args.push(ctx_param);
-                    let mut popped = Vec::with_capacity(*argc);
-                    for _ in 0..*argc {
-                        popped.push(pop_value(&mut builder));
-                    }
-                    popped.reverse();
-                    call_args.extend(popped);
-                    let call = builder.ins().call(callee_ref, &call_args);
-                    let result = builder.inst_results(call)[0];
-                    let ok_block = check_null(&mut builder, result);
-                    builder.switch_to_block(ok_block);
-                    push_value(&mut builder, result);
-                } else {
-                    emit_error(
-                        module,
-                        string_data,
-                        &mut builder,
-                        set_error,
-                        ctx_param,
-                        &format!("Undefined function '{name}'"),
-                    )?;
-                    builder.ins().jump(error_block, &[]);
-                    terminated = true;
-                }
+            Instruction::LoadAttr(_) => {
+                bail!("Attribute access is not supported in the JIT backend");
             }
-            Instruction::CallMethod { .. } => {
-                bail!("Method calls are not supported in the JIT backend");
+            Instruction::Call { .. } => {
+                bail!("Generic calls are not supported in the JIT backend");
             }
             Instruction::JumpIfFalse(target) => {
                 let target_index = resolve_relative_target(idx, *target, code.len())?;
@@ -1121,9 +1043,9 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::PushString(_)
         | Instruction::PushNone
         | Instruction::LoadName(_) => 1,
+        Instruction::LoadAttr(_) => 0,
         Instruction::BuildList(count) => 1 - (*count as i32),
-        Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
-        Instruction::CallMethod { argc, .. } => 1 - (*argc as i32),
+        Instruction::Call { argc } => -(*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::LoadIndex => -1,
         Instruction::StoreIndex(_) => -2,
