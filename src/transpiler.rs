@@ -130,6 +130,7 @@ impl Transpiler {
             Statement::Assign { name, .. } => {
                 names.insert(name.to_string());
             }
+            Statement::AssignIndex { .. } => {}
             Statement::If {
                 then_body,
                 else_body,
@@ -160,6 +161,7 @@ impl Transpiler {
             Statement::Assign { name, .. } => {
                 names.insert(name.to_string());
             }
+            Statement::AssignIndex { .. } => {}
             Statement::If {
                 then_body,
                 else_body,
@@ -196,6 +198,9 @@ impl Transpiler {
             Statement::Assign { name, value } => {
                 let expr = self.emit_expression(value)?;
                 self.push_line(output, indent, &format!("{name} = {expr};"));
+            }
+            Statement::AssignIndex { .. } => {
+                bail!("List index assignment is not supported in the transpiler");
             }
             Statement::While { condition, body } => {
                 let condition = self.emit_expression(condition)?;
@@ -264,6 +269,7 @@ impl Transpiler {
                 Ok(format!("make_str(\"{escaped}\")"))
             }
             Expression::List(_) => bail!("List literals are not supported in the transpiler"),
+            Expression::Index { .. } => bail!("List indexing is not supported in the transpiler"),
             Expression::Identifier(name) => Ok(name.to_string()),
             Expression::BinaryOp { left, op, right } => {
                 let left = self.emit_expression(left)?;

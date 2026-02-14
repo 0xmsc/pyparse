@@ -65,6 +65,12 @@ impl<'a> Parser<'a> {
         {
             return self.parse_assignment();
         }
+        if matches!(self.current_kind(), TokenKind::Identifier(_))
+            && matches!(self.peek_kind(), TokenKind::LBracket)
+            && let Some(assignment) = self.try_parse_index_assignment()?
+        {
+            return Ok(assignment);
+        }
         let expr = self.parse_expression()?;
         self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Expr(expr))
@@ -89,6 +95,23 @@ impl<'a> Parser<'a> {
         let value = self.parse_expression()?;
         self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Assign { name, value })
+    }
+
+    fn try_parse_index_assignment(&mut self) -> ParseResult<Option<Statement>> {
+        let checkpoint = self.pos;
+
+        let name = self.expect_identifier()?;
+        self.expect_token(TokenKind::LBracket, "[")?;
+        let index = self.parse_expression()?;
+        self.expect_token(TokenKind::RBracket, "]")?;
+        if !self.try_consume(TokenKind::Equal) {
+            self.pos = checkpoint;
+            return Ok(None);
+        }
+
+        let value = self.parse_expression()?;
+        self.expect_token(TokenKind::Newline, "newline")?;
+        Ok(Some(Statement::AssignIndex { name, index, value }))
     }
 
     fn parse_if(&mut self) -> ParseResult<Statement> {
@@ -160,19 +183,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_additive(&mut self) -> ParseResult<Expression> {
-        // Additive level (`+`/`-`), with call/primary expressions as operands.
+        // Additive level (`+`/`-`), with postfix/primary expressions as operands.
         // Example: `a + b - c`.
-        let mut expr = self.parse_call()?;
+        let mut expr = self.parse_postfix()?;
         loop {
             if self.try_consume(TokenKind::Plus) {
-                let right = self.parse_call()?;
+                let right = self.parse_postfix()?;
                 expr = Expression::BinaryOp {
                     left: Box::new(expr),
                     op: BinaryOperator::Add,
                     right: Box::new(right),
                 };
             } else if self.try_consume(TokenKind::Minus) {
-                let right = self.parse_call()?;
+                let right = self.parse_postfix()?;
                 expr = Expression::BinaryOp {
                     left: Box::new(expr),
                     op: BinaryOperator::Sub,
@@ -185,17 +208,28 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_call(&mut self) -> ParseResult<Expression> {
-        // Postfix call level: parse `callee(...)` chains left-to-right.
-        // Example: `foo()()`.
+    fn parse_postfix(&mut self) -> ParseResult<Expression> {
+        // Postfix level parses call and index chains left-to-right.
+        // Example: `foo()[0](1)`.
         let mut expr = self.parse_primary()?;
-        while self.try_consume(TokenKind::LParen) {
-            let args = self.parse_expression_list(TokenKind::RParen)?;
-            self.expect_token(TokenKind::RParen, ")")?;
-            expr = Expression::Call {
-                callee: Box::new(expr),
-                args,
-            };
+        loop {
+            if self.try_consume(TokenKind::LParen) {
+                let args = self.parse_expression_list(TokenKind::RParen)?;
+                self.expect_token(TokenKind::RParen, ")")?;
+                expr = Expression::Call {
+                    callee: Box::new(expr),
+                    args,
+                };
+            } else if self.try_consume(TokenKind::LBracket) {
+                let index = self.parse_expression()?;
+                self.expect_token(TokenKind::RBracket, "]")?;
+                expr = Expression::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index),
+                };
+            } else {
+                break;
+            }
         }
         Ok(expr)
     }
@@ -595,6 +629,49 @@ mod tests {
                         Expression::Integer(2),
                     ])],
                 })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_list_index_and_assignment() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("values")),
+            tok(TokenKind::LBracket),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::RBracket),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(7)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("values")),
+            tok(TokenKind::LBracket),
+            tok(TokenKind::Integer(0)),
+            tok(TokenKind::RBracket),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![
+                    Statement::AssignIndex {
+                        name: "values".to_string(),
+                        index: Expression::Integer(1),
+                        value: Expression::Integer(7),
+                    },
+                    Statement::Expr(Expression::Call {
+                        callee: Box::new(Expression::Identifier("print".to_string())),
+                        args: vec![Expression::Index {
+                            object: Box::new(Expression::Identifier("values".to_string())),
+                            index: Box::new(Expression::Integer(0)),
+                        }],
+                    }),
+                ],
             }
         );
     }

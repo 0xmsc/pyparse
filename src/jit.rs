@@ -857,6 +857,12 @@ fn define_function(
                 builder.switch_to_block(ok_block);
                 push_value(&mut builder, result);
             }
+            Instruction::LoadIndex => {
+                bail!("List indexing is not supported in the JIT backend");
+            }
+            Instruction::StoreIndex(_) => {
+                bail!("List index assignment is not supported in the JIT backend");
+            }
             Instruction::CallFunction { name, argc } => {
                 let mut handled_builtin = false;
                 if let Some(builtin) = BuiltinFunction::from_name(name) {
@@ -1112,6 +1118,8 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         Instruction::BuildList(count) => 1 - (*count as i32),
         Instruction::CallFunction { argc, .. } => 1 - (*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
+        Instruction::LoadIndex => -1,
+        Instruction::StoreIndex(_) => -2,
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,
         Instruction::Jump(_) | Instruction::Return => 0,
         Instruction::ReturnValue => -1,

@@ -5,6 +5,10 @@ pub enum Expression {
     Boolean(bool),
     String(String),
     List(Vec<Expression>),
+    Index {
+        object: Box<Expression>,
+        index: Box<Expression>,
+    },
     BinaryOp {
         left: Box<Expression>,
         op: BinaryOperator,
@@ -32,6 +36,11 @@ pub enum Statement {
     },
     Assign {
         name: String,
+        value: Expression,
+    },
+    AssignIndex {
+        name: String,
+        index: Expression,
         value: Expression,
     },
     While {

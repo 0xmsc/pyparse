@@ -15,6 +15,8 @@ pub enum Instruction {
     Add,
     Sub,
     LessThan,
+    LoadIndex,
+    StoreIndex(String),
     CallFunction { name: String, argc: usize },
     JumpIfFalse(isize),
     Jump(isize),
@@ -81,6 +83,11 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
         Statement::Assign { name, value } => {
             code.extend(compile_expression(value)?);
             code.push(Instruction::StoreName(name.to_string()));
+        }
+        Statement::AssignIndex { name, index, value } => {
+            code.extend(compile_expression(index)?);
+            code.extend(compile_expression(value)?);
+            code.push(Instruction::StoreIndex(name.to_string()));
         }
         Statement::If {
             condition,
@@ -165,6 +172,11 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
         }
         Expression::Identifier(name) => {
             code.push(Instruction::LoadName(name.to_string()));
+        }
+        Expression::Index { object, index } => {
+            code.extend(compile_expression(object)?);
+            code.extend(compile_expression(index)?);
+            code.push(Instruction::LoadIndex);
         }
         Expression::BinaryOp { left, op, right } => {
             code.extend(compile_expression(left)?);
@@ -353,5 +365,40 @@ mod tests {
             compiled.main[3],
             Instruction::CallFunction { ref name, argc } if name == "print" && argc == 1
         ));
+    }
+
+    #[test]
+    fn compiles_list_index_assignment_and_read() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    name: "values".to_string(),
+                    value: Expression::List(vec![Expression::Integer(1), Expression::Integer(2)]),
+                },
+                Statement::AssignIndex {
+                    name: "values".to_string(),
+                    index: Expression::Integer(1),
+                    value: Expression::Integer(7),
+                },
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Index {
+                        object: Box::new(Expression::Identifier("values".to_string())),
+                        index: Box::new(Expression::Integer(0)),
+                    }],
+                )),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert!(compiled.main.iter().any(
+            |instruction| matches!(instruction, Instruction::StoreIndex(name) if name == "values")
+        ));
+        assert!(
+            compiled
+                .main
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::LoadIndex))
+        );
     }
 }

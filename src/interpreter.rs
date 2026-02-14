@@ -426,4 +426,30 @@ mod tests {
         let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "[1, 2]");
     }
+
+    #[test]
+    fn supports_list_index_and_assignment() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    name: "values".to_string(),
+                    value: Expression::List(vec![int(1), int(2)]),
+                },
+                Statement::AssignIndex {
+                    name: "values".to_string(),
+                    index: int(1),
+                    value: int(7),
+                },
+                print(vec![Expression::Index {
+                    object: Box::new(identifier("values")),
+                    index: Box::new(int(0)),
+                }]),
+                print(vec![identifier("values")]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "1\n[1, 7]");
+    }
 }

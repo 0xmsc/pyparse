@@ -25,6 +25,20 @@ impl Value {
         }
     }
 
+    fn as_list(&self) -> Result<&Vec<Value>> {
+        match self {
+            Value::List(values) => Ok(values),
+            other => bail!("Expected list, got {other:?}"),
+        }
+    }
+
+    fn as_list_mut(&mut self) -> Result<&mut Vec<Value>> {
+        match self {
+            Value::List(values) => Ok(values),
+            other => bail!("Expected list, got {other:?}"),
+        }
+    }
+
     fn to_output(&self) -> String {
         match self {
             Value::Integer(value) => value.to_string(),
@@ -172,6 +186,58 @@ impl VM {
                         .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
                     let result = left.as_int()? < right.as_int()?;
                     stack.push(Value::Boolean(result));
+                }
+                Instruction::LoadIndex => {
+                    let index_value = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let object = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let index_raw = index_value.as_int()?;
+                    if index_raw < 0 {
+                        bail!("List index must be non-negative, got {index_raw}");
+                    }
+                    let index = index_raw as usize;
+                    let values = object.as_list()?;
+                    let value = values.get(index).cloned().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "List index out of bounds: index {index}, len {}",
+                            values.len()
+                        )
+                    })?;
+                    stack.push(value);
+                }
+                Instruction::StoreIndex(name) => {
+                    let value = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let index_value = stack
+                        .pop()
+                        .ok_or_else(|| anyhow::anyhow!("Stack underflow"))?;
+                    let index_raw = index_value.as_int()?;
+                    if index_raw < 0 {
+                        bail!("List index must be non-negative, got {index_raw}");
+                    }
+                    let index = index_raw as usize;
+                    let target = if let Some(locals) = locals.as_mut() {
+                        if locals.contains_key(&name) {
+                            locals.get_mut(&name)
+                        } else {
+                            self.globals.get_mut(&name)
+                        }
+                    } else {
+                        self.globals.get_mut(&name)
+                    }
+                    .ok_or_else(|| anyhow::anyhow!("Undefined variable '{name}'"))?;
+                    let values = target.as_list_mut()?;
+                    if index >= values.len() {
+                        bail!(
+                            "List index out of bounds: index {index}, len {}",
+                            values.len()
+                        );
+                    }
+                    values[index] = value;
                 }
                 Instruction::CallFunction { name, argc } => {
                     if let Some(builtin) = BuiltinFunction::from_name(&name) {

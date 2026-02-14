@@ -44,6 +44,15 @@ impl<'a> Environment<'a> {
         self.globals.get(name).cloned()
     }
 
+    fn load_mut(&mut self, name: &str) -> Option<&mut Value> {
+        if let Some(locals) = self.locals.as_deref_mut()
+            && locals.contains_key(name)
+        {
+            return locals.get_mut(name);
+        }
+        self.globals.get_mut(name)
+    }
+
     fn store(&mut self, name: String, value: Value) {
         if let Some(locals) = self.locals.as_deref_mut() {
             locals.insert(name, value);
@@ -94,6 +103,37 @@ impl<'a> InterpreterRuntime<'a> {
             Statement::Assign { name, value } => {
                 let value = self.eval_expression(value, environment)?;
                 environment.store(name.to_string(), value);
+                Ok(ExecResult::Continue)
+            }
+            Statement::AssignIndex { name, index, value } => {
+                let raw_index = self.eval_expression(index, environment)?.as_int()?;
+                if raw_index < 0 {
+                    return Err(InterpreterError::NegativeListIndex { index: raw_index });
+                }
+                let index = raw_index as usize;
+                let value = self.eval_expression(value, environment)?;
+
+                let list = environment.load_mut(name).ok_or_else(|| {
+                    InterpreterError::UndefinedVariable {
+                        name: name.to_string(),
+                    }
+                })?;
+                match list {
+                    Value::List(values) => {
+                        if index >= values.len() {
+                            return Err(InterpreterError::ListIndexOutOfBounds {
+                                index,
+                                len: values.len(),
+                            });
+                        }
+                        values[index] = value;
+                    }
+                    other => {
+                        return Err(InterpreterError::ExpectedListType {
+                            got: format!("{other:?}"),
+                        });
+                    }
+                }
                 Ok(ExecResult::Continue)
             }
             Statement::If {
@@ -161,6 +201,28 @@ impl<'a> InterpreterRuntime<'a> {
                 Err(InterpreterError::UndefinedVariable {
                     name: name.to_string(),
                 })
+            }
+            Expression::Index { object, index } => {
+                let object = self.eval_expression(object, environment)?;
+                let raw_index = self.eval_expression(index, environment)?.as_int()?;
+                if raw_index < 0 {
+                    return Err(InterpreterError::NegativeListIndex { index: raw_index });
+                }
+                let index = raw_index as usize;
+                match object {
+                    Value::List(values) => {
+                        let value = values.get(index).cloned().ok_or({
+                            InterpreterError::ListIndexOutOfBounds {
+                                index,
+                                len: values.len(),
+                            }
+                        })?;
+                        Ok(value)
+                    }
+                    other => Err(InterpreterError::ExpectedListType {
+                        got: format!("{other:?}"),
+                    }),
+                }
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;

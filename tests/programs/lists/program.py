@@ -1,6 +1,10 @@
 values = [1, 2]
+print(values)
+print(values[0])
+values[1] = 7
+print(values)
 if values:
-    print(values)
+    print(1)
 
 empty = []
 if empty:
