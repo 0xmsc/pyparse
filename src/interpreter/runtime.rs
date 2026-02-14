@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::list::ListError;
-use crate::runtime::object::{AttributeError, CallTarget, MethodError, ObjectWrapper};
+use crate::runtime::object::{AttributeError, CallTarget, MethodError};
 
 use super::{Function, InterpreterError, Value};
 
@@ -120,13 +120,14 @@ impl<'a> InterpreterRuntime<'a> {
                                 name: name.to_string(),
                             }
                         })?;
-                        let wrapper = ObjectWrapper::new(list.object_ref());
-                        if wrapper.type_name() != "list" {
+                        let list_ref = list.object_ref();
+                        if list_ref.borrow().type_name() != "list" {
                             return Err(InterpreterError::ExpectedListType {
                                 got: format!("{list:?}"),
                             });
                         }
-                        wrapper
+                        list_ref
+                            .borrow_mut()
                             .set_item(raw_index, value)
                             .map_err(|error| match error {
                                 ListError::NegativeIndex { index } => {
@@ -215,20 +216,23 @@ impl<'a> InterpreterRuntime<'a> {
                         .ok_or_else(|| InterpreterError::ExpectedIntegerType {
                             got: format!("{index_value:?}"),
                         })?;
-                let wrapper = ObjectWrapper::new(object_value.object_ref());
-                if wrapper.type_name() != "list" {
+                let object_ref = object_value.object_ref();
+                if object_ref.borrow().type_name() != "list" {
                     return Err(InterpreterError::ExpectedListType {
                         got: format!("{object_value:?}"),
                     });
                 }
-                wrapper.get_item(raw_index).map_err(|error| match error {
-                    ListError::NegativeIndex { index } => {
-                        InterpreterError::NegativeListIndex { index }
-                    }
-                    ListError::OutOfBounds { index, len } => {
-                        InterpreterError::ListIndexOutOfBounds { index, len }
-                    }
-                })
+                object_ref
+                    .borrow()
+                    .get_item(raw_index)
+                    .map_err(|error| match error {
+                        ListError::NegativeIndex { index } => {
+                            InterpreterError::NegativeListIndex { index }
+                        }
+                        ListError::OutOfBounds { index, len } => {
+                            InterpreterError::ListIndexOutOfBounds { index, len }
+                        }
+                    })
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -255,7 +259,8 @@ impl<'a> InterpreterRuntime<'a> {
                 let object = self.eval_expression(object, environment)?;
                 let attribute = name.to_string();
                 let object_ref = object.object_ref();
-                let method = ObjectWrapper::new(object_ref.clone())
+                let method = object_ref
+                    .borrow()
                     .get_attribute_method_name(&attribute)
                     .map_err(|error| match error {
                         AttributeError::UnknownAttribute {
@@ -314,13 +319,12 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        let wrapper = ObjectWrapper::new(callee.object_ref());
-        let call_target =
-            wrapper
-                .call_target()
-                .ok_or_else(|| InterpreterError::ObjectNotCallable {
-                    type_name: wrapper.type_name().to_string(),
-                })?;
+        let callee_ref = callee.object_ref();
+        let call_target = callee_ref.borrow().call_target().ok_or_else(|| {
+            InterpreterError::ObjectNotCallable {
+                type_name: callee_ref.borrow().type_name().to_string(),
+            }
+        })?;
         match call_target {
             CallTarget::Builtin(BuiltinFunction::Print) => {
                 let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
@@ -335,13 +339,13 @@ impl<'a> InterpreterRuntime<'a> {
                         found: args.len(),
                     });
                 }
-                let wrapper = ObjectWrapper::new(args[0].object_ref());
-                if wrapper.type_name() != "list" {
+                let arg_ref = args[0].object_ref();
+                if arg_ref.borrow().type_name() != "list" {
                     return Err(InterpreterError::ExpectedListType {
                         got: format!("{:?}", &args[0]),
                     });
                 }
-                Ok(Value::int_object(wrapper.len() as i64))
+                Ok(Value::int_object(arg_ref.borrow().len() as i64))
             }
             CallTarget::Function(name) => {
                 let function =
@@ -366,7 +370,8 @@ impl<'a> InterpreterRuntime<'a> {
                 }
             }
             CallTarget::BoundMethod { receiver, method } => {
-                ObjectWrapper::new(receiver)
+                receiver
+                    .borrow_mut()
                     .call_method(&method, args)
                     .map_err(|error| match error {
                         MethodError::ArityMismatch {

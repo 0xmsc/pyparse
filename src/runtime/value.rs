@@ -3,7 +3,7 @@ use crate::runtime::bool::BoolObject;
 use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
 use crate::runtime::int::IntObject;
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{BinaryOpError, ObjectRef, ObjectWrapper, new_list_object};
+use crate::runtime::object::{BinaryOpError, ObjectRef, new_list_object};
 use crate::runtime::string::StringObject;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -61,18 +61,18 @@ impl Value {
     }
 
     pub(crate) fn add(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        ObjectWrapper::new(self.0.clone()).add(rhs)
+        self.0.borrow().add(rhs)
     }
 
     pub(crate) fn sub(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        ObjectWrapper::new(self.0.clone()).sub(rhs)
+        self.0.borrow().sub(rhs)
     }
 
     pub(crate) fn lt(&self, rhs: &Value) -> Result<Value, BinaryOpError> {
-        ObjectWrapper::new(self.0.clone()).lt(rhs)
+        self.0.borrow().lt(rhs)
     }
 
     pub(crate) fn as_i64(&self) -> Option<i64> {
-        ObjectWrapper::new(self.0.clone()).as_i64()
+        self.0.borrow().as_i64()
     }
 }
