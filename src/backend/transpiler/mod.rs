@@ -4,11 +4,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::ast::{BinaryOperator, Expression, Program, Statement};
-use crate::backend::c_runtime::{
+use self::c_runtime::{
     C_BINARY_OPS, C_EXPECT_INT, C_HEADERS, C_PRINT, C_TRUTHY, C_VALUE_TYPES, compile_source,
     escape_c_string, run_compiled_binary,
 };
 use crate::backend::{Backend, PreparedBackend};
+
+mod c_runtime;
 
 pub struct Transpiler;
 

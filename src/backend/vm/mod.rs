@@ -2,8 +2,10 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::Program;
-use crate::backend::bytecode::{CompiledProgram, Instruction, compile};
 use crate::backend::{Backend, PreparedBackend};
+use self::bytecode::{CompiledProgram, Instruction, compile};
+
+pub(crate) mod bytecode;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Value {
