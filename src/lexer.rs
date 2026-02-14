@@ -1,57 +1,8 @@
-use thiserror::Error;
+mod error;
+mod token;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TokenKind<'a> {
-    Identifier(&'a str),
-    Integer(i64),
-    String(&'a str),
-    True,
-    False,
-
-    // Keywords
-    If,
-    Else,
-    While,
-    Def,
-    Return,
-    Pass,
-
-    // Operators
-    Equal, // =
-    Plus,  // +
-    Minus, // -
-    Less,  // <
-
-    // Delimiters
-    Colon,  // :
-    Comma,  // ,
-    LParen, // (
-    RParen, // )
-
-    // Structural
-    Newline,
-    Indent,
-    Dedent,
-    EOF,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Token<'a> {
-    pub kind: TokenKind<'a>,
-    pub span: Span,
-}
-
-impl<'a> Token<'a> {
-    pub fn new(kind: TokenKind<'a>, span: Span) -> Self {
-        Self { kind, span }
-    }
-}
+pub use error::{LexError, LexResult};
+pub use token::{Span, Token, TokenKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LexerState {
@@ -63,27 +14,6 @@ enum StepOutcome<'a> {
     Emit(Token<'a>),
     Continue,
 }
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum LexError {
-    #[error("Invalid dedent to {indent_level} spaces at position {position}")]
-    InvalidDedent {
-        indent_level: usize,
-        position: usize,
-    },
-    #[error("Unexpected character '{character}' at position {position}")]
-    UnexpectedCharacter { character: char, position: usize },
-    #[error("Tabs are not supported for indentation at position {position}")]
-    TabIndentation { position: usize },
-    #[error("Invalid integer literal '{literal}' at position {position}")]
-    InvalidIntegerLiteral { literal: String, position: usize },
-    #[error("Unterminated string literal at position {position}")]
-    UnterminatedString { position: usize },
-    #[error("Lexer invariant violated: {message}")]
-    InvariantViolation { message: &'static str },
-}
-
-pub type LexResult<T> = Result<T, LexError>;
 
 pub struct Lexer<'a> {
     input: &'a str,
