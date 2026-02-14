@@ -1,7 +1,7 @@
-default_job = "test-fast"
+default_job = "test"
 
-[jobs.test-fast]
-command = ["cargo", "test", "--color", "always", "--", "--skip", "slow_"]
+[jobs.test]
+command = ["cargo", "test", "--color", "always"]
 need_watch = ["src", "tests", "Cargo.toml", "Cargo.lock"]
 need_stdout = true
 
@@ -10,7 +10,7 @@ command = ["cargo", "test", "--color", "always"]
 need_watch = ["src", "tests", "Cargo.toml", "Cargo.lock"]
 need_stdout = true
 
-[jobs.test-slow]
-command = ["cargo", "test", "--color", "always", "slow_"]
-need_watch = ["src", "tests", "Cargo.toml", "Cargo.lock"]
+[jobs.just-test]
+command = ["just", "test"]
+need_watch = ["src", "tests", "Cargo.toml", "Cargo.lock", "justfile"]
 need_stdout = true

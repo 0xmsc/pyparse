@@ -1,5 +1,5 @@
 test:
-    cargo nextest run --release
+    cargo nextest run --release --test-threads=num-cpus
 
 lint:
     cargo fmt --all

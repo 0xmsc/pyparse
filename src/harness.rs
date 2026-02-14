@@ -107,21 +107,21 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
 }
 
 #[test]
-fn slow_runs_programs_interpreter_backend() -> Result<()> {
+fn runs_programs_interpreter_backend() -> Result<()> {
     run_programs_for_backend(&Interpreter::new())
 }
 
 #[test]
-fn slow_runs_programs_vm_backend() -> Result<()> {
+fn runs_programs_vm_backend() -> Result<()> {
     run_programs_for_backend(&VM::new())
 }
 
 #[test]
-fn slow_runs_programs_jit_backend() -> Result<()> {
+fn runs_programs_jit_backend() -> Result<()> {
     run_programs_for_backend(&JIT::new())
 }
 
 #[test]
-fn slow_runs_programs_transpiler_backend() -> Result<()> {
+fn runs_programs_transpiler_backend() -> Result<()> {
     run_programs_for_backend(&Transpiler)
 }
