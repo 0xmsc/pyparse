@@ -185,11 +185,30 @@ impl Value {
 
 pub struct VM {
     globals: HashMap<String, Value>,
-    output: Vec<String>,
 }
 
 pub struct PreparedVM {
     compiled: CompiledProgram,
+}
+
+struct VmRuntime<'a> {
+    program: &'a CompiledProgram,
+    output: Vec<String>,
+    stack: Vec<Value>,
+}
+
+impl<'a> VmRuntime<'a> {
+    fn new(program: &'a CompiledProgram) -> Self {
+        Self {
+            program,
+            output: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn output_string(self) -> String {
+        self.output.join("\n")
+    }
 }
 
 struct Environment<'a> {
@@ -253,29 +272,22 @@ impl VM {
     pub fn new() -> Self {
         Self {
             globals: HashMap::new(),
-            output: Vec::new(),
         }
     }
 
     fn run_compiled(&mut self, program: &CompiledProgram) -> VmResult<String> {
-        let mut stack = Vec::new();
+        let mut runtime = VmRuntime::new(program);
         let mut environment = Environment::top_level(&mut self.globals);
-        Self::execute_code(
-            &program.main,
-            &mut stack,
-            &mut environment,
-            &mut self.output,
-            program,
-        )?;
-        Ok(self.output.join("\n"))
+        runtime.execute_code(&program.main, &mut environment)?;
+        Ok(runtime.output_string())
     }
+}
 
+impl VmRuntime<'_> {
     fn execute_code(
+        &mut self,
         code: &[Instruction],
-        stack: &mut Vec<Value>,
         environment: &mut Environment<'_>,
-        output: &mut Vec<String>,
-        program: &CompiledProgram,
     ) -> VmResult<Value> {
         let mut ip = 0;
         loop {
@@ -285,61 +297,61 @@ impl VM {
             };
             ip += 1;
             match instruction {
-                Instruction::PushInt(value) => stack.push(Value::Integer(value)),
-                Instruction::PushBool(value) => stack.push(Value::Boolean(value)),
-                Instruction::PushString(value) => stack.push(Value::String(value)),
+                Instruction::PushInt(value) => self.stack.push(Value::Integer(value)),
+                Instruction::PushBool(value) => self.stack.push(Value::Boolean(value)),
+                Instruction::PushString(value) => self.stack.push(Value::String(value)),
                 Instruction::BuildList(count) => {
                     let mut values = Vec::with_capacity(count);
                     for _ in 0..count {
-                        let value = Self::pop_stack(stack)?;
+                        let value = self.pop_stack()?;
                         values.push(value);
                     }
                     values.reverse();
-                    stack.push(Value::list_object(values));
+                    self.stack.push(Value::list_object(values));
                 }
-                Instruction::PushNone => stack.push(Value::None),
+                Instruction::PushNone => self.stack.push(Value::None),
                 Instruction::LoadName(name) => {
                     let value = if let Some(value) = environment.load(&name).cloned() {
                         value
                     } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
                         Value::BuiltinFunction(builtin)
-                    } else if program.functions.contains_key(&name) {
+                    } else if self.program.functions.contains_key(&name) {
                         Value::Function(name.clone())
                     } else {
                         return Err(VmError::UndefinedVariable { name: name.clone() });
                     };
-                    stack.push(value);
+                    self.stack.push(value);
                 }
                 Instruction::StoreName(name) => {
-                    let value = Self::pop_stack(stack)?;
+                    let value = self.pop_stack()?;
                     environment.store(name, value);
                 }
                 Instruction::LoadAttr(attribute) => {
-                    let object = Self::pop_stack(stack)?;
-                    let value = Self::load_attribute(object, attribute)?;
-                    stack.push(value);
+                    let object = self.pop_stack()?;
+                    let value = self.load_attribute(object, attribute)?;
+                    self.stack.push(value);
                 }
                 Instruction::Add => {
-                    let right = Self::pop_stack(stack)?;
-                    let left = Self::pop_stack(stack)?;
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
                     let result = left.as_int()? + right.as_int()?;
-                    stack.push(Value::Integer(result));
+                    self.stack.push(Value::Integer(result));
                 }
                 Instruction::Sub => {
-                    let right = Self::pop_stack(stack)?;
-                    let left = Self::pop_stack(stack)?;
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
                     let result = left.as_int()? - right.as_int()?;
-                    stack.push(Value::Integer(result));
+                    self.stack.push(Value::Integer(result));
                 }
                 Instruction::LessThan => {
-                    let right = Self::pop_stack(stack)?;
-                    let left = Self::pop_stack(stack)?;
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
                     let result = left.as_int()? < right.as_int()?;
-                    stack.push(Value::Boolean(result));
+                    self.stack.push(Value::Boolean(result));
                 }
                 Instruction::LoadIndex => {
-                    let index_value = Self::pop_stack(stack)?;
-                    let object = Self::pop_stack(stack)?;
+                    let index_value = self.pop_stack()?;
+                    let object = self.pop_stack()?;
                     let index_raw = index_value.as_int()?;
                     if index_raw < 0 {
                         return Err(VmError::NegativeListIndex { index: index_raw });
@@ -367,11 +379,11 @@ impl VM {
                                 index,
                                 len: values.len(),
                             })?;
-                    stack.push(value);
+                    self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
-                    let value = Self::pop_stack(stack)?;
-                    let index_value = Self::pop_stack(stack)?;
+                    let value = self.pop_stack()?;
+                    let index_value = self.pop_stack()?;
                     let index_raw = index_value.as_int()?;
                     if index_raw < 0 {
                         return Err(VmError::NegativeListIndex { index: index_raw });
@@ -405,16 +417,16 @@ impl VM {
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {
-                        let value = Self::pop_stack(stack)?;
+                        let value = self.pop_stack()?;
                         args.push(value);
                     }
                     args.reverse();
-                    let callee = Self::pop_stack(stack)?;
-                    let value = Self::call_value(callee, args, environment, output, program)?;
-                    stack.push(value);
+                    let callee = self.pop_stack()?;
+                    let value = self.call_value(callee, args, environment)?;
+                    self.stack.push(value);
                 }
                 Instruction::JumpIfFalse(target) => {
-                    let value = Self::pop_stack(stack)?;
+                    let value = self.pop_stack()?;
                     if !value.is_truthy() {
                         let next_ip = (ip as isize) + target;
                         if next_ip < 0 || (next_ip as usize) > code.len() {
@@ -431,22 +443,22 @@ impl VM {
                     ip = next_ip as usize;
                 }
                 Instruction::Pop => {
-                    Self::pop_stack(stack)?;
+                    self.pop_stack()?;
                 }
                 Instruction::Return => return Ok(Value::None),
                 Instruction::ReturnValue => {
-                    let value = Self::pop_stack(stack)?;
+                    let value = self.pop_stack()?;
                     return Ok(value);
                 }
             }
         }
     }
 
-    fn pop_stack(stack: &mut Vec<Value>) -> VmResult<Value> {
-        stack.pop().ok_or(VmError::StackUnderflow)
+    fn pop_stack(&mut self) -> VmResult<Value> {
+        self.stack.pop().ok_or(VmError::StackUnderflow)
     }
 
-    fn load_attribute(object: Value, attribute: String) -> VmResult<Value> {
+    fn load_attribute(&self, object: Value, attribute: String) -> VmResult<Value> {
         if object.as_list_object().is_some() && attribute == "append" {
             return Ok(Value::BoundMethod {
                 receiver: Box::new(object),
@@ -460,16 +472,15 @@ impl VM {
     }
 
     fn call_value(
+        &mut self,
         callee: Value,
         args: Vec<Value>,
         environment: &mut Environment<'_>,
-        output: &mut Vec<String>,
-        program: &CompiledProgram,
     ) -> VmResult<Value> {
         match callee {
             Value::BuiltinFunction(BuiltinFunction::Print) => {
                 let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                output.push(rendered.join(" "));
+                self.output.push(rendered.join(" "));
                 Ok(Value::None)
             }
             Value::BuiltinFunction(BuiltinFunction::Len) => {
@@ -494,7 +505,8 @@ impl VM {
                 }
             }
             Value::Function(name) => {
-                let function = program
+                let function = self
+                    .program
                     .functions
                     .get(&name)
                     .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
@@ -511,16 +523,13 @@ impl VM {
                     locals_map.insert(param.to_string(), value);
                 }
                 let mut child_environment = environment.child_with_locals(&mut locals_map);
-                Self::execute_code(
-                    &function.code,
-                    &mut Vec::new(),
-                    &mut child_environment,
-                    output,
-                    program,
-                )
+                let parent_stack = std::mem::take(&mut self.stack);
+                let result = self.execute_code(&function.code, &mut child_environment);
+                self.stack = parent_stack;
+                result
             }
             Value::BoundMethod { receiver, method } => {
-                Self::call_bound_method(*receiver, method, args)
+                self.call_bound_method(*receiver, method, args)
             }
             other => Err(VmError::ObjectNotCallable {
                 type_name: other.type_name().to_string(),
@@ -528,7 +537,12 @@ impl VM {
         }
     }
 
-    fn call_bound_method(receiver: Value, method: String, mut args: Vec<Value>) -> VmResult<Value> {
+    fn call_bound_method(
+        &self,
+        receiver: Value,
+        method: String,
+        mut args: Vec<Value>,
+    ) -> VmResult<Value> {
         match receiver {
             Value::Object(object) if matches!(object.borrow().kind, ObjectKind::List(_)) => {
                 match method.as_str() {
