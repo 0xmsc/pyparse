@@ -1,0 +1,3 @@
+- [x] Split `src/backend/interpreter.rs` into module files (`mod.rs`, `value.rs`, `runtime.rs`, `tests.rs`)
+- [x] Verify module exports and imports still compile
+- [x] Run test suite and confirm no behavior changes

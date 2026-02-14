@@ -1,0 +1,251 @@
+use super::*;
+use crate::ast::{BinaryOperator, Expression, Program, Statement};
+
+fn identifier(name: &str) -> Expression {
+    Expression::Identifier(name.to_string())
+}
+
+fn int(value: i64) -> Expression {
+    Expression::Integer(value)
+}
+
+fn call(name: &str, args: Vec<Expression>) -> Expression {
+    Expression::Call {
+        callee: Box::new(identifier(name)),
+        args,
+    }
+}
+
+fn print(args: Vec<Expression>) -> Statement {
+    Statement::Expr(call("print", args))
+}
+
+#[test]
+fn evaluates_assignment_and_call() {
+    let program = Program {
+        statements: vec![
+            Statement::Assign {
+                name: "n".to_string(),
+                value: Expression::BinaryOp {
+                    left: Box::new(int(1)),
+                    op: BinaryOperator::Add,
+                    right: Box::new(int(2)),
+                },
+            },
+            print(vec![identifier("n")]),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&program).expect("run failed");
+    assert_eq!(output, "3");
+}
+
+#[test]
+fn executes_if_else_branches() {
+    let program = Program {
+        statements: vec![
+            Statement::If {
+                condition: Expression::Boolean(true),
+                then_body: vec![print(vec![Expression::String("then".to_string())])],
+                else_body: vec![print(vec![Expression::String("else".to_string())])],
+            },
+            Statement::If {
+                condition: Expression::Boolean(false),
+                then_body: vec![print(vec![Expression::String("then".to_string())])],
+                else_body: vec![print(vec![Expression::String("else".to_string())])],
+            },
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&program).expect("run failed");
+    assert_eq!(output, "then\nelse");
+}
+
+#[test]
+fn executes_while_loop_until_condition_is_false() {
+    let program = Program {
+        statements: vec![
+            Statement::Assign {
+                name: "n".to_string(),
+                value: int(0),
+            },
+            Statement::While {
+                condition: Expression::BinaryOp {
+                    left: Box::new(identifier("n")),
+                    op: BinaryOperator::LessThan,
+                    right: Box::new(int(3)),
+                },
+                body: vec![Statement::Assign {
+                    name: "n".to_string(),
+                    value: Expression::BinaryOp {
+                        left: Box::new(identifier("n")),
+                        op: BinaryOperator::Add,
+                        right: Box::new(int(1)),
+                    },
+                }],
+            },
+            print(vec![identifier("n")]),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&program).expect("run failed");
+    assert_eq!(output, "3");
+}
+
+#[test]
+fn returns_from_function_without_executing_remaining_body() {
+    let program = Program {
+        statements: vec![
+            Statement::FunctionDef {
+                name: "f".to_string(),
+                body: vec![
+                    Statement::Return(Some(int(7))),
+                    Statement::Expr(call(
+                        "print",
+                        vec![Expression::String("unreachable".to_string())],
+                    )),
+                ],
+            },
+            print(vec![call("f", vec![])]),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&program).expect("run failed");
+    assert_eq!(output, "7");
+}
+
+#[test]
+fn function_locals_do_not_leak_into_globals() {
+    let program = Program {
+        statements: vec![
+            Statement::FunctionDef {
+                name: "f".to_string(),
+                body: vec![
+                    Statement::Assign {
+                        name: "x".to_string(),
+                        value: int(42),
+                    },
+                    Statement::Return(None),
+                ],
+            },
+            Statement::Expr(call("f", vec![])),
+            print(vec![identifier("x")]),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let error = interpreter
+        .run(&program)
+        .expect_err("expected undefined variable");
+    assert!(error.to_string().contains("Undefined variable 'x'"));
+}
+
+#[test]
+fn errors_on_return_outside_function() {
+    let program = Program {
+        statements: vec![Statement::Return(Some(int(1)))],
+    };
+
+    let interpreter = Interpreter::new();
+    let error = interpreter
+        .run(&program)
+        .expect_err("expected return outside function");
+    assert!(error.to_string().contains("Return outside of function"));
+}
+
+#[test]
+fn errors_on_invalid_call_and_undefined_function() {
+    let invalid_callee_program = Program {
+        statements: vec![Statement::Expr(Expression::Call {
+            callee: Box::new(int(1)),
+            args: vec![],
+        })],
+    };
+
+    let interpreter = Interpreter::new();
+    let error = interpreter
+        .run(&invalid_callee_program)
+        .expect_err("expected call target error");
+    assert!(error.to_string().contains("Can only call identifiers"));
+
+    let undefined_function_program = Program {
+        statements: vec![Statement::Expr(call("missing", vec![]))],
+    };
+    let error = interpreter
+        .run(&undefined_function_program)
+        .expect_err("expected undefined function error");
+    assert!(error.to_string().contains("Undefined function 'missing'"));
+}
+
+#[test]
+fn errors_when_function_called_with_arguments() {
+    let program = Program {
+        statements: vec![
+            Statement::FunctionDef {
+                name: "f".to_string(),
+                body: vec![Statement::Pass],
+            },
+            Statement::Expr(call("f", vec![int(1)])),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let error = interpreter
+        .run(&program)
+        .expect_err("expected argument mismatch");
+    assert!(
+        error
+            .to_string()
+            .contains("Function 'f' does not accept arguments")
+    );
+}
+
+#[test]
+fn formats_print_output_for_boolean_string_and_none() {
+    let program = Program {
+        statements: vec![
+            Statement::FunctionDef {
+                name: "f".to_string(),
+                body: vec![Statement::Pass],
+            },
+            print(vec![
+                Expression::Boolean(true),
+                Expression::String("hello".to_string()),
+                call("f", vec![]),
+            ]),
+        ],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&program).expect("run failed");
+    assert_eq!(output, "True hello None");
+}
+
+#[test]
+fn clears_state_between_runs() {
+    let first_program = Program {
+        statements: vec![
+            Statement::Assign {
+                name: "x".to_string(),
+                value: int(1),
+            },
+            print(vec![identifier("x")]),
+        ],
+    };
+    let second_program = Program {
+        statements: vec![print(vec![identifier("x")])],
+    };
+
+    let interpreter = Interpreter::new();
+    let output = interpreter.run(&first_program).expect("first run failed");
+    assert_eq!(output, "1");
+
+    let error = interpreter
+        .run(&second_program)
+        .expect_err("expected globals to be cleared between runs");
+    assert!(error.to_string().contains("Undefined variable 'x'"));
+}
