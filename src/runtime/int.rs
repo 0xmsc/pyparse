@@ -92,6 +92,10 @@ fn call_method_on_receiver(
 }
 
 impl RuntimeObject for IntObject {
+    fn type_name(&self) -> &'static str {
+        "int"
+    }
+
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if matches!(
             attribute,

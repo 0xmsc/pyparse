@@ -20,6 +20,10 @@ impl BoolObject {
 }
 
 impl RuntimeObject for BoolObject {
+    fn type_name(&self) -> &'static str {
+        "bool"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let value = self.value;

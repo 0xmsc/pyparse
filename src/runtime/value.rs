@@ -10,15 +10,9 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-#[derive(Clone, Copy)]
-struct ValueBehavior {
-    type_name: &'static str,
-}
-
 #[derive(Clone)]
 pub(crate) struct Value {
     object: ObjectRef,
-    behavior: &'static ValueBehavior,
     call_target: Option<CallTarget>,
 }
 
@@ -33,39 +27,10 @@ pub(crate) struct CallTargetError {
     pub(crate) type_name: String,
 }
 
-const INT_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "int" };
-
-const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "bool" };
-
-const STRING_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "str" };
-
-const NONE_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "NoneType",
-};
-
-const LIST_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "list" };
-
-const BUILTIN_FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "builtin_function_or_method",
-};
-
-const FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "function",
-};
-
-const BOUND_METHOD_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "method",
-};
-
 impl Value {
-    fn new(
-        object: ObjectRef,
-        behavior: &'static ValueBehavior,
-        call_target: Option<CallTarget>,
-    ) -> Self {
+    fn new(object: ObjectRef, call_target: Option<CallTarget>) -> Self {
         Self {
             object,
-            behavior,
             call_target,
         }
     }
@@ -75,7 +40,7 @@ impl Value {
     }
 
     pub(crate) fn type_name(&self) -> &'static str {
-        self.behavior.type_name
+        self.object.borrow().type_name()
     }
 
     pub(crate) fn to_output(&self) -> String {
@@ -137,21 +102,16 @@ impl Value {
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
-        Self::new(new_list_object(values), &LIST_BEHAVIOR, None)
+        Self::new(new_list_object(values), None)
     }
 
     pub(crate) fn int_object(value: i64) -> Self {
-        Self::new(
-            Rc::new(RefCell::new(Box::new(IntObject::new(value)))),
-            &INT_BEHAVIOR,
-            None,
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(IntObject::new(value)))), None)
     }
 
     pub(crate) fn bool_object(value: bool) -> Self {
         Self::new(
             Rc::new(RefCell::new(Box::new(BoolObject::new(value)))),
-            &BOOL_BEHAVIOR,
             None,
         )
     }
@@ -159,17 +119,12 @@ impl Value {
     pub(crate) fn string_object(value: String) -> Self {
         Self::new(
             Rc::new(RefCell::new(Box::new(StringObject::new(value)))),
-            &STRING_BEHAVIOR,
             None,
         )
     }
 
     pub(crate) fn none_object() -> Self {
-        Self::new(
-            Rc::new(RefCell::new(Box::new(NoneObject::new()))),
-            &NONE_BEHAVIOR,
-            None,
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(NoneObject::new()))), None)
     }
 
     pub(crate) fn builtin_function_object(builtin: BuiltinFunction) -> Self {
@@ -177,7 +132,6 @@ impl Value {
         let call_target = builtin_object.call_target();
         Self::new(
             Rc::new(RefCell::new(Box::new(builtin_object))),
-            &BUILTIN_FUNCTION_BEHAVIOR,
             Some(call_target),
         )
     }
@@ -187,7 +141,6 @@ impl Value {
         let call_target = function_object.call_target();
         Self::new(
             Rc::new(RefCell::new(Box::new(function_object))),
-            &FUNCTION_BEHAVIOR,
             Some(call_target),
         )
     }
@@ -197,7 +150,6 @@ impl Value {
         let call_target = bound_method_object.call_target();
         Self::new(
             Rc::new(RefCell::new(Box::new(bound_method_object))),
-            &BOUND_METHOD_BEHAVIOR,
             Some(call_target),
         )
     }

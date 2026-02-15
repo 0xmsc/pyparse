@@ -13,6 +13,10 @@ impl NoneObject {
 }
 
 impl RuntimeObject for NoneObject {
+    fn type_name(&self) -> &'static str {
+        "NoneType"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             return Ok(Value::bound_method_object(Rc::new(move |args| {

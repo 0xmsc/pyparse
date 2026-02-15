@@ -20,6 +20,10 @@ impl StringObject {
 }
 
 impl RuntimeObject for StringObject {
+    fn type_name(&self) -> &'static str {
+        "str"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let is_non_empty = !self.value.is_empty();

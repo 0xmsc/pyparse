@@ -58,6 +58,10 @@ impl ListObject {
 }
 
 impl RuntimeObject for ListObject {
+    fn type_name(&self) -> &'static str {
+        "list"
+    }
+
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if matches!(
             attribute,

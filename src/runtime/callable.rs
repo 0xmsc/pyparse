@@ -61,6 +61,10 @@ impl fmt::Debug for BoundMethodObject {
 }
 
 impl RuntimeObject for BuiltinFunctionObject {
+    fn type_name(&self) -> &'static str {
+        "builtin_function_or_method"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
@@ -83,6 +87,10 @@ impl RuntimeObject for BuiltinFunctionObject {
 }
 
 impl RuntimeObject for FunctionObject {
+    fn type_name(&self) -> &'static str {
+        "function"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__str__" || attribute == "__repr__" {
             let rendered = format!("<function {}>", self.name());
@@ -106,6 +114,10 @@ impl RuntimeObject for FunctionObject {
 }
 
 impl RuntimeObject for BoundMethodObject {
+    fn type_name(&self) -> &'static str {
+        "method"
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
