@@ -16,8 +16,6 @@ struct ValueBehavior {
     type_name: &'static str,
     to_output: fn(&Value) -> String,
     is_truthy: fn(&Value) -> bool,
-    get_item: fn(&Value, Value) -> Result<Value, RuntimeError>,
-    set_item: fn(&Value, Value, Value) -> Result<(), RuntimeError>,
 }
 
 #[derive(Clone)]
@@ -38,27 +36,8 @@ pub(crate) struct CallTargetError {
     pub(crate) type_name: String,
 }
 
-fn unsupported_operation(operation: &str, type_name: &str) -> RuntimeError {
-    RuntimeError::UnsupportedOperation {
-        operation: operation.to_string(),
-        type_name: type_name.to_string(),
-    }
-}
-
 fn always_truthy(_value: &Value) -> bool {
     true
-}
-
-fn unsupported_get_item(value: &Value, _index: Value) -> Result<Value, RuntimeError> {
-    Err(unsupported_operation("__getitem__", value.type_name()))
-}
-
-fn unsupported_set_item(
-    value: &Value,
-    _index: Value,
-    _assigned_value: Value,
-) -> Result<(), RuntimeError> {
-    Err(unsupported_operation("__setitem__", value.type_name()))
 }
 
 fn int_to_output(value: &Value) -> String {
@@ -93,14 +72,6 @@ fn list_is_truthy(value: &Value) -> bool {
     list::try_is_truthy(value).expect("list behavior must wrap ListObject")
 }
 
-fn list_get_item(value: &Value, index: Value) -> Result<Value, RuntimeError> {
-    list::try_get_item(value, index).expect("list behavior must wrap ListObject")
-}
-
-fn list_set_item(value: &Value, index: Value, assigned_value: Value) -> Result<(), RuntimeError> {
-    list::try_set_item(value, index, assigned_value).expect("list behavior must wrap ListObject")
-}
-
 fn none_to_output(_value: &Value) -> String {
     "None".to_string()
 }
@@ -125,64 +96,48 @@ const INT_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "int",
     to_output: int_to_output,
     is_truthy: int_is_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "bool",
     to_output: bool_to_output,
     is_truthy: bool_is_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const STRING_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "str",
     to_output: string_to_output,
     is_truthy: string_is_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const NONE_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "NoneType",
     to_output: none_to_output,
     is_truthy: none_is_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const LIST_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "list",
     to_output: list_to_output,
     is_truthy: list_is_truthy,
-    get_item: list_get_item,
-    set_item: list_set_item,
 };
 
 const BUILTIN_FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "builtin_function_or_method",
     to_output: builtin_function_to_output,
     is_truthy: always_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "function",
     to_output: function_to_output,
     is_truthy: always_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 const BOUND_METHOD_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "method",
     to_output: bound_method_to_output,
     is_truthy: always_truthy,
-    get_item: unsupported_get_item,
-    set_item: unsupported_set_item,
 };
 
 impl Value {
@@ -227,11 +182,18 @@ impl Value {
     }
 
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
-        (self.behavior.get_item)(self, index)
+        let callee = self
+            .get_attribute("__getitem__")
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, "__getitem__"))?;
+        self.call_magic_method(callee, vec![index], "__getitem__")
     }
 
     pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), RuntimeError> {
-        (self.behavior.set_item)(self, index, value)
+        let callee = self
+            .get_attribute("__setitem__")
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, "__setitem__"))?;
+        self.call_magic_method(callee, vec![index, value], "__setitem__")?;
+        Ok(())
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
@@ -298,5 +260,40 @@ impl Value {
             &BOUND_METHOD_BEHAVIOR,
             Some(call_target),
         )
+    }
+
+    fn call_magic_method(
+        &self,
+        callee: Value,
+        args: Vec<Value>,
+        operation: &str,
+    ) -> Result<Value, RuntimeError> {
+        let type_name = callee.type_name().to_string();
+        let call_target = callee
+            .call_target()
+            .map_err(|_| RuntimeError::UnsupportedOperation {
+                operation: operation.to_string(),
+                type_name: type_name.clone(),
+            })?;
+        match call_target {
+            CallTarget::BoundMethod(callable) => callable(args),
+            _ => Err(RuntimeError::UnsupportedOperation {
+                operation: operation.to_string(),
+                type_name,
+            }),
+        }
+    }
+}
+
+fn map_unknown_attribute_to_unsupported(error: RuntimeError, operation: &str) -> RuntimeError {
+    match error {
+        RuntimeError::UnknownAttribute {
+            attribute: _,
+            type_name,
+        } => RuntimeError::UnsupportedOperation {
+            operation: operation.to_string(),
+            type_name,
+        },
+        other => other,
     }
 }

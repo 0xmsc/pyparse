@@ -190,26 +190,6 @@ pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
         .map(|list| !list.is_empty())
 }
 
-pub(crate) fn try_get_item(value: &Value, index: Value) -> Option<Result<Value, RuntimeError>> {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<ListObject>()
-        .map(|list| list.get_item_value(index))
-}
-
-pub(crate) fn try_set_item(
-    value: &Value,
-    index: Value,
-    assigned_value: Value,
-) -> Option<Result<(), RuntimeError>> {
-    let object_ref = value.object_ref();
-    let mut object = object_ref.borrow_mut();
-    let any = &mut **object as &mut dyn Any;
-    any.downcast_mut::<ListObject>()
-        .map(|list| list.set_item_value(index, assigned_value))
-}
-
 fn call_method_on_receiver(
     receiver: &ObjectRef,
     method: &str,
