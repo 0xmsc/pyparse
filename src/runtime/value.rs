@@ -140,7 +140,7 @@ impl Value {
         Self::new(Rc::new(RefCell::new(Box::new(function_object))))
     }
 
-    pub(crate) fn class_object(name: String, methods: HashMap<String, String>) -> Self {
+    pub(crate) fn class_object(name: String, methods: HashMap<String, Value>) -> Self {
         let class_object = ClassObject::new(name, methods);
         Self::new(Rc::new(RefCell::new(Box::new(class_object))))
     }

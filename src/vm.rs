@@ -194,19 +194,26 @@ impl VmRuntime<'_> {
                         value
                     } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
                         Value::builtin_function_object(builtin)
-                    } else if self.program.functions.contains_key(&name) {
-                        Value::function_object(name.clone())
                     } else {
                         return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
                     };
                     self.stack.push(value);
+                }
+                Instruction::DefineFunction { name, symbol } => {
+                    if !self.program.functions.contains_key(&symbol) {
+                        return Err(RuntimeError::UndefinedFunction { name: symbol }.into());
+                    }
+                    environment.store(name, Value::function_object(symbol));
                 }
                 Instruction::StoreName(name) => {
                     let value = self.pop_stack()?;
                     environment.store(name, value);
                 }
                 Instruction::DefineClass { name, methods } => {
-                    let methods = methods.into_iter().collect::<HashMap<_, _>>();
+                    let methods = methods
+                        .into_iter()
+                        .map(|(method_name, symbol)| (method_name, Value::function_object(symbol)))
+                        .collect::<HashMap<_, _>>();
                     let class_value = Value::class_object(name.clone(), methods);
                     environment.store(name, class_value);
                 }

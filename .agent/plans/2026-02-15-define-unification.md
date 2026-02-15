@@ -10,18 +10,18 @@
 - Keep scope minimal: top-level definitions first, preserving current behavior.
 
 ## Steps
-- [ ] Milestone 1: Bytecode model unification
+- [x] Milestone 1: Bytecode model unification
   - Add `Instruction::DefineFunction { name, symbol }`.
   - Keep `Instruction::DefineClass` and align both under a common "define-and-bind" execution pattern.
   - Compile top-level `def` statements into `DefineFunction` instead of compile-time-only side tables.
-- [ ] Milestone 2: VM runtime binding
+- [x] Milestone 2: VM runtime binding
   - Implement `DefineFunction` execution to bind `FunctionObject` into current environment.
   - Keep `DefineClass` execution path consistent with `DefineFunction` structure.
   - Remove/trim `LoadName` special-case fallback that creates functions from program tables.
-- [ ] Milestone 3: Interpreter parity and naming consistency
+- [x] Milestone 3: Interpreter parity and naming consistency
   - Align interpreter top-level statement execution semantics with VM (`def` and `class` both bind at statement execution).
   - Keep existing function/class visibility behavior unchanged.
-  - Introduce class-body temporary namespace execution model (class locals map).
+  - Defer class-body temporary namespace execution model (class locals map) to Milestone 4 cleanup.
 - [ ] Milestone 4: Validation and cleanup
   - Remove `mangle_class_method_name`-style method symbol indirection once class locals namespace binding is in place.
   - Store methods in class namespace under real method names.

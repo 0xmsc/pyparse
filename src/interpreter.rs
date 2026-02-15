@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
-use crate::runtime::class::mangle_class_method_name;
 use crate::runtime::error::RuntimeError;
 
 mod error;
@@ -78,6 +77,9 @@ impl Backend for Interpreter {
         for statement in &program.statements {
             match statement {
                 Statement::FunctionDef { name, params, body } => {
+                    if functions.contains_key(name) {
+                        bail!("Duplicate function definition '{name}'");
+                    }
                     functions.insert(
                         name.clone(),
                         Function {
@@ -85,6 +87,7 @@ impl Backend for Interpreter {
                             body: body.clone(),
                         },
                     );
+                    main_statements.push(statement.clone());
                 }
                 Statement::ClassDef { name, body } => {
                     for class_statement in body {
@@ -94,9 +97,9 @@ impl Backend for Interpreter {
                                 params,
                                 body,
                             } => {
-                                let mangled_name = mangle_class_method_name(name, method_name);
+                                let symbol = class_method_symbol(name, method_name);
                                 functions.insert(
-                                    mangled_name,
+                                    symbol,
                                     Function {
                                         params: params.clone(),
                                         body: body.clone(),
@@ -122,6 +125,10 @@ impl Backend for Interpreter {
             main_statements,
         }))
     }
+}
+
+fn class_method_symbol(class_name: &str, method_name: &str) -> String {
+    format!("__class_method::{class_name}::{method_name}")
 }
 
 #[cfg(test)]

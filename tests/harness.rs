@@ -30,9 +30,10 @@ fn parity_required(env_var: &str) -> bool {
 
 fn detect_python_interpreter() -> Result<Option<String>> {
     if let Ok(python) = std::env::var("PYTHON")
-        && run_python_startup(&python).is_ok() {
-            return Ok(Some(python));
-        }
+        && run_python_startup(&python).is_ok()
+    {
+        return Ok(Some(python));
+    }
 
     for candidate in ["python3", "python"] {
         if run_python_startup(candidate).is_ok() {

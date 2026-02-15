@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
-use crate::runtime::class::mangle_class_method_name;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::object::CallContext;
 
@@ -69,6 +68,10 @@ impl<'a> Environment<'a> {
         locals: &'b mut HashMap<String, Value>,
     ) -> Environment<'b> {
         Environment::with_locals(self.globals, locals)
+    }
+
+    fn is_top_level(&self) -> bool {
+        self.locals.is_none()
     }
 }
 
@@ -147,8 +150,12 @@ impl<'a> InterpreterRuntime<'a> {
         environment: &mut Environment<'_>,
     ) -> std::result::Result<ExecResult, InterpreterError> {
         match statement {
-            Statement::FunctionDef { .. } => {
-                Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into())
+            Statement::FunctionDef { name, .. } => {
+                if !environment.is_top_level() {
+                    return Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into());
+                }
+                environment.store(name.to_string(), Value::function_object(name.to_string()));
+                Ok(ExecResult::Continue)
             }
             Statement::ClassDef { name, body } => {
                 let mut methods = HashMap::new();
@@ -159,7 +166,7 @@ impl<'a> InterpreterRuntime<'a> {
                         } => {
                             methods.insert(
                                 method_name.clone(),
-                                mangle_class_method_name(name, method_name),
+                                Value::function_object(class_method_symbol(name, method_name)),
                             );
                         }
                         Statement::Pass => {}
@@ -258,9 +265,6 @@ impl<'a> InterpreterRuntime<'a> {
                 if let Some(builtin) = BuiltinFunction::from_name(name) {
                     return Ok(Value::builtin_function_object(builtin));
                 }
-                if self.functions.contains_key(name) {
-                    return Ok(Value::function_object(name.to_string()));
-                }
                 Err(RuntimeError::UndefinedVariable {
                     name: name.to_string(),
                 }
@@ -353,6 +357,10 @@ impl<'a> InterpreterRuntime<'a> {
         };
         callee.call(&mut context, args).map_err(Into::into)
     }
+}
+
+fn class_method_symbol(class_name: &str, method_name: &str) -> String {
+    format!("__class_method::{class_name}::{method_name}")
 }
 
 fn runtime_error_from_interpreter(error: InterpreterError) -> RuntimeError {

@@ -5,23 +5,19 @@ use crate::runtime::value::Value;
 use std::any::Any;
 use std::collections::HashMap;
 
-pub(crate) fn mangle_class_method_name(class_name: &str, method_name: &str) -> String {
-    format!("__class__{class_name}__{method_name}")
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ClassObject {
     name: String,
-    methods: HashMap<String, String>,
+    methods: HashMap<String, Value>,
 }
 
 impl ClassObject {
-    pub(crate) fn new(name: String, methods: HashMap<String, String>) -> Self {
+    pub(crate) fn new(name: String, methods: HashMap<String, Value>) -> Self {
         Self { name, methods }
     }
 
-    pub(crate) fn method_name(&self, attribute: &str) -> Option<&str> {
-        self.methods.get(attribute).map(String::as_str)
+    pub(crate) fn method(&self, attribute: &str) -> Option<Value> {
+        self.methods.get(attribute).cloned()
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -87,7 +83,7 @@ impl RuntimeObject for ClassObject {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let instance = Value::instance_object(receiver.clone());
-        if self.method_name("__init__").is_some() {
+        if self.method("__init__").is_some() {
             let init = instance.get_attribute("__init__")?;
             init.call(context, args)?;
             return Ok(instance);
@@ -116,14 +112,13 @@ impl RuntimeObject for InstanceObject {
             return Ok(value.clone());
         }
 
-        if let Some(method_name) = class_method_name(self.class.clone(), attribute) {
+        if let Some(method) = class_method(self.class.clone(), attribute) {
             let receiver = receiver.clone();
-            let method_name = method_name.to_string();
             return Ok(bound_method(move |context, mut args| {
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(Value::from_object_ref(receiver.clone()));
                 call_args.append(&mut args);
-                context.call_function_named(&method_name, call_args)
+                method.call(context, call_args)
             }));
         }
 
@@ -156,13 +151,13 @@ impl RuntimeObject for InstanceObject {
     }
 }
 
-fn class_method_name(class: ObjectRef, attribute: &str) -> Option<String> {
+fn class_method(class: ObjectRef, attribute: &str) -> Option<Value> {
     let class_borrow = class.borrow();
     let class_object = class_borrow
         .as_any()
         .downcast_ref::<ClassObject>()
         .expect("instance class must be ClassObject");
-    class_object.method_name(attribute).map(str::to_string)
+    class_object.method(attribute)
 }
 
 fn class_name(class: ObjectRef) -> String {

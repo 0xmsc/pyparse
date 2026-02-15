@@ -2,7 +2,6 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
-use crate::runtime::class::mangle_class_method_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
@@ -13,6 +12,10 @@ pub enum Instruction {
     PushNone,
     LoadName(String),
     StoreName(String),
+    DefineFunction {
+        name: String,
+        symbol: String,
+    },
     DefineClass {
         name: String,
         methods: Vec<(String, String)>,
@@ -59,6 +62,10 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                 }
                 let compiled = compile_function(params, body)?;
                 functions.insert(name.to_string(), compiled);
+                main.push(Instruction::DefineFunction {
+                    name: name.to_string(),
+                    symbol: name.to_string(),
+                });
             }
             Statement::ClassDef { name, body } => {
                 let methods = compile_class_methods(name, body, &mut functions)?;
@@ -189,13 +196,13 @@ fn compile_class_methods(
                 params,
                 body,
             } => {
-                let mangled_name = mangle_class_method_name(class_name, method_name);
-                if functions.contains_key(&mangled_name) {
-                    bail!("Duplicate function definition '{mangled_name}'");
+                let symbol = class_method_symbol(class_name, method_name);
+                if functions.contains_key(&symbol) {
+                    bail!("Duplicate function definition '{symbol}'");
                 }
                 let compiled = compile_function(params, body)?;
-                functions.insert(mangled_name.clone(), compiled);
-                methods.push((method_name.clone(), mangled_name));
+                functions.insert(symbol.clone(), compiled);
+                methods.push((method_name.clone(), symbol));
             }
             Statement::Pass => {}
             _ => {
@@ -206,6 +213,10 @@ fn compile_class_methods(
         }
     }
     Ok(methods)
+}
+
+fn class_method_symbol(class_name: &str, method_name: &str) -> String {
+    format!("__class_method::{class_name}::{method_name}")
 }
 
 fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
@@ -307,6 +318,10 @@ mod tests {
         assert_eq!(
             compiled.main,
             vec![
+                Instruction::DefineFunction {
+                    name: "foo".to_string(),
+                    symbol: "foo".to_string(),
+                },
                 Instruction::LoadName("foo".to_string()),
                 Instruction::Call { argc: 0 },
                 Instruction::Pop
@@ -413,6 +428,10 @@ mod tests {
         assert_eq!(
             compiled.main,
             vec![
+                Instruction::DefineFunction {
+                    name: "sum2".to_string(),
+                    symbol: "sum2".to_string(),
+                },
                 Instruction::LoadName("sum2".to_string()),
                 Instruction::PushInt(1),
                 Instruction::PushInt(2),

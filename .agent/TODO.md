@@ -1,8 +1,7 @@
-- [x] Add `class` keyword/token + AST + parser support for `ClassDef`.
-- [x] Extend interpreter preparation/runtime to register and execute top-level class definitions.
-- [x] Implement minimal `ClassObject` and `InstanceObject` runtime objects with class-owned method table.
-- [x] Implement instance attribute resolution + instance method binding (`self` prepended).
-- [x] Implement minimal class call behavior (`ClassObject()` creates instance and runs `__init__` when present).
-- [x] Wire VM/bytecode support for `ClassDef` and class runtime interactions.
-- [x] Enable `tests/programs/class_instance_method_basics` for interpreter and VM.
-- [x] Run `just test` and update plan/TODO statuses to reflect completion.
+- [x] Add `DefineFunction` bytecode instruction and emit it for top-level `def` statements.
+- [x] Execute `DefineFunction` in VM and remove lazy function fallback from `LoadName`.
+- [x] Make interpreter bind `def` at statement execution time (no function lookup fallback in identifier eval).
+- [x] Keep class method/class fixture behavior working with unified runtime definition semantics.
+- [x] Update affected unit tests for new bytecode/interpreter binding behavior.
+- [x] Run `just lint` and `just test`.
+- [ ] Introduce class-body temporary namespace execution and remove `mangle_class_method_name` indirection.
