@@ -28,29 +28,33 @@ impl RuntimeObject for NoneObject {
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__bool__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::bool_object(false))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: "__bool__".to_string(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::bool_object(false))
+                },
+            )));
         }
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.clone(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object("None".to_string()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: method.clone(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object("None".to_string()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

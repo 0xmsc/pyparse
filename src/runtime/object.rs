@@ -1,3 +1,4 @@
+use crate::builtins::BuiltinFunction;
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -6,7 +7,18 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::list::ListObject;
 use crate::runtime::value::Value;
 
-pub(crate) type BoundMethodCallable = Rc<dyn Fn(Vec<Value>) -> Result<Value, RuntimeError>>;
+pub(crate) trait CallContext {
+    fn call_builtin(
+        &mut self,
+        builtin: BuiltinFunction,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError>;
+
+    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError>;
+}
+
+pub(crate) type BoundMethodCallable =
+    Rc<dyn Fn(&mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError>>;
 
 pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
 

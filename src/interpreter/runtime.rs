@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallContext;
 
 use super::{Function, InterpreterError, Value};
 
@@ -76,6 +77,65 @@ pub(super) struct InterpreterRuntime<'a> {
     pub(super) output: Vec<String>,
 }
 
+struct InterpreterCallContext<'runtime, 'functions, 'env> {
+    runtime: &'runtime mut InterpreterRuntime<'functions>,
+    environment: &'runtime mut Environment<'env>,
+}
+
+impl CallContext for InterpreterCallContext<'_, '_, '_> {
+    fn call_builtin(
+        &mut self,
+        builtin: BuiltinFunction,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match builtin {
+            BuiltinFunction::Print => {
+                let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                self.runtime.output.push(outputs.join(" "));
+                Ok(Value::none_object())
+            }
+            BuiltinFunction::Len => {
+                if args.len() != 1 {
+                    return Err(RuntimeError::FunctionArityMismatch {
+                        name: "len".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                args[0].len()
+            }
+        }
+    }
+
+    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let function = self.runtime.functions.get(name).cloned().ok_or_else(|| {
+            RuntimeError::UndefinedFunction {
+                name: name.to_string(),
+            }
+        })?;
+        if args.len() != function.params.len() {
+            return Err(RuntimeError::FunctionArityMismatch {
+                name: name.to_string(),
+                expected: function.params.len(),
+                found: args.len(),
+            });
+        }
+        let mut local_scope = HashMap::new();
+        for (param, value) in function.params.iter().zip(args) {
+            local_scope.insert(param.clone(), value);
+        }
+        let mut local_environment = self.environment.child_with_locals(&mut local_scope);
+        match self
+            .runtime
+            .exec_block(&function.body, &mut local_environment)
+            .map_err(map_interpreter_error_to_runtime_error)?
+        {
+            ExecResult::Continue => Ok(Value::none_object()),
+            ExecResult::Return(value) => Ok(value),
+        }
+    }
+}
+
 impl<'a> InterpreterRuntime<'a> {
     fn map_runtime_error(error: RuntimeError) -> InterpreterError {
         match error {
@@ -120,6 +180,28 @@ impl<'a> InterpreterRuntime<'a> {
             RuntimeError::IndexOutOfBounds { index, len } => {
                 InterpreterError::ListIndexOutOfBounds { index, len }
             }
+            RuntimeError::UndefinedVariable { name } => {
+                InterpreterError::UndefinedVariable { name }
+            }
+            RuntimeError::UndefinedFunction { name } => {
+                InterpreterError::UndefinedFunction { name }
+            }
+            RuntimeError::FunctionArityMismatch {
+                name,
+                expected,
+                found,
+            } => InterpreterError::FunctionArityMismatch {
+                name,
+                expected,
+                found,
+            },
+            RuntimeError::ObjectNotCallable { type_name } => {
+                InterpreterError::ObjectNotCallable { type_name }
+            }
+            RuntimeError::NestedFunctionDefinitionsUnsupported => {
+                InterpreterError::NestedFunctionDefinitionsUnsupported
+            }
+            RuntimeError::ReturnOutsideFunction => InterpreterError::ReturnOutsideFunction,
         }
     }
 
@@ -339,56 +421,76 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        if let Some(builtin) = callee.as_builtin_function() {
-            return match builtin {
-                BuiltinFunction::Print => {
-                    let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                    self.output.push(outputs.join(" "));
-                    Ok(Value::none_object())
-                }
-                BuiltinFunction::Len => {
-                    if args.len() != 1 {
-                        return Err(InterpreterError::FunctionArityMismatch {
-                            name: "len".to_string(),
-                            expected: 1,
-                            found: args.len(),
-                        });
-                    }
-                    args[0].len().map_err(Self::map_runtime_error)
-                }
-            };
-        }
+        let mut context = InterpreterCallContext {
+            runtime: self,
+            environment,
+        };
+        callee
+            .call(&mut context, args)
+            .map_err(Self::map_runtime_error)
+    }
+}
 
-        if let Some(name) = callee.as_function_name() {
-            let function = self
-                .functions
-                .get(&name)
-                .cloned()
-                .ok_or_else(|| InterpreterError::UndefinedFunction { name: name.clone() })?;
-            if args.len() != function.params.len() {
-                return Err(InterpreterError::FunctionArityMismatch {
-                    name,
-                    expected: function.params.len(),
-                    found: args.len(),
-                });
-            }
-            let mut local_scope = HashMap::new();
-            for (param, value) in function.params.iter().zip(args) {
-                local_scope.insert(param.clone(), value);
-            }
-            let mut local_environment = environment.child_with_locals(&mut local_scope);
-            return match self.exec_block(&function.body, &mut local_environment)? {
-                ExecResult::Continue => Ok(Value::none_object()),
-                ExecResult::Return(value) => Ok(value),
-            };
+fn map_interpreter_error_to_runtime_error(error: InterpreterError) -> RuntimeError {
+    match error {
+        InterpreterError::UnsupportedOperation {
+            operation,
+            type_name,
+        } => RuntimeError::UnsupportedOperation {
+            operation,
+            type_name,
+        },
+        InterpreterError::InvalidArgumentType {
+            operation,
+            argument,
+            expected,
+            got,
+        } => RuntimeError::InvalidArgumentType {
+            operation,
+            argument,
+            expected,
+            got,
+        },
+        InterpreterError::NegativeListIndex { index } => RuntimeError::NegativeIndex { index },
+        InterpreterError::ListIndexOutOfBounds { index, len } => {
+            RuntimeError::IndexOutOfBounds { index, len }
         }
-
-        if let Some(callable) = callee.as_bound_method_callable() {
-            return callable(args).map_err(Self::map_runtime_error);
+        InterpreterError::NestedFunctionDefinitionsUnsupported => {
+            RuntimeError::NestedFunctionDefinitionsUnsupported
         }
-
-        Err(InterpreterError::ObjectNotCallable {
-            type_name: callee.type_name().to_string(),
-        })
+        InterpreterError::UndefinedVariable { name } => RuntimeError::UndefinedVariable { name },
+        InterpreterError::UndefinedFunction { name } => RuntimeError::UndefinedFunction { name },
+        InterpreterError::FunctionArityMismatch {
+            name,
+            expected,
+            found,
+        } => RuntimeError::FunctionArityMismatch {
+            name,
+            expected,
+            found,
+        },
+        InterpreterError::UnknownAttribute {
+            attribute,
+            type_name,
+        } => RuntimeError::UnknownAttribute {
+            attribute,
+            type_name,
+        },
+        InterpreterError::ObjectNotCallable { type_name } => {
+            RuntimeError::ObjectNotCallable { type_name }
+        }
+        InterpreterError::MethodArityMismatch {
+            method,
+            expected,
+            found,
+        } => RuntimeError::ArityMismatch {
+            method,
+            expected,
+            found,
+        },
+        InterpreterError::UnknownMethod { method, type_name } => {
+            RuntimeError::UnknownMethod { method, type_name }
+        }
+        InterpreterError::ReturnOutsideFunction => RuntimeError::ReturnOutsideFunction,
     }
 }

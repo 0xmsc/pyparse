@@ -4,7 +4,7 @@ use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, Functio
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{BoundMethodCallable, ObjectRef, new_list_object};
+use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, new_list_object};
 use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
 use std::fmt;
@@ -64,31 +64,20 @@ impl Value {
             .get_attribute(self.object_ref(), attribute)
     }
 
-    pub(crate) fn as_builtin_function(&self) -> Option<BuiltinFunction> {
-        let object_ref = self.object_ref();
-        let object = object_ref.borrow();
-        object
-            .as_any()
-            .downcast_ref::<BuiltinFunctionObject>()
-            .map(BuiltinFunctionObject::builtin)
-    }
-
-    pub(crate) fn as_function_name(&self) -> Option<String> {
-        let object_ref = self.object_ref();
-        let object = object_ref.borrow();
-        object
-            .as_any()
-            .downcast_ref::<FunctionObject>()
-            .map(|function| function.name().to_string())
-    }
-
-    pub(crate) fn as_bound_method_callable(&self) -> Option<BoundMethodCallable> {
-        let object_ref = self.object_ref();
-        let object = object_ref.borrow();
-        object
-            .as_any()
-            .downcast_ref::<BoundMethodObject>()
-            .map(BoundMethodObject::callable)
+    pub(crate) fn call(
+        &self,
+        context: &mut dyn CallContext,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let callee = self
+            .get_attribute("__call__")
+            .map_err(|error| match error {
+                RuntimeError::UnknownAttribute { .. } => RuntimeError::ObjectNotCallable {
+                    type_name: self.type_name().to_string(),
+                },
+                other => other,
+            })?;
+        self.call_bound_method(callee, context, args, "__call__")
     }
 
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
@@ -154,10 +143,26 @@ impl Value {
         args: Vec<Value>,
         operation: &str,
     ) -> Result<Value, RuntimeError> {
+        let mut context = NoopCallContext;
+        self.call_bound_method(callee, &mut context, args, operation)
+    }
+
+    fn call_bound_method(
+        &self,
+        callee: Value,
+        context: &mut dyn CallContext,
+        args: Vec<Value>,
+        operation: &str,
+    ) -> Result<Value, RuntimeError> {
         let callee_type_name = callee.type_name().to_string();
         let object_ref = callee.object_ref();
         let object = object_ref.borrow();
         let Some(bound_method) = object.as_any().downcast_ref::<BoundMethodObject>() else {
+            if operation == "__call__" {
+                return Err(RuntimeError::ObjectNotCallable {
+                    type_name: callee_type_name,
+                });
+            }
             return Err(RuntimeError::UnsupportedOperation {
                 operation: operation.to_string(),
                 type_name: callee_type_name,
@@ -165,7 +170,7 @@ impl Value {
         };
         let callable = bound_method.callable();
         drop(object);
-        callable(args)
+        callable(context, args)
     }
 
     fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {
@@ -178,6 +183,26 @@ impl Value {
             self.call_magic_method(callee, Vec::new(), operation)
                 .unwrap_or_else(|error| panic!("failed to call {attribute}: {error}")),
         )
+    }
+}
+
+struct NoopCallContext;
+
+impl CallContext for NoopCallContext {
+    fn call_builtin(
+        &mut self,
+        _builtin: BuiltinFunction,
+        _args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        panic!("builtin call requested without runtime call context")
+    }
+
+    fn call_function_named(
+        &mut self,
+        _name: &str,
+        _args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        panic!("function call requested without runtime call context")
     }
 }
 

@@ -33,4 +33,20 @@ pub(crate) enum RuntimeError {
     NegativeIndex { index: i64 },
     #[error("List index out of bounds: index {index}, len {len}")]
     IndexOutOfBounds { index: usize, len: usize },
+    #[error("Undefined variable '{name}'")]
+    UndefinedVariable { name: String },
+    #[error("Undefined function '{name}'")]
+    UndefinedFunction { name: String },
+    #[error("Function '{name}' expected {expected} arguments, got {found}")]
+    FunctionArityMismatch {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    #[error("Object of type {type_name} is not callable")]
+    ObjectNotCallable { type_name: String },
+    #[error("Nested function definitions are not supported")]
+    NestedFunctionDefinitionsUnsupported,
+    #[error("Return outside of function")]
+    ReturnOutsideFunction,
 }

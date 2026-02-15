@@ -7,6 +7,7 @@ use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallContext;
 use crate::runtime::value::Value;
 
 type VmResult<T> = std::result::Result<T, VmError>;
@@ -74,6 +75,67 @@ struct VmRuntime<'a> {
     program: &'a CompiledProgram,
     output: Vec<String>,
     stack: Vec<Value>,
+}
+
+struct VmCallContext<'runtime, 'program, 'env> {
+    runtime: &'runtime mut VmRuntime<'program>,
+    environment: &'runtime mut Environment<'env>,
+}
+
+impl CallContext for VmCallContext<'_, '_, '_> {
+    fn call_builtin(
+        &mut self,
+        builtin: BuiltinFunction,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match builtin {
+            BuiltinFunction::Print => {
+                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                self.runtime.output.push(rendered.join(" "));
+                Ok(Value::none_object())
+            }
+            BuiltinFunction::Len => {
+                if args.len() != 1 {
+                    return Err(RuntimeError::FunctionArityMismatch {
+                        name: "len".to_string(),
+                        expected: 1,
+                        found: args.len(),
+                    });
+                }
+                args[0].len()
+            }
+        }
+    }
+
+    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let function = self
+            .runtime
+            .program
+            .functions
+            .get(name)
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: name.to_string(),
+            })?
+            .clone();
+        if args.len() != function.params.len() {
+            return Err(RuntimeError::FunctionArityMismatch {
+                name: name.to_string(),
+                expected: function.params.len(),
+                found: args.len(),
+            });
+        }
+        let mut locals_map = HashMap::new();
+        for (param, value) in function.params.iter().zip(args) {
+            locals_map.insert(param.to_string(), value);
+        }
+        let mut child_environment = self.environment.child_with_locals(&mut locals_map);
+        let parent_stack = std::mem::take(&mut self.runtime.stack);
+        let result = self
+            .runtime
+            .execute_code(&function.code, &mut child_environment);
+        self.runtime.stack = parent_stack;
+        result.map_err(map_vm_error_to_runtime_error)
+    }
 }
 
 impl<'a> VmRuntime<'a> {
@@ -196,6 +258,26 @@ impl VmRuntime<'_> {
             RuntimeError::NegativeIndex { index } => VmError::NegativeListIndex { index },
             RuntimeError::IndexOutOfBounds { index, len } => {
                 VmError::ListIndexOutOfBounds { index, len }
+            }
+            RuntimeError::UndefinedVariable { name } => VmError::UndefinedVariable { name },
+            RuntimeError::UndefinedFunction { name } => VmError::UndefinedFunction { name },
+            RuntimeError::FunctionArityMismatch {
+                name,
+                expected,
+                found,
+            } => VmError::FunctionArityMismatch {
+                name,
+                expected,
+                found,
+            },
+            RuntimeError::ObjectNotCallable { type_name } => {
+                VmError::ObjectNotCallable { type_name }
+            }
+            RuntimeError::NestedFunctionDefinitionsUnsupported => {
+                panic!("nested function definition reached VM runtime")
+            }
+            RuntimeError::ReturnOutsideFunction => {
+                panic!("return outside function reached VM runtime")
             }
         }
     }
@@ -388,58 +470,73 @@ impl VmRuntime<'_> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> VmResult<Value> {
-        if let Some(builtin) = callee.as_builtin_function() {
-            return match builtin {
-                BuiltinFunction::Print => {
-                    let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                    self.output.push(rendered.join(" "));
-                    Ok(Value::none_object())
-                }
-                BuiltinFunction::Len => {
-                    if args.len() != 1 {
-                        return Err(VmError::FunctionArityMismatch {
-                            name: "len".to_string(),
-                            expected: 1,
-                            found: args.len(),
-                        });
-                    }
-                    args[0].len().map_err(Self::map_runtime_error)
-                }
-            };
-        }
+        let mut context = VmCallContext {
+            runtime: self,
+            environment,
+        };
+        callee
+            .call(&mut context, args)
+            .map_err(Self::map_runtime_error)
+    }
+}
 
-        if let Some(name) = callee.as_function_name() {
-            let function = self
-                .program
-                .functions
-                .get(&name)
-                .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
-                .clone();
-            if args.len() != function.params.len() {
-                return Err(VmError::FunctionArityMismatch {
-                    name,
-                    expected: function.params.len(),
-                    found: args.len(),
-                });
-            }
-            let mut locals_map = HashMap::new();
-            for (param, value) in function.params.iter().zip(args) {
-                locals_map.insert(param.to_string(), value);
-            }
-            let mut child_environment = environment.child_with_locals(&mut locals_map);
-            let parent_stack = std::mem::take(&mut self.stack);
-            let result = self.execute_code(&function.code, &mut child_environment);
-            self.stack = parent_stack;
-            return result;
+fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
+    match error {
+        VmError::StackUnderflow => panic!("stack underflow while calling function"),
+        VmError::UnsupportedOperation {
+            operation,
+            type_name,
+        } => RuntimeError::UnsupportedOperation {
+            operation,
+            type_name,
+        },
+        VmError::InvalidArgumentType {
+            operation,
+            argument,
+            expected,
+            got,
+        } => RuntimeError::InvalidArgumentType {
+            operation,
+            argument,
+            expected,
+            got,
+        },
+        VmError::UndefinedVariable { name } => RuntimeError::UndefinedVariable { name },
+        VmError::UndefinedFunction { name } => RuntimeError::UndefinedFunction { name },
+        VmError::FunctionArityMismatch {
+            name,
+            expected,
+            found,
+        } => RuntimeError::FunctionArityMismatch {
+            name,
+            expected,
+            found,
+        },
+        VmError::NegativeListIndex { index } => RuntimeError::NegativeIndex { index },
+        VmError::ListIndexOutOfBounds { index, len } => {
+            RuntimeError::IndexOutOfBounds { index, len }
         }
-
-        if let Some(callable) = callee.as_bound_method_callable() {
-            return callable(args).map_err(Self::map_runtime_error);
+        VmError::MethodArityMismatch {
+            method,
+            expected,
+            found,
+        } => RuntimeError::ArityMismatch {
+            method,
+            expected,
+            found,
+        },
+        VmError::UnknownMethod { method, type_name } => {
+            RuntimeError::UnknownMethod { method, type_name }
         }
-
-        Err(VmError::ObjectNotCallable {
-            type_name: callee.type_name().to_string(),
-        })
+        VmError::UnknownAttribute {
+            attribute,
+            type_name,
+        } => RuntimeError::UnknownAttribute {
+            attribute,
+            type_name,
+        },
+        VmError::ObjectNotCallable { type_name } => RuntimeError::ObjectNotCallable { type_name },
+        VmError::InvalidJumpTarget => panic!("invalid jump target while calling function"),
     }
 }
 

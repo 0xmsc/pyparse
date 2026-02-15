@@ -35,42 +35,48 @@ impl RuntimeObject for StringObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let is_non_empty = !self.value.is_empty();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__bool__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::bool_object(is_non_empty))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: "__bool__".to_string(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::bool_object(is_non_empty))
+                },
+            )));
         }
         if attribute == "__str__" {
             let value = self.value.clone();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__str__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object(value.clone()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: "__str__".to_string(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object(value.clone()))
+                },
+            )));
         }
         if attribute == "__repr__" {
             let value = format!("{:?}", self.value);
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__repr__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object(value.clone()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: "__repr__".to_string(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object(value.clone()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

@@ -15,10 +15,6 @@ impl BuiltinFunctionObject {
     pub(crate) fn new(builtin: BuiltinFunction) -> Self {
         Self { builtin }
     }
-
-    pub(crate) fn builtin(&self) -> BuiltinFunction {
-        self.builtin
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,18 +67,27 @@ impl RuntimeObject for BuiltinFunctionObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__call__" {
+            let builtin = self.builtin;
+            return Ok(Value::bound_method_object(Rc::new(move |context, args| {
+                context.call_builtin(builtin, args)
+            })));
+        }
+
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.clone(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object("<built-in function>".to_string()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: method.clone(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object("<built-in function>".to_string()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
@@ -105,19 +110,28 @@ impl RuntimeObject for FunctionObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__call__" {
+            let function_name = self.name.clone();
+            return Ok(Value::bound_method_object(Rc::new(move |context, args| {
+                context.call_function_named(&function_name, args)
+            })));
+        }
+
         if attribute == "__str__" || attribute == "__repr__" {
             let rendered = format!("<function {}>", self.name());
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.clone(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object(rendered.clone()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: method.clone(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object(rendered.clone()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
@@ -140,18 +154,27 @@ impl RuntimeObject for BoundMethodObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__call__" {
+            let callable = self.callable();
+            return Ok(Value::bound_method_object(Rc::new(move |context, args| {
+                callable(context, args)
+            })));
+        }
+
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.clone(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object("<bound method>".to_string()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: method.clone(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object("<bound method>".to_string()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

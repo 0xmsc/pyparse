@@ -77,9 +77,9 @@ impl RuntimeObject for ListObject {
         ) {
             let receiver = receiver.clone();
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                call_method_on_receiver(&receiver, &method, args)
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| call_method_on_receiver(&receiver, &method, args),
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

@@ -35,30 +35,34 @@ impl RuntimeObject for BoolObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let value = self.value;
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__bool__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::bool_object(value))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: "__bool__".to_string(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::bool_object(value))
+                },
+            )));
         }
         if attribute == "__str__" || attribute == "__repr__" {
             let rendered = if self.value { "True" } else { "False" }.to_string();
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(move |args| {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.clone(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
-                Ok(Value::string_object(rendered.clone()))
-            })));
+            return Ok(Value::bound_method_object(Rc::new(
+                move |_context, args| {
+                    if !args.is_empty() {
+                        return Err(RuntimeError::ArityMismatch {
+                            method: method.clone(),
+                            expected: 0,
+                            found: args.len(),
+                        });
+                    }
+                    Ok(Value::string_object(rendered.clone()))
+                },
+            )));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
