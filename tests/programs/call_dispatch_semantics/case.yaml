@@ -1,9 +1,0 @@
-class: runtime_success
-parity: true
-unsupported_backends: [interpreter, vm, jit, transpiler]
-bench:
-  enabled: false
-  tags: [small, call_protocol]
-expected:
-  exit_code: 0
-  stdout_file: stdout.txt
