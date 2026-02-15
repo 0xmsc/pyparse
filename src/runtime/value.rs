@@ -4,7 +4,7 @@ use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, Functio
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, new_list_object};
+use crate::runtime::object::{BoundMethodCallable, ObjectRef, new_list_object};
 use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
 use std::fmt;
@@ -13,7 +13,6 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub(crate) struct Value {
     object: ObjectRef,
-    call_target: Option<CallTarget>,
 }
 
 impl fmt::Debug for Value {
@@ -22,17 +21,9 @@ impl fmt::Debug for Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CallTargetError {
-    pub(crate) type_name: String,
-}
-
 impl Value {
-    fn new(object: ObjectRef, call_target: Option<CallTarget>) -> Self {
-        Self {
-            object,
-            call_target,
-        }
+    fn new(object: ObjectRef) -> Self {
+        Self { object }
     }
 
     pub(crate) fn object_ref(&self) -> ObjectRef {
@@ -67,16 +58,37 @@ impl Value {
         true
     }
 
-    pub(crate) fn call_target(&self) -> Result<CallTarget, CallTargetError> {
-        self.call_target.clone().ok_or_else(|| CallTargetError {
-            type_name: self.type_name().to_string(),
-        })
-    }
-
     pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
         self.object
             .borrow()
             .get_attribute(self.object_ref(), attribute)
+    }
+
+    pub(crate) fn as_builtin_function(&self) -> Option<BuiltinFunction> {
+        let object_ref = self.object_ref();
+        let object = object_ref.borrow();
+        object
+            .as_any()
+            .downcast_ref::<BuiltinFunctionObject>()
+            .map(BuiltinFunctionObject::builtin)
+    }
+
+    pub(crate) fn as_function_name(&self) -> Option<String> {
+        let object_ref = self.object_ref();
+        let object = object_ref.borrow();
+        object
+            .as_any()
+            .downcast_ref::<FunctionObject>()
+            .map(|function| function.name().to_string())
+    }
+
+    pub(crate) fn as_bound_method_callable(&self) -> Option<BoundMethodCallable> {
+        let object_ref = self.object_ref();
+        let object = object_ref.borrow();
+        object
+            .as_any()
+            .downcast_ref::<BoundMethodObject>()
+            .map(BoundMethodObject::callable)
     }
 
     pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
@@ -102,56 +114,38 @@ impl Value {
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
-        Self::new(new_list_object(values), None)
+        Self::new(new_list_object(values))
     }
 
     pub(crate) fn int_object(value: i64) -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(IntObject::new(value)))), None)
+        Self::new(Rc::new(RefCell::new(Box::new(IntObject::new(value)))))
     }
 
     pub(crate) fn bool_object(value: bool) -> Self {
-        Self::new(
-            Rc::new(RefCell::new(Box::new(BoolObject::new(value)))),
-            None,
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(BoolObject::new(value)))))
     }
 
     pub(crate) fn string_object(value: String) -> Self {
-        Self::new(
-            Rc::new(RefCell::new(Box::new(StringObject::new(value)))),
-            None,
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(StringObject::new(value)))))
     }
 
     pub(crate) fn none_object() -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(NoneObject::new()))), None)
+        Self::new(Rc::new(RefCell::new(Box::new(NoneObject::new()))))
     }
 
     pub(crate) fn builtin_function_object(builtin: BuiltinFunction) -> Self {
         let builtin_object = BuiltinFunctionObject::new(builtin);
-        let call_target = builtin_object.call_target();
-        Self::new(
-            Rc::new(RefCell::new(Box::new(builtin_object))),
-            Some(call_target),
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(builtin_object))))
     }
 
     pub(crate) fn function_object(name: String) -> Self {
         let function_object = FunctionObject::new(name);
-        let call_target = function_object.call_target();
-        Self::new(
-            Rc::new(RefCell::new(Box::new(function_object))),
-            Some(call_target),
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(function_object))))
     }
 
     pub(crate) fn bound_method_object(callable: BoundMethodCallable) -> Self {
         let bound_method_object = BoundMethodObject::new(callable);
-        let call_target = bound_method_object.call_target();
-        Self::new(
-            Rc::new(RefCell::new(Box::new(bound_method_object))),
-            Some(call_target),
-        )
+        Self::new(Rc::new(RefCell::new(Box::new(bound_method_object))))
     }
 
     fn call_magic_method(
@@ -160,20 +154,18 @@ impl Value {
         args: Vec<Value>,
         operation: &str,
     ) -> Result<Value, RuntimeError> {
-        let type_name = callee.type_name().to_string();
-        let call_target = callee
-            .call_target()
-            .map_err(|_| RuntimeError::UnsupportedOperation {
+        let callee_type_name = callee.type_name().to_string();
+        let object_ref = callee.object_ref();
+        let object = object_ref.borrow();
+        let Some(bound_method) = object.as_any().downcast_ref::<BoundMethodObject>() else {
+            return Err(RuntimeError::UnsupportedOperation {
                 operation: operation.to_string(),
-                type_name: type_name.clone(),
-            })?;
-        match call_target {
-            CallTarget::BoundMethod(callable) => callable(args),
-            _ => Err(RuntimeError::UnsupportedOperation {
-                operation: operation.to_string(),
-                type_name,
-            }),
-        }
+                type_name: callee_type_name,
+            });
+        };
+        let callable = bound_method.callable();
+        drop(object);
+        callable(args)
     }
 
     fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {

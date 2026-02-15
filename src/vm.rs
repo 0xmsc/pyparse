@@ -7,8 +7,7 @@ use crate::backend::{Backend, PreparedBackend};
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction, compile};
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::CallTarget;
-use crate::runtime::value::{CallTargetError, Value};
+use crate::runtime::value::Value;
 
 type VmResult<T> = std::result::Result<T, VmError>;
 
@@ -389,51 +388,58 @@ impl VmRuntime<'_> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> VmResult<Value> {
-        let call_target = callee
-            .call_target()
-            .map_err(|CallTargetError { type_name }| VmError::ObjectNotCallable { type_name })?;
-        match call_target {
-            CallTarget::Builtin(BuiltinFunction::Print) => {
-                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                self.output.push(rendered.join(" "));
-                Ok(Value::none_object())
-            }
-            CallTarget::Builtin(BuiltinFunction::Len) => {
-                if args.len() != 1 {
-                    return Err(VmError::FunctionArityMismatch {
-                        name: "len".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
+        if let Some(builtin) = callee.as_builtin_function() {
+            return match builtin {
+                BuiltinFunction::Print => {
+                    let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                    self.output.push(rendered.join(" "));
+                    Ok(Value::none_object())
                 }
-                args[0].len().map_err(Self::map_runtime_error)
-            }
-            CallTarget::Function(name) => {
-                let function = self
-                    .program
-                    .functions
-                    .get(&name)
-                    .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
-                    .clone();
-                if args.len() != function.params.len() {
-                    return Err(VmError::FunctionArityMismatch {
-                        name,
-                        expected: function.params.len(),
-                        found: args.len(),
-                    });
+                BuiltinFunction::Len => {
+                    if args.len() != 1 {
+                        return Err(VmError::FunctionArityMismatch {
+                            name: "len".to_string(),
+                            expected: 1,
+                            found: args.len(),
+                        });
+                    }
+                    args[0].len().map_err(Self::map_runtime_error)
                 }
-                let mut locals_map = HashMap::new();
-                for (param, value) in function.params.iter().zip(args) {
-                    locals_map.insert(param.to_string(), value);
-                }
-                let mut child_environment = environment.child_with_locals(&mut locals_map);
-                let parent_stack = std::mem::take(&mut self.stack);
-                let result = self.execute_code(&function.code, &mut child_environment);
-                self.stack = parent_stack;
-                result
-            }
-            CallTarget::BoundMethod(callable) => callable(args).map_err(Self::map_runtime_error),
+            };
         }
+
+        if let Some(name) = callee.as_function_name() {
+            let function = self
+                .program
+                .functions
+                .get(&name)
+                .ok_or_else(|| VmError::UndefinedFunction { name: name.clone() })?
+                .clone();
+            if args.len() != function.params.len() {
+                return Err(VmError::FunctionArityMismatch {
+                    name,
+                    expected: function.params.len(),
+                    found: args.len(),
+                });
+            }
+            let mut locals_map = HashMap::new();
+            for (param, value) in function.params.iter().zip(args) {
+                locals_map.insert(param.to_string(), value);
+            }
+            let mut child_environment = environment.child_with_locals(&mut locals_map);
+            let parent_stack = std::mem::take(&mut self.stack);
+            let result = self.execute_code(&function.code, &mut child_environment);
+            self.stack = parent_stack;
+            return result;
+        }
+
+        if let Some(callable) = callee.as_bound_method_callable() {
+            return callable(args).map_err(Self::map_runtime_error);
+        }
+
+        Err(VmError::ObjectNotCallable {
+            type_name: callee.type_name().to_string(),
+        })
     }
 }
 

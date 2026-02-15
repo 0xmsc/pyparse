@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::CallTarget;
 
 use super::{Function, InterpreterError, Value};
 
@@ -340,50 +339,56 @@ impl<'a> InterpreterRuntime<'a> {
         args: Vec<Value>,
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        let call_target = callee.call_target().map_err(
-            |crate::runtime::value::CallTargetError { type_name }| {
-                InterpreterError::ObjectNotCallable { type_name }
-            },
-        )?;
-        match call_target {
-            CallTarget::Builtin(BuiltinFunction::Print) => {
-                let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                self.output.push(outputs.join(" "));
-                Ok(Value::none_object())
-            }
-            CallTarget::Builtin(BuiltinFunction::Len) => {
-                if args.len() != 1 {
-                    return Err(InterpreterError::FunctionArityMismatch {
-                        name: "len".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
+        if let Some(builtin) = callee.as_builtin_function() {
+            return match builtin {
+                BuiltinFunction::Print => {
+                    let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                    self.output.push(outputs.join(" "));
+                    Ok(Value::none_object())
                 }
-                args[0].len().map_err(Self::map_runtime_error)
-            }
-            CallTarget::Function(name) => {
-                let function =
-                    self.functions.get(&name).cloned().ok_or_else(|| {
-                        InterpreterError::UndefinedFunction { name: name.clone() }
-                    })?;
-                if args.len() != function.params.len() {
-                    return Err(InterpreterError::FunctionArityMismatch {
-                        name,
-                        expected: function.params.len(),
-                        found: args.len(),
-                    });
+                BuiltinFunction::Len => {
+                    if args.len() != 1 {
+                        return Err(InterpreterError::FunctionArityMismatch {
+                            name: "len".to_string(),
+                            expected: 1,
+                            found: args.len(),
+                        });
+                    }
+                    args[0].len().map_err(Self::map_runtime_error)
                 }
-                let mut local_scope = HashMap::new();
-                for (param, value) in function.params.iter().zip(args) {
-                    local_scope.insert(param.clone(), value);
-                }
-                let mut local_environment = environment.child_with_locals(&mut local_scope);
-                match self.exec_block(&function.body, &mut local_environment)? {
-                    ExecResult::Continue => Ok(Value::none_object()),
-                    ExecResult::Return(value) => Ok(value),
-                }
-            }
-            CallTarget::BoundMethod(callable) => callable(args).map_err(Self::map_runtime_error),
+            };
         }
+
+        if let Some(name) = callee.as_function_name() {
+            let function = self
+                .functions
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| InterpreterError::UndefinedFunction { name: name.clone() })?;
+            if args.len() != function.params.len() {
+                return Err(InterpreterError::FunctionArityMismatch {
+                    name,
+                    expected: function.params.len(),
+                    found: args.len(),
+                });
+            }
+            let mut local_scope = HashMap::new();
+            for (param, value) in function.params.iter().zip(args) {
+                local_scope.insert(param.clone(), value);
+            }
+            let mut local_environment = environment.child_with_locals(&mut local_scope);
+            return match self.exec_block(&function.body, &mut local_environment)? {
+                ExecResult::Continue => Ok(Value::none_object()),
+                ExecResult::Return(value) => Ok(value),
+            };
+        }
+
+        if let Some(callable) = callee.as_bound_method_callable() {
+            return callable(args).map_err(Self::map_runtime_error);
+        }
+
+        Err(InterpreterError::ObjectNotCallable {
+            type_name: callee.type_name().to_string(),
+        })
     }
 }

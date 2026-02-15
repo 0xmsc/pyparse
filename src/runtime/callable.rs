@@ -1,6 +1,6 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, RuntimeObject};
+use crate::runtime::object::{BoundMethodCallable, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 use std::fmt;
@@ -16,8 +16,8 @@ impl BuiltinFunctionObject {
         Self { builtin }
     }
 
-    pub(crate) fn call_target(&self) -> CallTarget {
-        CallTarget::Builtin(self.builtin)
+    pub(crate) fn builtin(&self) -> BuiltinFunction {
+        self.builtin
     }
 }
 
@@ -29,10 +29,6 @@ pub(crate) struct FunctionObject {
 impl FunctionObject {
     pub(crate) fn new(name: String) -> Self {
         Self { name }
-    }
-
-    pub(crate) fn call_target(&self) -> CallTarget {
-        CallTarget::Function(self.name.clone())
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -50,8 +46,8 @@ impl BoundMethodObject {
         Self { callable }
     }
 
-    pub(crate) fn call_target(&self) -> CallTarget {
-        CallTarget::BoundMethod(self.callable.clone())
+    pub(crate) fn callable(&self) -> BoundMethodCallable {
+        self.callable.clone()
     }
 }
 
