@@ -24,32 +24,14 @@ impl IntObject {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         if method == "__bool__" {
-            if !args.is_empty() {
-                return Err(RuntimeError::ArityMismatch {
-                    method: method.to_string(),
-                    expected: 0,
-                    found: args.len(),
-                });
-            }
+            RuntimeError::expect_method_arity(method, 0, args.len())?;
             return Ok(Value::bool_object(self.value != 0));
         }
         if method == "__str__" || method == "__repr__" {
-            if !args.is_empty() {
-                return Err(RuntimeError::ArityMismatch {
-                    method: method.to_string(),
-                    expected: 0,
-                    found: args.len(),
-                });
-            }
+            RuntimeError::expect_method_arity(method, 0, args.len())?;
             return Ok(Value::string_object(self.value.to_string()));
         }
-        if args.len() != 1 {
-            return Err(RuntimeError::ArityMismatch {
-                method: method.to_string(),
-                expected: 1,
-                found: args.len(),
-            });
-        }
+        RuntimeError::expect_method_arity(method, 1, args.len())?;
         let rhs = args.first().expect("len checked above");
         let Some(rhs_int) = downcast_i64(rhs) else {
             return Err(RuntimeError::InvalidArgumentType {

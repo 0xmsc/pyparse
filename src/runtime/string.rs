@@ -37,13 +37,7 @@ impl RuntimeObject for StringObject {
             let is_non_empty = !self.value.is_empty();
             return Ok(Value::bound_method_object(Rc::new(
                 move |_context, args| {
-                    if !args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch {
-                            method: "__bool__".to_string(),
-                            expected: 0,
-                            found: args.len(),
-                        });
-                    }
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
                     Ok(Value::bool_object(is_non_empty))
                 },
             )));
@@ -52,13 +46,7 @@ impl RuntimeObject for StringObject {
             let value = self.value.clone();
             return Ok(Value::bound_method_object(Rc::new(
                 move |_context, args| {
-                    if !args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch {
-                            method: "__str__".to_string(),
-                            expected: 0,
-                            found: args.len(),
-                        });
-                    }
+                    RuntimeError::expect_method_arity("__str__", 0, args.len())?;
                     Ok(Value::string_object(value.clone()))
                 },
             )));
@@ -67,13 +55,7 @@ impl RuntimeObject for StringObject {
             let value = format!("{:?}", self.value);
             return Ok(Value::bound_method_object(Rc::new(
                 move |_context, args| {
-                    if !args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch {
-                            method: "__repr__".to_string(),
-                            expected: 0,
-                            found: args.len(),
-                        });
-                    }
+                    RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
                     Ok(Value::string_object(value.clone()))
                 },
             )));

@@ -95,13 +95,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
                 Ok(Value::none_object())
             }
             BuiltinFunction::Len => {
-                if args.len() != 1 {
-                    return Err(RuntimeError::FunctionArityMismatch {
-                        name: "len".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_function_arity("len", 1, args.len())?;
                 args[0].len()
             }
         }
@@ -117,13 +111,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
                 name: name.to_string(),
             })?
             .clone();
-        if args.len() != function.params.len() {
-            return Err(RuntimeError::FunctionArityMismatch {
-                name: name.to_string(),
-                expected: function.params.len(),
-                found: args.len(),
-            });
-        }
+        RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
         let mut locals_map = HashMap::new();
         for (param, value) in function.params.iter().zip(args) {
             locals_map.insert(param.to_string(), value);

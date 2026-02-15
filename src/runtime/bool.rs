@@ -37,13 +37,7 @@ impl RuntimeObject for BoolObject {
             let value = self.value;
             return Ok(Value::bound_method_object(Rc::new(
                 move |_context, args| {
-                    if !args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch {
-                            method: "__bool__".to_string(),
-                            expected: 0,
-                            found: args.len(),
-                        });
-                    }
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
                     Ok(Value::bool_object(value))
                 },
             )));
@@ -53,13 +47,7 @@ impl RuntimeObject for BoolObject {
             let method = attribute.to_string();
             return Ok(Value::bound_method_object(Rc::new(
                 move |_context, args| {
-                    if !args.is_empty() {
-                        return Err(RuntimeError::ArityMismatch {
-                            method: method.clone(),
-                            expected: 0,
-                            found: args.len(),
-                        });
-                    }
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
                     Ok(Value::string_object(rendered.clone()))
                 },
             )));

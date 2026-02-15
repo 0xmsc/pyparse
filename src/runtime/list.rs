@@ -133,58 +133,28 @@ impl ListObject {
     ) -> Result<Value, RuntimeError> {
         match method {
             "append" => {
-                if args.len() != 1 {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "append".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_method_arity("append", 1, args.len())?;
                 self.append(args.pop().expect("len checked above"));
                 Ok(Value::none_object())
             }
             "__len__" => {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__len__".to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_method_arity("__len__", 0, args.len())?;
                 Ok(Value::int_object(self.__len__() as i64))
             }
             "__getitem__" => {
-                if args.len() != 1 {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__getitem__".to_string(),
-                        expected: 1,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_method_arity("__getitem__", 1, args.len())?;
                 let index = args.pop().expect("len checked above");
                 self.get_item_value(index)
             }
             "__setitem__" => {
-                if args.len() != 2 {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: "__setitem__".to_string(),
-                        expected: 2,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_method_arity("__setitem__", 2, args.len())?;
                 let value = args.pop().expect("len checked above");
                 let index = args.pop().expect("len checked above");
                 self.set_item_value(index, value)?;
                 Ok(Value::none_object())
             }
             "__str__" | "__repr__" => {
-                if !args.is_empty() {
-                    return Err(RuntimeError::ArityMismatch {
-                        method: method.to_string(),
-                        expected: 0,
-                        found: args.len(),
-                    });
-                }
+                RuntimeError::expect_method_arity(method, 0, args.len())?;
                 Ok(Value::string_object(self.render()))
             }
             _ => Err(RuntimeError::UnknownMethod {

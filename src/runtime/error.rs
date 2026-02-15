@@ -50,3 +50,35 @@ pub(crate) enum RuntimeError {
     #[error("Return outside of function")]
     ReturnOutsideFunction,
 }
+
+impl RuntimeError {
+    pub(crate) fn expect_method_arity(
+        method: &str,
+        expected: usize,
+        found: usize,
+    ) -> Result<(), RuntimeError> {
+        if found == expected {
+            return Ok(());
+        }
+        Err(RuntimeError::ArityMismatch {
+            method: method.to_string(),
+            expected,
+            found,
+        })
+    }
+
+    pub(crate) fn expect_function_arity(
+        name: &str,
+        expected: usize,
+        found: usize,
+    ) -> Result<(), RuntimeError> {
+        if found == expected {
+            return Ok(());
+        }
+        Err(RuntimeError::FunctionArityMismatch {
+            name: name.to_string(),
+            expected,
+            found,
+        })
+    }
+}
