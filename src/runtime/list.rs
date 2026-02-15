@@ -61,7 +61,7 @@ impl RuntimeObject for ListObject {
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if matches!(
             attribute,
-            "append" | "__len__" | "__getitem__" | "__setitem__"
+            "append" | "__len__" | "__getitem__" | "__setitem__" | "__str__" | "__repr__"
         ) {
             let receiver = receiver.clone();
             let method = attribute.to_string();
@@ -77,6 +77,15 @@ impl RuntimeObject for ListObject {
 }
 
 impl ListObject {
+    fn render(&self) -> String {
+        let rendered = self
+            .iter()
+            .map(Value::to_output)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("[{rendered}]")
+    }
+
     pub(crate) fn get_item_value(&self, index: Value) -> Result<Value, RuntimeError> {
         let Some(index) = downcast_i64(&index) else {
             return Err(RuntimeError::InvalidArgumentType {
@@ -156,26 +165,22 @@ impl ListObject {
                 self.set_item_value(index, value)?;
                 Ok(Value::none_object())
             }
+            "__str__" | "__repr__" => {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.to_string(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object(self.render()))
+            }
             _ => Err(RuntimeError::UnknownMethod {
                 method: method.to_string(),
                 type_name: "list".to_string(),
             }),
         }
     }
-}
-
-pub(crate) fn try_to_output(value: &Value) -> Option<String> {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<ListObject>().map(|list| {
-        let rendered = list
-            .iter()
-            .map(Value::to_output)
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("[{rendered}]")
-    })
 }
 
 fn call_method_on_receiver(

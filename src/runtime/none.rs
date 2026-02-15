@@ -26,6 +26,19 @@ impl RuntimeObject for NoneObject {
                 Ok(Value::bool_object(false))
             })));
         }
+        if attribute == "__str__" || attribute == "__repr__" {
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object("None".to_string()))
+            })));
+        }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "NoneType".to_string(),

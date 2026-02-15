@@ -1,9 +1,8 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::{self, BoolObject};
-use crate::runtime::callable::{self, BoundMethodObject, BuiltinFunctionObject, FunctionObject};
+use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
-use crate::runtime::list::{self};
 use crate::runtime::none::NoneObject;
 use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, new_list_object};
 use crate::runtime::string::{self, StringObject};
@@ -14,7 +13,6 @@ use std::rc::Rc;
 #[derive(Clone, Copy)]
 struct ValueBehavior {
     type_name: &'static str,
-    to_output: fn(&Value) -> String,
 }
 
 #[derive(Clone)]
@@ -35,76 +33,28 @@ pub(crate) struct CallTargetError {
     pub(crate) type_name: String,
 }
 
-fn int_to_output(value: &Value) -> String {
-    int::try_to_output(value).expect("int behavior must wrap IntObject")
-}
+const INT_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "int" };
 
-fn bool_to_output(value: &Value) -> String {
-    bool::try_to_output(value).expect("bool behavior must wrap BoolObject")
-}
+const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "bool" };
 
-fn string_to_output(value: &Value) -> String {
-    string::try_to_output(value).expect("string behavior must wrap StringObject")
-}
-
-fn list_to_output(value: &Value) -> String {
-    list::try_to_output(value).expect("list behavior must wrap ListObject")
-}
-
-fn none_to_output(_value: &Value) -> String {
-    "None".to_string()
-}
-
-fn builtin_function_to_output(_value: &Value) -> String {
-    "<built-in function>".to_string()
-}
-
-fn function_to_output(value: &Value) -> String {
-    callable::function_to_output(value)
-}
-
-fn bound_method_to_output(_value: &Value) -> String {
-    "<bound method>".to_string()
-}
-
-const INT_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "int",
-    to_output: int_to_output,
-};
-
-const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "bool",
-    to_output: bool_to_output,
-};
-
-const STRING_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "str",
-    to_output: string_to_output,
-};
+const STRING_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "str" };
 
 const NONE_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "NoneType",
-    to_output: none_to_output,
 };
 
-const LIST_BEHAVIOR: ValueBehavior = ValueBehavior {
-    type_name: "list",
-    to_output: list_to_output,
-};
+const LIST_BEHAVIOR: ValueBehavior = ValueBehavior { type_name: "list" };
 
 const BUILTIN_FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "builtin_function_or_method",
-    to_output: builtin_function_to_output,
 };
 
 const FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "function",
-    to_output: function_to_output,
 };
 
 const BOUND_METHOD_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "method",
-    to_output: bound_method_to_output,
 };
 
 impl Value {
@@ -129,7 +79,15 @@ impl Value {
     }
 
     pub(crate) fn to_output(&self) -> String {
-        (self.behavior.to_output)(self)
+        if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
+            return string::downcast_string(&str_value).expect("__str__ must return str");
+        }
+
+        if let Some(repr_value) = self.try_call_magic_method("__repr__", "__repr__") {
+            return string::downcast_string(&repr_value).expect("__repr__ must return str");
+        }
+
+        panic!("missing __str__ and __repr__ for {}", self.type_name());
     }
 
     pub(crate) fn is_truthy(&self) -> bool {

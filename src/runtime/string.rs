@@ -34,6 +34,32 @@ impl RuntimeObject for StringObject {
                 Ok(Value::bool_object(is_non_empty))
             })));
         }
+        if attribute == "__str__" {
+            let value = self.value.clone();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: "__str__".to_string(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object(value.clone()))
+            })));
+        }
+        if attribute == "__repr__" {
+            let value = format!("{:?}", self.value);
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: "__repr__".to_string(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object(value.clone()))
+            })));
+        }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "str".to_string(),
@@ -41,14 +67,10 @@ impl RuntimeObject for StringObject {
     }
 }
 
-fn downcast_string(value: &Value) -> Option<String> {
+pub(crate) fn downcast_string(value: &Value) -> Option<String> {
     let object_ref = value.object_ref();
     let object = object_ref.borrow();
     let any = &**object as &dyn Any;
     any.downcast_ref::<StringObject>()
         .map(|string| string.value().to_string())
-}
-
-pub(crate) fn try_to_output(value: &Value) -> Option<String> {
-    downcast_string(value)
 }

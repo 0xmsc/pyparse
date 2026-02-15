@@ -2,8 +2,8 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
-use std::any::Any;
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BuiltinFunctionObject {
@@ -60,39 +60,69 @@ impl fmt::Debug for BoundMethodObject {
     }
 }
 
-macro_rules! impl_callable_runtime_object {
-    ($type_name:expr) => {
-        fn get_attribute(
-            &self,
-            _receiver: ObjectRef,
-            attribute: &str,
-        ) -> Result<Value, RuntimeError> {
-            Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: $type_name.to_string(),
-            })
-        }
-    };
-}
-
 impl RuntimeObject for BuiltinFunctionObject {
-    impl_callable_runtime_object!("builtin_function_or_method");
+    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__str__" || attribute == "__repr__" {
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object("<built-in function>".to_string()))
+            })));
+        }
+        Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "builtin_function_or_method".to_string(),
+        })
+    }
 }
 
 impl RuntimeObject for FunctionObject {
-    impl_callable_runtime_object!("function");
+    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__str__" || attribute == "__repr__" {
+            let rendered = format!("<function {}>", self.name());
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object(rendered.clone()))
+            })));
+        }
+        Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "function".to_string(),
+        })
+    }
 }
 
 impl RuntimeObject for BoundMethodObject {
-    impl_callable_runtime_object!("method");
-}
-
-pub(crate) fn function_to_output(value: &Value) -> String {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    let function = any
-        .downcast_ref::<FunctionObject>()
-        .expect("function behavior must wrap FunctionObject");
-    format!("<function {}>", function.name())
+    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__str__" || attribute == "__repr__" {
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object("<bound method>".to_string()))
+            })));
+        }
+        Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "method".to_string(),
+        })
+    }
 }

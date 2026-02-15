@@ -34,6 +34,20 @@ impl RuntimeObject for BoolObject {
                 Ok(Value::bool_object(value))
             })));
         }
+        if attribute == "__str__" || attribute == "__repr__" {
+            let rendered = if self.value { "True" } else { "False" }.to_string();
+            let method = attribute.to_string();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: method.clone(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::string_object(rendered.clone()))
+            })));
+        }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "bool".to_string(),
@@ -46,14 +60,4 @@ pub(crate) fn downcast_bool(value: &Value) -> Option<bool> {
     let object = object_ref.borrow();
     let any = &**object as &dyn Any;
     any.downcast_ref::<BoolObject>().map(BoolObject::value)
-}
-
-pub(crate) fn try_to_output(value: &Value) -> Option<String> {
-    downcast_bool(value).map(|boolean| {
-        if boolean {
-            "True".to_string()
-        } else {
-            "False".to_string()
-        }
-    })
 }
