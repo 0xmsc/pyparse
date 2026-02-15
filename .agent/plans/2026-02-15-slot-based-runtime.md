@@ -3,6 +3,18 @@
 ## Objective
 - Move runtime dispatch to CPython-style slots and reach CPython-compatible semantics.
 
+## CPython Semantics (Brief)
+- Protocol operations (for example `obj()`, operators, `len`, indexing) are dispatched from the object's type slots/MRO, not by normal instance attribute lookup.
+- `obj()` is therefore type-driven call dispatch; `obj.__call__` is normal attribute access and is not the dispatch source for call syntax.
+- Attribute behavior follows ordered protocol rules (`__getattribute__`, descriptor precedence, instance dict, `__getattr__`).
+
+## Current Compatibility Gap (Brief)
+- Current runtime still has attribute-driven dispatch paths (especially around call and special methods) instead of strict slot protocol dispatch.
+- Operator/attribute protocol ordering is not fully centralized and guaranteed identical across interpreter/VM/JIT.
+- Class/descriptor/MRO semantics are only partially implemented, so edge cases can diverge from CPython.
+- Repro fixture for current CPython gap: `tests/programs/cpython_bool_compare_gap/program.py` (CPython-only until slot migration).
+- Why this repro matters: it shows bool numeric/comparison behavior differs from CPython; this can be patched locally, but full parity requires type-driven slot dispatch and subtype-aware semantics to avoid repeated one-off fixes.
+
 ## Approach
 - Ship in small milestones, keep behavior stable, and validate with fixtures each step.
 - Use `TypeInfo` early as internal runtime metadata, even before language-level types/classes are complete.
