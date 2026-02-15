@@ -1,5 +1,5 @@
 use crate::runtime::error::RuntimeError;
-use crate::runtime::method::{zero_arg_string_method, zero_arg_value_method};
+use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
@@ -33,20 +33,27 @@ impl RuntimeObject for BoolObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if attribute == "__bool__" {
-            let value = self.value;
-            return Ok(zero_arg_value_method("__bool__", move || {
-                Value::bool_object(value)
-            }));
+        match attribute {
+            "__bool__" => {
+                let value = self.value;
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                    Ok(Value::bool_object(value))
+                }))
+            }
+            "__str__" | "__repr__" => {
+                let rendered = if self.value { "True" } else { "False" }.to_string();
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(Value::string_object(rendered.clone()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "bool".to_string(),
+            }),
         }
-        if attribute == "__str__" || attribute == "__repr__" {
-            let rendered = if self.value { "True" } else { "False" }.to_string();
-            return Ok(zero_arg_string_method(attribute, rendered));
-        }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "bool".to_string(),
-        })
     }
 }
 

@@ -89,19 +89,18 @@ impl RuntimeObject for IntObject {
     }
 
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if matches!(
-            attribute,
-            "__add__" | "__sub__" | "__lt__" | "__bool__" | "__str__" | "__repr__"
-        ) {
-            let receiver = receiver.clone();
-            let method = attribute.to_string();
-            return Ok(bound_method(move |_context, args| {
-                call_method_on_receiver(&receiver, &method, args)
-            }));
+        match attribute {
+            "__add__" | "__sub__" | "__lt__" | "__bool__" | "__str__" | "__repr__" => {
+                let receiver = receiver.clone();
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    call_method_on_receiver(&receiver, &method, args)
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "int".to_string(),
+            }),
         }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "int".to_string(),
-        })
     }
 }

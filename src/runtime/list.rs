@@ -71,20 +71,19 @@ impl RuntimeObject for ListObject {
     }
 
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if matches!(
-            attribute,
-            "append" | "__len__" | "__getitem__" | "__setitem__" | "__str__" | "__repr__"
-        ) {
-            let receiver = receiver.clone();
-            let method = attribute.to_string();
-            return Ok(bound_method(move |_context, args| {
-                call_method_on_receiver(&receiver, &method, args)
-            }));
+        match attribute {
+            "append" | "__len__" | "__getitem__" | "__setitem__" | "__str__" | "__repr__" => {
+                let receiver = receiver.clone();
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    call_method_on_receiver(&receiver, &method, args)
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "list".to_string(),
+            }),
         }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "list".to_string(),
-        })
     }
 }
 

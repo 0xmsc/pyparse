@@ -1,5 +1,5 @@
 use crate::runtime::error::RuntimeError;
-use crate::runtime::method::{zero_arg_string_method, zero_arg_value_method};
+use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
@@ -33,24 +33,33 @@ impl RuntimeObject for StringObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if attribute == "__bool__" {
-            let is_non_empty = !self.value.is_empty();
-            return Ok(zero_arg_value_method("__bool__", move || {
-                Value::bool_object(is_non_empty)
-            }));
+        match attribute {
+            "__bool__" => {
+                let is_non_empty = !self.value.is_empty();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                    Ok(Value::bool_object(is_non_empty))
+                }))
+            }
+            "__str__" => {
+                let value = self.value.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__str__", 0, args.len())?;
+                    Ok(Value::string_object(value.clone()))
+                }))
+            }
+            "__repr__" => {
+                let value = format!("{:?}", self.value);
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
+                    Ok(Value::string_object(value.clone()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "str".to_string(),
+            }),
         }
-        if attribute == "__str__" {
-            let value = self.value.clone();
-            return Ok(zero_arg_string_method("__str__", value));
-        }
-        if attribute == "__repr__" {
-            let value = format!("{:?}", self.value);
-            return Ok(zero_arg_string_method("__repr__", value));
-        }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "str".to_string(),
-        })
     }
 }
 

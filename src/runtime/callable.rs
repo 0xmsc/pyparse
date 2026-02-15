@@ -1,6 +1,6 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::method::{bound_method, zero_arg_string_method};
+use crate::runtime::method::bound_method;
 use crate::runtime::object::{BoundMethodCallable, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
@@ -67,20 +67,25 @@ impl RuntimeObject for BuiltinFunctionObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if attribute == "__call__" {
-            let builtin = self.builtin;
-            return Ok(bound_method(move |context, args| {
-                context.call_builtin(builtin, args)
-            }));
+        match attribute {
+            "__call__" => {
+                let builtin = self.builtin;
+                Ok(bound_method(move |context, args| {
+                    context.call_builtin(builtin, args)
+                }))
+            }
+            "__str__" | "__repr__" => {
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(Value::string_object("<built-in function>".to_string()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "builtin_function_or_method".to_string(),
+            }),
         }
-
-        if attribute == "__str__" || attribute == "__repr__" {
-            return Ok(zero_arg_string_method(attribute, "<built-in function>"));
-        }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "builtin_function_or_method".to_string(),
-        })
     }
 }
 
@@ -98,23 +103,26 @@ impl RuntimeObject for FunctionObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if attribute == "__call__" {
-            let function_name = self.name.clone();
-            return Ok(bound_method(move |context, args| {
-                context.call_function_named(&function_name, args)
-            }));
+        match attribute {
+            "__call__" => {
+                let function_name = self.name.clone();
+                Ok(bound_method(move |context, args| {
+                    context.call_function_named(&function_name, args)
+                }))
+            }
+            "__str__" | "__repr__" => {
+                let method = attribute.to_string();
+                let rendered = format!("<function {}>", self.name());
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(Value::string_object(rendered.clone()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "function".to_string(),
+            }),
         }
-
-        if attribute == "__str__" || attribute == "__repr__" {
-            return Ok(zero_arg_string_method(
-                attribute,
-                format!("<function {}>", self.name()),
-            ));
-        }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "function".to_string(),
-        })
     }
 }
 
@@ -132,17 +140,22 @@ impl RuntimeObject for BoundMethodObject {
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if attribute == "__call__" {
-            let callable = self.callable();
-            return Ok(bound_method(move |context, args| callable(context, args)));
+        match attribute {
+            "__call__" => {
+                let callable = self.callable();
+                Ok(bound_method(move |context, args| callable(context, args)))
+            }
+            "__str__" | "__repr__" => {
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(Value::string_object("<bound method>".to_string()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: "method".to_string(),
+            }),
         }
-
-        if attribute == "__str__" || attribute == "__repr__" {
-            return Ok(zero_arg_string_method(attribute, "<bound method>"));
-        }
-        Err(RuntimeError::UnknownAttribute {
-            attribute: attribute.to_string(),
-            type_name: "method".to_string(),
-        })
     }
 }
