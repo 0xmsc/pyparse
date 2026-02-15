@@ -12,8 +12,8 @@
 - Current runtime still has attribute-driven dispatch paths (especially around call and special methods) instead of strict slot protocol dispatch.
 - Operator/attribute protocol ordering is not fully centralized and guaranteed identical across interpreter/VM/JIT.
 - Class/descriptor/MRO semantics are only partially implemented, so edge cases can diverge from CPython.
-- Repro fixture for current CPython gap: `tests/programs/cpython_bool_compare_gap/program.py` (CPython-only until slot migration).
-- Why this repro matters: it shows bool numeric/comparison behavior differs from CPython; this can be patched locally, but full parity requires type-driven slot dispatch and subtype-aware semantics to avoid repeated one-off fixes.
+- Repro fixture for current call-dispatch semantics: `tests/programs/call_dispatch_semantics/program.py` (Python-runtime-only until class support lands).
+- Why this repro matters: setting `instance.__call__` makes `instance.__call__()` work, but `callable(instance)` remains `False`; callability is type-slot driven, not instance attribute driven.
 
 ## Approach
 - Ship in small milestones, keep behavior stable, and validate with fixtures each step.

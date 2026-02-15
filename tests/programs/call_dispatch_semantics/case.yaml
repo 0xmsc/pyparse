@@ -3,7 +3,7 @@ parity: true
 unsupported_backends: [interpreter, vm, jit, transpiler]
 bench:
   enabled: false
-  tags: [small, cpython_only]
+  tags: [small, call_protocol]
 expected:
   exit_code: 0
   stdout_file: stdout.txt
