@@ -1,7 +1,7 @@
 # Minimal Class + Instance Method Support Plan
 
 ## Objective
-- Implement the minimum class/instance runtime slice required to make `tests/programs/class_instance_method_basics/` pass on pyparse backends.
+- Implement the minimum class/instance runtime slice required to make `tests/programs/classes/` pass on pyparse backends.
 
 ## Approach
 - Add class syntax and AST support first, then implement runtime objects for class/instance/method binding.
@@ -32,12 +32,12 @@
   - Invoke `__init__` if present (minimal arity/dispatch only).
 - [x] Milestone 5: Backend wiring + fixture enablement
   - Compile/execute `ClassDef` in bytecode/interpreter paths.
-  - Remove `interpreter` and `vm` from `unsupported_backends` for `class_instance_method_basics` once passing.
+  - Remove `interpreter` and `vm` from `unsupported_backends` for `classes` once passing.
   - Keep `jit`/`transpiler` unsupported if class bytecode/runtime is not implemented there yet.
 
 ## Verification
 - Per milestone: run `just test`.
-- Required fixture: `tests/programs/class_instance_method_basics/` passes for interpreter + VM.
+- Required fixture: `tests/programs/classes/` passes for interpreter + VM.
 - Keep Python parity runners green for CPython/PyPy/MicroPython.
 
 ## Clarifying Questions (with defaults)
