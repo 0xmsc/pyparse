@@ -16,49 +16,8 @@ type VmResult<T> = std::result::Result<T, VmError>;
 enum VmError {
     #[error("Stack underflow")]
     StackUnderflow,
-    #[error("Operation '{operation}' is not supported for type {type_name}")]
-    UnsupportedOperation {
-        operation: String,
-        type_name: String,
-    },
-    #[error(
-        "Invalid argument type for operation '{operation}': '{argument}' expected {expected}, got {got}"
-    )]
-    InvalidArgumentType {
-        operation: String,
-        argument: String,
-        expected: String,
-        got: String,
-    },
-    #[error("Undefined variable '{name}'")]
-    UndefinedVariable { name: String },
-    #[error("Undefined function '{name}'")]
-    UndefinedFunction { name: String },
-    #[error("Function '{name}' expected {expected} arguments, got {found}")]
-    FunctionArityMismatch {
-        name: String,
-        expected: usize,
-        found: usize,
-    },
-    #[error("List index must be non-negative, got {index}")]
-    NegativeListIndex { index: i64 },
-    #[error("List index out of bounds: index {index}, len {len}")]
-    ListIndexOutOfBounds { index: usize, len: usize },
-    #[error("Method '{method}' expected {expected} arguments, got {found}")]
-    MethodArityMismatch {
-        method: String,
-        expected: usize,
-        found: usize,
-    },
-    #[error("Unknown method '{method}' for type {type_name}")]
-    UnknownMethod { method: String, type_name: String },
-    #[error("Unknown attribute '{attribute}' for type {type_name}")]
-    UnknownAttribute {
-        attribute: String,
-        type_name: String,
-    },
-    #[error("Object of type {type_name} is not callable")]
-    ObjectNotCallable { type_name: String },
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
     #[error("Invalid jump target")]
     InvalidJumpTarget,
 }
@@ -204,72 +163,6 @@ impl VM {
 }
 
 impl VmRuntime<'_> {
-    fn map_runtime_error(error: RuntimeError) -> VmError {
-        match error {
-            RuntimeError::UnknownAttribute {
-                attribute,
-                type_name,
-            } => VmError::UnknownAttribute {
-                attribute,
-                type_name,
-            },
-            RuntimeError::ArityMismatch {
-                method,
-                expected,
-                found,
-            } => VmError::MethodArityMismatch {
-                method,
-                expected,
-                found,
-            },
-            RuntimeError::UnknownMethod { method, type_name } => {
-                VmError::UnknownMethod { method, type_name }
-            }
-            RuntimeError::UnsupportedOperation {
-                operation,
-                type_name,
-            } => VmError::UnsupportedOperation {
-                operation,
-                type_name,
-            },
-            RuntimeError::InvalidArgumentType {
-                operation,
-                argument,
-                expected,
-                got,
-            } => VmError::InvalidArgumentType {
-                operation,
-                argument,
-                expected,
-                got,
-            },
-            RuntimeError::NegativeIndex { index } => VmError::NegativeListIndex { index },
-            RuntimeError::IndexOutOfBounds { index, len } => {
-                VmError::ListIndexOutOfBounds { index, len }
-            }
-            RuntimeError::UndefinedVariable { name } => VmError::UndefinedVariable { name },
-            RuntimeError::UndefinedFunction { name } => VmError::UndefinedFunction { name },
-            RuntimeError::FunctionArityMismatch {
-                name,
-                expected,
-                found,
-            } => VmError::FunctionArityMismatch {
-                name,
-                expected,
-                found,
-            },
-            RuntimeError::ObjectNotCallable { type_name } => {
-                VmError::ObjectNotCallable { type_name }
-            }
-            RuntimeError::NestedFunctionDefinitionsUnsupported => {
-                panic!("nested function definition reached VM runtime")
-            }
-            RuntimeError::ReturnOutsideFunction => {
-                panic!("return outside function reached VM runtime")
-            }
-        }
-    }
-
     fn execute_code(
         &mut self,
         code: &[Instruction],
@@ -304,7 +197,7 @@ impl VmRuntime<'_> {
                     } else if self.program.functions.contains_key(&name) {
                         Value::function_object(name.clone())
                     } else {
-                        return Err(VmError::UndefinedVariable { name: name.clone() });
+                        return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
                     };
                     self.stack.push(value);
                 }
@@ -314,9 +207,7 @@ impl VmRuntime<'_> {
                 }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
-                    let attribute_value = object
-                        .get_attribute(&attribute)
-                        .map_err(Self::map_runtime_error)?;
+                    let attribute_value = object.get_attribute(&attribute)?;
                     self.stack.push(attribute_value);
                 }
                 Instruction::Add => {
@@ -326,11 +217,11 @@ impl VmRuntime<'_> {
                         RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::UnsupportedOperation {
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
                             operation: "__add__".to_string(),
                             type_name,
-                        },
-                        other => Self::map_runtime_error(other),
+                        }),
+                        other => VmError::from(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -342,11 +233,11 @@ impl VmRuntime<'_> {
                         RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::UnsupportedOperation {
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
                             operation: "__sub__".to_string(),
                             type_name,
-                        },
-                        other => Self::map_runtime_error(other),
+                        }),
+                        other => VmError::from(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -358,11 +249,11 @@ impl VmRuntime<'_> {
                         RuntimeError::UnknownAttribute {
                             attribute: _,
                             type_name,
-                        } => VmError::UnsupportedOperation {
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
                             operation: "__lt__".to_string(),
                             type_name,
-                        },
-                        other => Self::map_runtime_error(other),
+                        }),
+                        other => VmError::from(other),
                     })?;
                     let result = self.call_value(callee, vec![right], environment)?;
                     self.stack.push(result);
@@ -377,11 +268,11 @@ impl VmRuntime<'_> {
                                 RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => VmError::UnsupportedOperation {
+                                } => VmError::from(RuntimeError::UnsupportedOperation {
                                     operation: "__getitem__".to_string(),
                                     type_name,
-                                },
-                                other => Self::map_runtime_error(other),
+                                }),
+                                other => VmError::from(other),
                             })?;
                     let value = self.call_value(callee, vec![index_value], environment)?;
                     self.stack.push(value);
@@ -392,7 +283,7 @@ impl VmRuntime<'_> {
                     let target = environment
                         .load(&name)
                         .cloned()
-                        .ok_or_else(|| VmError::UndefinedVariable { name: name.clone() })?;
+                        .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
                     let callee =
                         target
                             .get_attribute("__setitem__")
@@ -400,11 +291,11 @@ impl VmRuntime<'_> {
                                 RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => VmError::UnsupportedOperation {
+                                } => VmError::from(RuntimeError::UnsupportedOperation {
                                     operation: "__setitem__".to_string(),
                                     type_name,
-                                },
-                                other => Self::map_runtime_error(other),
+                                }),
+                                other => VmError::from(other),
                             })?;
                     self.call_value(callee, vec![index_value, value], environment)?;
                 }
@@ -462,68 +353,14 @@ impl VmRuntime<'_> {
             runtime: self,
             environment,
         };
-        callee
-            .call(&mut context, args)
-            .map_err(Self::map_runtime_error)
+        callee.call(&mut context, args).map_err(Into::into)
     }
 }
 
 fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
     match error {
         VmError::StackUnderflow => panic!("stack underflow while calling function"),
-        VmError::UnsupportedOperation {
-            operation,
-            type_name,
-        } => RuntimeError::UnsupportedOperation {
-            operation,
-            type_name,
-        },
-        VmError::InvalidArgumentType {
-            operation,
-            argument,
-            expected,
-            got,
-        } => RuntimeError::InvalidArgumentType {
-            operation,
-            argument,
-            expected,
-            got,
-        },
-        VmError::UndefinedVariable { name } => RuntimeError::UndefinedVariable { name },
-        VmError::UndefinedFunction { name } => RuntimeError::UndefinedFunction { name },
-        VmError::FunctionArityMismatch {
-            name,
-            expected,
-            found,
-        } => RuntimeError::FunctionArityMismatch {
-            name,
-            expected,
-            found,
-        },
-        VmError::NegativeListIndex { index } => RuntimeError::NegativeIndex { index },
-        VmError::ListIndexOutOfBounds { index, len } => {
-            RuntimeError::IndexOutOfBounds { index, len }
-        }
-        VmError::MethodArityMismatch {
-            method,
-            expected,
-            found,
-        } => RuntimeError::ArityMismatch {
-            method,
-            expected,
-            found,
-        },
-        VmError::UnknownMethod { method, type_name } => {
-            RuntimeError::UnknownMethod { method, type_name }
-        }
-        VmError::UnknownAttribute {
-            attribute,
-            type_name,
-        } => RuntimeError::UnknownAttribute {
-            attribute,
-            type_name,
-        },
-        VmError::ObjectNotCallable { type_name } => RuntimeError::ObjectNotCallable { type_name },
+        VmError::Runtime(error) => error,
         VmError::InvalidJumpTarget => panic!("invalid jump target while calling function"),
     }
 }

@@ -116,7 +116,7 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
         match self
             .runtime
             .exec_block(&function.body, &mut local_environment)
-            .map_err(map_interpreter_error_to_runtime_error)?
+            .map_err(runtime_error_from_interpreter)?
         {
             ExecResult::Continue => Ok(Value::none_object()),
             ExecResult::Return(value) => Ok(value),
@@ -125,74 +125,6 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
 }
 
 impl<'a> InterpreterRuntime<'a> {
-    fn map_runtime_error(error: RuntimeError) -> InterpreterError {
-        match error {
-            RuntimeError::UnknownAttribute {
-                attribute,
-                type_name,
-            } => InterpreterError::UnknownAttribute {
-                attribute,
-                type_name,
-            },
-            RuntimeError::ArityMismatch {
-                method,
-                expected,
-                found,
-            } => InterpreterError::MethodArityMismatch {
-                method,
-                expected,
-                found,
-            },
-            RuntimeError::UnknownMethod { method, type_name } => {
-                InterpreterError::UnknownMethod { method, type_name }
-            }
-            RuntimeError::UnsupportedOperation {
-                operation,
-                type_name,
-            } => InterpreterError::UnsupportedOperation {
-                operation,
-                type_name,
-            },
-            RuntimeError::InvalidArgumentType {
-                operation,
-                argument,
-                expected,
-                got,
-            } => InterpreterError::InvalidArgumentType {
-                operation,
-                argument,
-                expected,
-                got,
-            },
-            RuntimeError::NegativeIndex { index } => InterpreterError::NegativeListIndex { index },
-            RuntimeError::IndexOutOfBounds { index, len } => {
-                InterpreterError::ListIndexOutOfBounds { index, len }
-            }
-            RuntimeError::UndefinedVariable { name } => {
-                InterpreterError::UndefinedVariable { name }
-            }
-            RuntimeError::UndefinedFunction { name } => {
-                InterpreterError::UndefinedFunction { name }
-            }
-            RuntimeError::FunctionArityMismatch {
-                name,
-                expected,
-                found,
-            } => InterpreterError::FunctionArityMismatch {
-                name,
-                expected,
-                found,
-            },
-            RuntimeError::ObjectNotCallable { type_name } => {
-                InterpreterError::ObjectNotCallable { type_name }
-            }
-            RuntimeError::NestedFunctionDefinitionsUnsupported => {
-                InterpreterError::NestedFunctionDefinitionsUnsupported
-            }
-            RuntimeError::ReturnOutsideFunction => InterpreterError::ReturnOutsideFunction,
-        }
-    }
-
     pub(super) fn exec_block(
         &mut self,
         body: &[Statement],
@@ -215,7 +147,7 @@ impl<'a> InterpreterRuntime<'a> {
     ) -> std::result::Result<ExecResult, InterpreterError> {
         match statement {
             Statement::FunctionDef { .. } => {
-                Err(InterpreterError::NestedFunctionDefinitionsUnsupported)
+                Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into())
             }
             Statement::Assign { target, value } => {
                 let value = self.eval_expression(value, environment)?;
@@ -226,12 +158,11 @@ impl<'a> InterpreterRuntime<'a> {
                     AssignTarget::Index { name, index } => {
                         let index_value = self.eval_expression(index, environment)?;
                         let list = environment.load_mut(name).ok_or_else(|| {
-                            InterpreterError::UndefinedVariable {
+                            RuntimeError::UndefinedVariable {
                                 name: name.to_string(),
                             }
                         })?;
-                        list.set_item(index_value, value)
-                            .map_err(Self::map_runtime_error)?;
+                        list.set_item(index_value, value)?;
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -298,16 +229,15 @@ impl<'a> InterpreterRuntime<'a> {
                 if let Some(value) = environment.load(name) {
                     return Ok(value.clone());
                 }
-                Err(InterpreterError::UndefinedVariable {
+                Err(RuntimeError::UndefinedVariable {
                     name: name.to_string(),
-                })
+                }
+                .into())
             }
             Expression::Index { object, index } => {
                 let object_value = self.eval_expression(object, environment)?;
                 let index_value = self.eval_expression(index, environment)?;
-                object_value
-                    .get_item(index_value)
-                    .map_err(Self::map_runtime_error)
+                object_value.get_item(index_value).map_err(Into::into)
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
@@ -319,11 +249,11 @@ impl<'a> InterpreterRuntime<'a> {
                                 RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => InterpreterError::UnsupportedOperation {
+                                } => RuntimeError::UnsupportedOperation {
                                     operation: "__add__".to_string(),
                                     type_name,
                                 },
-                                other => Self::map_runtime_error(other),
+                                other => other,
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -333,11 +263,11 @@ impl<'a> InterpreterRuntime<'a> {
                                 RuntimeError::UnknownAttribute {
                                     attribute: _,
                                     type_name,
-                                } => InterpreterError::UnsupportedOperation {
+                                } => RuntimeError::UnsupportedOperation {
                                     operation: "__sub__".to_string(),
                                     type_name,
                                 },
-                                other => Self::map_runtime_error(other),
+                                other => other,
                             })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -346,11 +276,11 @@ impl<'a> InterpreterRuntime<'a> {
                             RuntimeError::UnknownAttribute {
                                 attribute: _,
                                 type_name,
-                            } => InterpreterError::UnsupportedOperation {
+                            } => RuntimeError::UnsupportedOperation {
                                 operation: "__lt__".to_string(),
                                 type_name,
                             },
-                            other => Self::map_runtime_error(other),
+                            other => other,
                         })?;
                         self.call_value(callee, vec![right], environment)
                     }
@@ -359,9 +289,7 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
                 let attribute = name.to_string();
-                object
-                    .get_attribute(&attribute)
-                    .map_err(Self::map_runtime_error)
+                object.get_attribute(&attribute).map_err(Into::into)
             }
             Expression::Call { callee, args } => self.eval_call(callee, args, environment),
         }
@@ -396,9 +324,10 @@ impl<'a> InterpreterRuntime<'a> {
             if self.functions.contains_key(name) {
                 return Ok(Value::function_object(name.to_string()));
             }
-            return Err(InterpreterError::UndefinedFunction {
+            return Err(RuntimeError::UndefinedFunction {
                 name: name.to_string(),
-            });
+            }
+            .into());
         }
         self.eval_expression(callee, environment)
     }
@@ -413,72 +342,12 @@ impl<'a> InterpreterRuntime<'a> {
             runtime: self,
             environment,
         };
-        callee
-            .call(&mut context, args)
-            .map_err(Self::map_runtime_error)
+        callee.call(&mut context, args).map_err(Into::into)
     }
 }
 
-fn map_interpreter_error_to_runtime_error(error: InterpreterError) -> RuntimeError {
+fn runtime_error_from_interpreter(error: InterpreterError) -> RuntimeError {
     match error {
-        InterpreterError::UnsupportedOperation {
-            operation,
-            type_name,
-        } => RuntimeError::UnsupportedOperation {
-            operation,
-            type_name,
-        },
-        InterpreterError::InvalidArgumentType {
-            operation,
-            argument,
-            expected,
-            got,
-        } => RuntimeError::InvalidArgumentType {
-            operation,
-            argument,
-            expected,
-            got,
-        },
-        InterpreterError::NegativeListIndex { index } => RuntimeError::NegativeIndex { index },
-        InterpreterError::ListIndexOutOfBounds { index, len } => {
-            RuntimeError::IndexOutOfBounds { index, len }
-        }
-        InterpreterError::NestedFunctionDefinitionsUnsupported => {
-            RuntimeError::NestedFunctionDefinitionsUnsupported
-        }
-        InterpreterError::UndefinedVariable { name } => RuntimeError::UndefinedVariable { name },
-        InterpreterError::UndefinedFunction { name } => RuntimeError::UndefinedFunction { name },
-        InterpreterError::FunctionArityMismatch {
-            name,
-            expected,
-            found,
-        } => RuntimeError::FunctionArityMismatch {
-            name,
-            expected,
-            found,
-        },
-        InterpreterError::UnknownAttribute {
-            attribute,
-            type_name,
-        } => RuntimeError::UnknownAttribute {
-            attribute,
-            type_name,
-        },
-        InterpreterError::ObjectNotCallable { type_name } => {
-            RuntimeError::ObjectNotCallable { type_name }
-        }
-        InterpreterError::MethodArityMismatch {
-            method,
-            expected,
-            found,
-        } => RuntimeError::ArityMismatch {
-            method,
-            expected,
-            found,
-        },
-        InterpreterError::UnknownMethod { method, type_name } => {
-            RuntimeError::UnknownMethod { method, type_name }
-        }
-        InterpreterError::ReturnOutsideFunction => RuntimeError::ReturnOutsideFunction,
+        InterpreterError::Runtime(error) => error,
     }
 }

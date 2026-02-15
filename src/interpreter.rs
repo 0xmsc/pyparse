@@ -3,12 +3,13 @@ use std::collections::HashMap;
 
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
+use crate::runtime::error::RuntimeError;
 
 mod error;
 mod runtime;
 mod value;
 
-pub use error::InterpreterError;
+use error::InterpreterError;
 use runtime::{Environment, ExecResult, InterpreterRuntime};
 use value::Value;
 
@@ -46,7 +47,7 @@ impl PreparedInterpreter {
         };
         match runtime.exec_block(&self.main_statements, &mut environment)? {
             ExecResult::Continue => {}
-            ExecResult::Return(_) => return Err(InterpreterError::ReturnOutsideFunction),
+            ExecResult::Return(_) => return Err(RuntimeError::ReturnOutsideFunction.into()),
         }
         Ok(runtime.output.join("\n"))
     }
@@ -264,9 +265,9 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::UndefinedVariable {
+            InterpreterError::Runtime(RuntimeError::UndefinedVariable {
                 name: "x".to_string()
-            }
+            })
         );
     }
 
@@ -280,7 +281,10 @@ mod tests {
         let error = expect_interpreter_error(
             run_program(&interpreter, &program).expect_err("expected return outside function"),
         );
-        assert_eq!(error, InterpreterError::ReturnOutsideFunction);
+        assert_eq!(
+            error,
+            InterpreterError::Runtime(RuntimeError::ReturnOutsideFunction)
+        );
     }
 
     #[test]
@@ -299,9 +303,9 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::ObjectNotCallable {
+            InterpreterError::Runtime(RuntimeError::ObjectNotCallable {
                 type_name: "int".to_string()
-            }
+            })
         );
 
         let undefined_function_program = Program {
@@ -313,9 +317,9 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::UndefinedFunction {
+            InterpreterError::Runtime(RuntimeError::UndefinedFunction {
                 name: "missing".to_string()
-            }
+            })
         );
     }
 
@@ -338,11 +342,11 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::FunctionArityMismatch {
+            InterpreterError::Runtime(RuntimeError::FunctionArityMismatch {
                 name: "f".to_string(),
                 expected: 1,
                 found: 0,
-            }
+            })
         );
     }
 
@@ -393,9 +397,9 @@ mod tests {
         );
         assert_eq!(
             error,
-            InterpreterError::UndefinedVariable {
+            InterpreterError::Runtime(RuntimeError::UndefinedVariable {
                 name: "x".to_string()
-            }
+            })
         );
     }
 
