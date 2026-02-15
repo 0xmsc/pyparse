@@ -1,8 +1,8 @@
 use crate::runtime::error::RuntimeError;
+use crate::runtime::method::{zero_arg_string_method, zero_arg_value_method};
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
-use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StringObject {
@@ -35,30 +35,17 @@ impl RuntimeObject for StringObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let is_non_empty = !self.value.is_empty();
-            return Ok(Value::bound_method_object(Rc::new(
-                move |_context, args| {
-                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
-                    Ok(Value::bool_object(is_non_empty))
-                },
-            )));
+            return Ok(zero_arg_value_method("__bool__", move || {
+                Value::bool_object(is_non_empty)
+            }));
         }
         if attribute == "__str__" {
             let value = self.value.clone();
-            return Ok(Value::bound_method_object(Rc::new(
-                move |_context, args| {
-                    RuntimeError::expect_method_arity("__str__", 0, args.len())?;
-                    Ok(Value::string_object(value.clone()))
-                },
-            )));
+            return Ok(zero_arg_string_method("__str__", value));
         }
         if attribute == "__repr__" {
             let value = format!("{:?}", self.value);
-            return Ok(Value::bound_method_object(Rc::new(
-                move |_context, args| {
-                    RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
-                    Ok(Value::string_object(value.clone()))
-                },
-            )));
+            return Ok(zero_arg_string_method("__repr__", value));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

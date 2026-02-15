@@ -1,8 +1,8 @@
 use crate::runtime::error::RuntimeError;
+use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
-use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IntObject {
@@ -95,9 +95,9 @@ impl RuntimeObject for IntObject {
         ) {
             let receiver = receiver.clone();
             let method = attribute.to_string();
-            return Ok(Value::bound_method_object(Rc::new(
-                move |_context, args| call_method_on_receiver(&receiver, &method, args),
-            )));
+            return Ok(bound_method(move |_context, args| {
+                call_method_on_receiver(&receiver, &method, args)
+            }));
         }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),

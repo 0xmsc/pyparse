@@ -3,6 +3,7 @@ pub(crate) mod callable;
 pub(crate) mod error;
 pub(crate) mod int;
 pub(crate) mod list;
+pub(crate) mod method;
 pub(crate) mod none;
 pub(crate) mod object;
 pub(crate) mod string;
