@@ -1,6 +1,8 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::{self, BoolObject};
-use crate::runtime::callable::{BoundMethodObject, BuiltinFunctionObject, FunctionObject};
+use crate::runtime::callable::{
+    BoundMethodObject, BuiltinFunctionObject, FunctionObject, MethodWrapperObject,
+};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::none::NoneObject;
@@ -137,6 +139,11 @@ impl Value {
         Self::new(Rc::new(RefCell::new(Box::new(bound_method_object))))
     }
 
+    pub(crate) fn method_wrapper_object(callable: BoundMethodCallable) -> Self {
+        let method_wrapper_object = MethodWrapperObject::new(callable);
+        Self::new(Rc::new(RefCell::new(Box::new(method_wrapper_object))))
+    }
+
     fn call_magic_method(
         &self,
         callee: Value,
@@ -156,21 +163,18 @@ impl Value {
     ) -> Result<Value, RuntimeError> {
         let callee_type_name = callee.type_name().to_string();
         let object_ref = callee.object_ref();
-        let object = object_ref.borrow();
-        let Some(bound_method) = object.as_any().downcast_ref::<BoundMethodObject>() else {
-            if operation == "__call__" {
-                return Err(RuntimeError::ObjectNotCallable {
-                    type_name: callee_type_name,
-                });
-            }
-            return Err(RuntimeError::UnsupportedOperation {
-                operation: operation.to_string(),
-                type_name: callee_type_name,
-            });
-        };
-        let callable = bound_method.callable();
-        drop(object);
-        callable(context, args)
+        object_ref
+            .borrow()
+            .invoke(object_ref.clone(), context, args)
+            .map_err(|error| match error {
+                RuntimeError::ObjectNotCallable { .. } if operation != "__call__" => {
+                    RuntimeError::UnsupportedOperation {
+                        operation: operation.to_string(),
+                        type_name: callee_type_name,
+                    }
+                }
+                other => other,
+            })
     }
 
     fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {

@@ -61,6 +61,17 @@ impl RuntimeObject for StringObject {
             }),
         }
     }
+
+    fn invoke(
+        &self,
+        _receiver: ObjectRef,
+        _context: &mut dyn crate::runtime::object::CallContext,
+        _args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        Err(RuntimeError::ObjectNotCallable {
+            type_name: self.type_name().to_string(),
+        })
+    }
 }
 
 pub(crate) fn downcast_string(value: &Value) -> Option<String> {
