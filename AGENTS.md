@@ -19,3 +19,8 @@ End-to-end behavior is validated primarily through fixture-based runtime tests i
 - Run tests with `just test`.
 - Run lint/format checks with `just lint`.
 - Do not add language features that are incompatible with CPython semantics.
+
+## Compatibility Policy
+
+- The compatibility goal is language behavior matching the overlap shared by CPython, PyPy, and MicroPython.
+- Behavior outside that shared overlap is not in scope.

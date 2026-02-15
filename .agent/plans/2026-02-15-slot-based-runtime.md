@@ -19,6 +19,20 @@
 - Ship in small milestones, keep behavior stable, and validate with fixtures each step.
 - Use `TypeInfo` early as internal runtime metadata, even before language-level types/classes are complete.
 
+## Behavior Targets (What To Match)
+- Call protocol: `obj()` must use type-level call slot; `obj.__call__` remains normal attribute access.
+- Special methods: operators/builtins (`+`, `<`, `len`, indexing, truthiness) resolve via type/MRO protocol, not instance monkeypatching.
+- Binary op protocol: support `NotImplemented`, reflected ops, and CPython ordering.
+- Attribute protocol: `__getattribute__`, descriptor precedence, instance dict, `__getattr__`; plus matching set/delete behavior.
+- Class protocol: class call flow (`__new__` then `__init__`), method binding, C3 MRO for multiple inheritance.
+- Backend consistency: interpreter/VM/JIT must share one dispatch implementation path.
+
+## Runtime Notes (How Others Do It)
+- CPython: slot tables on types are the semantic reference model.
+- PyPy: different internals/JIT strategy, but aims for CPython-compatible language behavior.
+- Other runtimes (for example MicroPython): may intentionally implement only a subset for footprint/performance.
+- Implication for `pyparse`: internal design can differ, but externally visible behavior should follow CPython for parity goals.
+
 ## Steps
 - [ ] Milestone 1: Call protocol
   - Make `obj()` use call slot/`invoke`, not instance lookup of `"__call__"`.

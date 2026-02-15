@@ -8,25 +8,41 @@ use pyparse::backend::transpiler::Transpiler;
 use pyparse::backend::vm::VM;
 use pyparse::{lexer, parser};
 use test_support::{
-    Case, CaseClass, detect_python_interpreter as detect_python_interpreter_base,
-    is_backend_unsupported, load_cases, normalize_output, run_python_file,
+    Case, CaseClass, is_backend_unsupported, load_cases, normalize_output, run_python_file,
+    run_python_startup,
     validate_unsupported_backends,
 };
 
-const KNOWN_BACKENDS: [&str; 5] = ["interpreter", "vm", "jit", "transpiler", "cpython"];
+const KNOWN_BACKENDS: [&str; 7] = [
+    "interpreter",
+    "vm",
+    "jit",
+    "transpiler",
+    "cpython",
+    "pypy",
+    "micropython",
+];
 
-fn python_parity_required() -> bool {
-    std::env::var("PYTHON_PARITY_REQUIRED")
+fn parity_required(env_var: &str) -> bool {
+    std::env::var(env_var)
         .map(|value| value == "1")
         .unwrap_or(false)
 }
 
 fn detect_python_interpreter() -> Result<Option<String>> {
-    if let Some(python) = detect_python_interpreter_base() {
-        return Ok(Some(python));
+    if let Ok(python) = std::env::var("PYTHON") {
+        if run_python_startup(&python).is_ok() {
+            return Ok(Some(python));
+        }
     }
 
-    if python_parity_required() {
+    for candidate in ["python3", "python"] {
+        if run_python_startup(candidate).is_ok() {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+
+    if parity_required("PYTHON_PARITY_REQUIRED") {
         anyhow::bail!(
             "CPython parity required but no interpreter found. Set PYTHON or install python3."
         );
@@ -36,9 +52,70 @@ fn detect_python_interpreter() -> Result<Option<String>> {
     Ok(None)
 }
 
-fn run_python_program(interpreter: &str, case: &Case) -> Result<String> {
+fn detect_named_interpreter(
+    env_var: &str,
+    required_var: &str,
+    candidates: &[&str],
+    display_name: &str,
+) -> Result<Option<String>> {
+    if let Ok(interpreter) = std::env::var(env_var) {
+        if run_python_startup(&interpreter).is_ok() {
+            return Ok(Some(interpreter));
+        }
+        if parity_required(required_var) {
+            anyhow::bail!(
+                "{} parity required but '{}' is not runnable. Fix {}.",
+                display_name,
+                interpreter,
+                env_var
+            );
+        }
+    }
+
+    for candidate in candidates {
+        if run_python_startup(candidate).is_ok() {
+            return Ok(Some((*candidate).to_string()));
+        }
+    }
+
+    if parity_required(required_var) {
+        anyhow::bail!(
+            "{} parity required but no interpreter found. Set {} or install one of: {}.",
+            display_name,
+            env_var,
+            candidates.join(", ")
+        );
+    }
+
+    eprintln!(
+        "Skipping {} parity test: no interpreter found (set {} or install {}).",
+        display_name,
+        env_var,
+        candidates.join(", ")
+    );
+    Ok(None)
+}
+
+fn detect_pypy_interpreter() -> Result<Option<String>> {
+    detect_named_interpreter("PYPY", "PYPY_PARITY_REQUIRED", &["pypy3", "pypy"], "PyPy")
+}
+
+fn detect_micropython_interpreter() -> Result<Option<String>> {
+    detect_named_interpreter(
+        "MICROPYTHON",
+        "MICROPYTHON_PARITY_REQUIRED",
+        &["micropython"],
+        "MicroPython",
+    )
+}
+
+fn run_python_program(
+    interpreter: &str,
+    interpreter_name: &str,
+    case: &Case,
+) -> Result<String> {
     run_python_file(interpreter, &case.program_path)
-        .with_context(|| format!("Running CPython for {}", case.name))
+        .with_context(|| format!("Running {} for {}", interpreter_name, case.name))
 }
 
 fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
@@ -170,12 +247,16 @@ fn run_programs_for_backend(backend: &dyn Backend) -> Result<()> {
     Ok(())
 }
 
-fn run_programs_for_cpython_backend(interpreter: &str) -> Result<()> {
+fn run_programs_for_python_backend(
+    interpreter: &str,
+    backend_name: &str,
+    interpreter_name: &str,
+) -> Result<()> {
     let cases = load_cases(Path::new("tests/programs"))?;
 
     for case in cases {
         validate_unsupported_backends(&case, &KNOWN_BACKENDS)?;
-        if is_backend_unsupported(&case, "cpython") {
+        if is_backend_unsupported(&case, backend_name) {
             continue;
         }
         if !matches!(case.spec.class, CaseClass::RuntimeSuccess) {
@@ -193,12 +274,14 @@ fn run_programs_for_cpython_backend(interpreter: &str) -> Result<()> {
             .as_deref()
             .with_context(|| format!("Missing stdout_file in {}", case.name))?;
         let expected = case.read_text(stdout_file)?;
-        let actual_output = normalize_output(&run_python_program(interpreter, &case)?);
+        let actual_output =
+            normalize_output(&run_python_program(interpreter, interpreter_name, &case)?);
         let expected_output = normalize_output(&expected);
         assert_eq!(
             actual_output, expected_output,
-            "Backend cpython mismatch for {}",
-            case.name
+            "Backend {} mismatch for {}",
+            backend_name,
+            case.name,
         );
     }
 
@@ -231,5 +314,21 @@ fn runs_programs_cpython_backend() -> Result<()> {
     let Some(interpreter) = detect_python_interpreter()? else {
         return Ok(());
     };
-    run_programs_for_cpython_backend(&interpreter)
+    run_programs_for_python_backend(&interpreter, "cpython", "CPython")
+}
+
+#[test]
+fn runs_programs_pypy_backend() -> Result<()> {
+    let Some(interpreter) = detect_pypy_interpreter()? else {
+        return Ok(());
+    };
+    run_programs_for_python_backend(&interpreter, "pypy", "PyPy")
+}
+
+#[test]
+fn runs_programs_micropython_backend() -> Result<()> {
+    let Some(interpreter) = detect_micropython_interpreter()? else {
+        return Ok(());
+    };
+    run_programs_for_python_backend(&interpreter, "micropython", "MicroPython")
 }
