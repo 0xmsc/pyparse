@@ -1,0 +1,8 @@
+- [x] Add `class` keyword/token + AST + parser support for `ClassDef`.
+- [x] Extend interpreter preparation/runtime to register and execute top-level class definitions.
+- [x] Implement minimal `ClassObject` and `InstanceObject` runtime objects with class-owned method table.
+- [x] Implement instance attribute resolution + instance method binding (`self` prepended).
+- [x] Implement minimal class call behavior (`ClassObject()` creates instance and runs `__init__` when present).
+- [x] Wire VM/bytecode support for `ClassDef` and class runtime interactions.
+- [x] Enable `tests/programs/class_instance_method_basics` for interpreter and VM.
+- [x] Run `just test` and update plan/TODO statuses to reflect completion.

@@ -289,9 +289,8 @@ mod tests {
 
     #[test]
     fn bound_method_call_attribute_is_method_wrapper() {
-        let bound_method = Value::bound_method_object(Rc::new(|_context, _args| {
-            Ok(Value::int_object(7))
-        }));
+        let bound_method =
+            Value::bound_method_object(Rc::new(|_context, _args| Ok(Value::int_object(7))));
         let method_call = bound_method
             .get_attribute("__call__")
             .expect("__call__ should exist");
@@ -299,7 +298,9 @@ mod tests {
         assert_eq!(method_call.type_name(), "method-wrapper");
 
         let mut context = TestCallContext;
-        let result = method_call.call(&mut context, vec![]).expect("call should work");
+        let result = method_call
+            .call(&mut context, vec![])
+            .expect("call should work");
         assert_eq!(downcast_i64(&result), Some(7));
     }
 }

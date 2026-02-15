@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
+use crate::runtime::class::mangle_class_method_name;
 use crate::runtime::error::RuntimeError;
 
 mod error;
@@ -84,6 +85,33 @@ impl Backend for Interpreter {
                             body: body.clone(),
                         },
                     );
+                }
+                Statement::ClassDef { name, body } => {
+                    for class_statement in body {
+                        match class_statement {
+                            Statement::FunctionDef {
+                                name: method_name,
+                                params,
+                                body,
+                            } => {
+                                let mangled_name = mangle_class_method_name(name, method_name);
+                                functions.insert(
+                                    mangled_name,
+                                    Function {
+                                        params: params.clone(),
+                                        body: body.clone(),
+                                    },
+                                );
+                            }
+                            Statement::Pass => {}
+                            _ => {
+                                bail!(
+                                    "Unsupported class body statement in class '{name}': only method definitions and pass are allowed"
+                                );
+                            }
+                        }
+                    }
+                    main_statements.push(statement.clone());
                 }
                 _ => main_statements.push(statement.clone()),
             }

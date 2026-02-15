@@ -1,6 +1,6 @@
 class: runtime_success
 parity: true
-unsupported_backends: [interpreter, vm, jit, transpiler]
+unsupported_backends: [jit, transpiler]
 bench:
   enabled: false
   tags: [small, class_protocol]

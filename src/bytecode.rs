@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
+use crate::runtime::class::mangle_class_method_name;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
@@ -12,13 +13,19 @@ pub enum Instruction {
     PushNone,
     LoadName(String),
     StoreName(String),
+    DefineClass {
+        name: String,
+        methods: Vec<(String, String)>,
+    },
     Add,
     Sub,
     LessThan,
     LoadAttr(String),
     LoadIndex,
     StoreIndex(String),
-    Call { argc: usize },
+    Call {
+        argc: usize,
+    },
     JumpIfFalse(isize),
     Jump(isize),
     Pop,
@@ -53,6 +60,13 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                 let compiled = compile_function(params, body)?;
                 functions.insert(name.to_string(), compiled);
             }
+            Statement::ClassDef { name, body } => {
+                let methods = compile_class_methods(name, body, &mut functions)?;
+                main.push(Instruction::DefineClass {
+                    name: name.clone(),
+                    methods,
+                });
+            }
             _ => main.extend(compile_statement(statement, false)?),
         }
     }
@@ -81,6 +95,13 @@ fn compile_block(statements: &[Statement], in_function: bool) -> Result<Compiled
 fn compile_statement(statement: &Statement, in_function: bool) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
+        Statement::ClassDef { .. } => {
+            if in_function {
+                bail!("Class definitions inside functions are not supported in the VM");
+            } else {
+                bail!("Unexpected class definition during statement compilation");
+            }
+        }
         Statement::Assign { target, value } => match target {
             AssignTarget::Name(name) => {
                 code.extend(compile_expression(value)?);
@@ -153,6 +174,38 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
         }
     }
     Ok(code)
+}
+
+fn compile_class_methods(
+    class_name: &str,
+    body: &[Statement],
+    functions: &mut HashMap<String, CompiledFunction>,
+) -> Result<Vec<(String, String)>> {
+    let mut methods = Vec::new();
+    for statement in body {
+        match statement {
+            Statement::FunctionDef {
+                name: method_name,
+                params,
+                body,
+            } => {
+                let mangled_name = mangle_class_method_name(class_name, method_name);
+                if functions.contains_key(&mangled_name) {
+                    bail!("Duplicate function definition '{mangled_name}'");
+                }
+                let compiled = compile_function(params, body)?;
+                functions.insert(mangled_name.clone(), compiled);
+                methods.push((method_name.clone(), mangled_name));
+            }
+            Statement::Pass => {}
+            _ => {
+                bail!(
+                    "Unsupported class body statement in class '{class_name}': only method definitions and pass are allowed"
+                );
+            }
+        }
+    }
+    Ok(methods)
 }
 
 fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {

@@ -33,6 +33,10 @@ pub enum BinaryOperator {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
+    ClassDef {
+        name: String,
+        body: Vec<Statement>,
+    },
     FunctionDef {
         name: String,
         params: Vec<String>,

@@ -3,12 +3,14 @@ use crate::runtime::bool::{self, BoolObject};
 use crate::runtime::callable::{
     BoundMethodObject, BuiltinFunctionObject, FunctionObject, MethodWrapperObject,
 };
+use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::none::NoneObject;
 use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, new_list_object};
 use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
@@ -26,6 +28,10 @@ impl fmt::Debug for Value {
 impl Value {
     fn new(object: ObjectRef) -> Self {
         Self { object }
+    }
+
+    pub(crate) fn from_object_ref(object: ObjectRef) -> Self {
+        Self::new(object)
     }
 
     pub(crate) fn object_ref(&self) -> ObjectRef {
@@ -132,6 +138,16 @@ impl Value {
     pub(crate) fn function_object(name: String) -> Self {
         let function_object = FunctionObject::new(name);
         Self::new(Rc::new(RefCell::new(Box::new(function_object))))
+    }
+
+    pub(crate) fn class_object(name: String, methods: HashMap<String, String>) -> Self {
+        let class_object = ClassObject::new(name, methods);
+        Self::new(Rc::new(RefCell::new(Box::new(class_object))))
+    }
+
+    pub(crate) fn instance_object(class: ObjectRef) -> Self {
+        let instance_object = InstanceObject::new(class);
+        Self::new(Rc::new(RefCell::new(Box::new(instance_object))))
     }
 
     pub(crate) fn bound_method_object(callable: BoundMethodCallable) -> Self {

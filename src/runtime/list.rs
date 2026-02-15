@@ -114,7 +114,9 @@ impl RuntimeObject for ListObject {
                 let method = attribute.to_string();
                 Ok(bound_method(move |_context, args| {
                     RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                    Ok(with_list(&receiver, |list| Value::string_object(list.render())))
+                    Ok(with_list(&receiver, |list| {
+                        Value::string_object(list.render())
+                    }))
                 }))
             }
             _ => Err(RuntimeError::UnknownAttribute {

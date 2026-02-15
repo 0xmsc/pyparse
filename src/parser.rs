@@ -57,6 +57,7 @@ impl<'a> Parser<'a> {
     /// - `print(x)\n`
     fn parse_statement(&mut self) -> ParseResult<Statement> {
         match (self.current_kind(), self.peek_kind()) {
+            (TokenKind::Class, _) => self.parse_class_def(),
             (TokenKind::Def, _) => self.parse_function_def(),
             (TokenKind::If, _) => self.parse_if(),
             (TokenKind::While, _) => self.parse_while(),
@@ -86,6 +87,23 @@ impl<'a> Parser<'a> {
         let body = self.parse_indented_block()?;
 
         Ok(Statement::FunctionDef { name, params, body })
+    }
+
+    /// Parse a class definition statement.
+    /// Example:
+    /// ```text
+    /// class Greeter:
+    ///     def hello(self):
+    ///         return 7
+    /// ```
+    fn parse_class_def(&mut self) -> ParseResult<Statement> {
+        self.expect_token(TokenKind::Class, "class")?;
+        let name = self.expect_identifier()?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
+        let body = self.parse_indented_block()?;
+
+        Ok(Statement::ClassDef { name, body })
     }
 
     /// Parse statements that begin with an identifier.
@@ -741,6 +759,46 @@ mod tests {
                     }),
                     args: vec![Expression::Integer(3)],
                 })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_class_with_method() {
+        let tokens = vec![
+            tok(TokenKind::Class),
+            tok(TokenKind::Identifier("Greeter")),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Def),
+            tok(TokenKind::Identifier("hello")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("self")),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Return),
+            tok(TokenKind::Integer(7)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::ClassDef {
+                    name: "Greeter".to_string(),
+                    body: vec![Statement::FunctionDef {
+                        name: "hello".to_string(),
+                        params: vec!["self".to_string()],
+                        body: vec![Statement::Return(Some(Expression::Integer(7)))],
+                    }],
+                }],
             }
         );
     }

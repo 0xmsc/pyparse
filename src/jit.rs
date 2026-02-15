@@ -724,6 +724,9 @@ fn define_function(
                 let result = builder.inst_results(call)[0];
                 push_value(&mut builder, result);
             }
+            Instruction::DefineClass { .. } => {
+                bail!("Class definitions are not supported in the JIT backend");
+            }
             Instruction::LoadName(name) => {
                 let local_index = local_indices.get(name).copied();
                 let global_index = global_indices.get(name).copied();
@@ -1043,6 +1046,7 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         | Instruction::PushString(_)
         | Instruction::PushNone
         | Instruction::LoadName(_) => 1,
+        Instruction::DefineClass { .. } => 0,
         Instruction::LoadAttr(_) => 0,
         Instruction::BuildList(count) => 1 - (*count as i32),
         Instruction::Call { argc } => -(*argc as i32),

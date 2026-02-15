@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
+use crate::runtime::class::mangle_class_method_name;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::object::CallContext;
 
@@ -148,6 +149,31 @@ impl<'a> InterpreterRuntime<'a> {
         match statement {
             Statement::FunctionDef { .. } => {
                 Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into())
+            }
+            Statement::ClassDef { name, body } => {
+                let mut methods = HashMap::new();
+                for class_statement in body {
+                    match class_statement {
+                        Statement::FunctionDef {
+                            name: method_name, ..
+                        } => {
+                            methods.insert(
+                                method_name.clone(),
+                                mangle_class_method_name(name, method_name),
+                            );
+                        }
+                        Statement::Pass => {}
+                        _ => {
+                            return Err(RuntimeError::UnsupportedOperation {
+                                operation: "class body statement".to_string(),
+                                type_name: "class".to_string(),
+                            }
+                            .into());
+                        }
+                    }
+                }
+                environment.store(name.to_string(), Value::class_object(name.clone(), methods));
+                Ok(ExecResult::Continue)
             }
             Statement::Assign { target, value } => {
                 let value = self.eval_expression(value, environment)?;

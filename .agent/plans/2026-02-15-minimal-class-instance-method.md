@@ -15,22 +15,22 @@
 - `InstanceObject`: runtime object that points at its `ClassObject` and stores instance attributes.
 
 ## Steps
-- [ ] Milestone 1: Frontend support for `class`
+- [x] Milestone 1: Frontend support for `class`
   - Add `class` token/keyword in lexer.
   - Add `Statement::ClassDef { name, body }` in AST.
   - Parse `class Name:` with indented body (only method `def` + `pass` initially).
-- [ ] Milestone 2: Runtime model (minimal)
+- [x] Milestone 2: Runtime model (minimal)
   - Add `ClassObject` (name + method table + `TypeInfo`) and `InstanceObject` (class ref + instance attrs + `TypeInfo`).
   - At top level, evaluate class body methods into class method table.
-- [ ] Milestone 3: Attribute lookup + method binding (before class call semantics)
+- [x] Milestone 3: Attribute lookup + method binding (before class call semantics)
   - Instance attribute lookup order (minimal): instance attrs, then class methods.
   - When class method is accessed via instance, return bound callable with `self` prepended.
   - Keep method ownership on class/type metadata; instance lookup only resolves/binds.
   - Ensure `g.hello()` path works in interpreter and VM.
-- [ ] Milestone 4: Class call semantics (minimal)
+- [x] Milestone 4: Class call semantics (minimal)
   - `ClassObject` call creates `InstanceObject`.
   - Invoke `__init__` if present (minimal arity/dispatch only).
-- [ ] Milestone 5: Backend wiring + fixture enablement
+- [x] Milestone 5: Backend wiring + fixture enablement
   - Compile/execute `ClassDef` in bytecode/interpreter paths.
   - Remove `interpreter` and `vm` from `unsupported_backends` for `class_instance_method_basics` once passing.
   - Keep `jit`/`transpiler` unsupported if class bytecode/runtime is not implemented there yet.

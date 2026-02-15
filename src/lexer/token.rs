@@ -17,6 +17,7 @@ pub enum TokenKind<'a> {
     Else,
     While,
     Def,
+    Class,
     Return,
     Pass,
 

@@ -154,6 +154,7 @@ impl Transpiler {
                     self.collect_assignments(stmt, names);
                 }
             }
+            Statement::ClassDef { .. } => {}
             _ => {}
         }
     }
@@ -193,6 +194,9 @@ impl Transpiler {
             }
             Statement::FunctionDef { .. } => {
                 bail!("Nested function definitions are not supported in the transpiler")
+            }
+            Statement::ClassDef { .. } => {
+                bail!("Class definitions are not supported in the transpiler")
             }
             Statement::Expr(_) | Statement::Return(_) | Statement::Pass => {}
         }
@@ -269,6 +273,9 @@ impl Transpiler {
                 } else {
                     bail!("Unexpected function definition in statement emission");
                 }
+            }
+            Statement::ClassDef { .. } => {
+                bail!("Class definitions are not supported in the transpiler");
             }
         }
         Ok(())

@@ -1,5 +1,6 @@
 pub(crate) mod bool;
 pub(crate) mod callable;
+pub(crate) mod class;
 pub(crate) mod error;
 pub(crate) mod int;
 pub(crate) mod list;

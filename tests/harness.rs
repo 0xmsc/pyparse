@@ -9,8 +9,7 @@ use pyparse::backend::vm::VM;
 use pyparse::{lexer, parser};
 use test_support::{
     Case, CaseClass, is_backend_unsupported, load_cases, normalize_output, run_python_file,
-    run_python_startup,
-    validate_unsupported_backends,
+    run_python_startup, validate_unsupported_backends,
 };
 
 const KNOWN_BACKENDS: [&str; 7] = [
@@ -30,11 +29,10 @@ fn parity_required(env_var: &str) -> bool {
 }
 
 fn detect_python_interpreter() -> Result<Option<String>> {
-    if let Ok(python) = std::env::var("PYTHON") {
-        if run_python_startup(&python).is_ok() {
+    if let Ok(python) = std::env::var("PYTHON")
+        && run_python_startup(&python).is_ok() {
             return Ok(Some(python));
         }
-    }
 
     for candidate in ["python3", "python"] {
         if run_python_startup(candidate).is_ok() {
@@ -109,11 +107,7 @@ fn detect_micropython_interpreter() -> Result<Option<String>> {
     )
 }
 
-fn run_python_program(
-    interpreter: &str,
-    interpreter_name: &str,
-    case: &Case,
-) -> Result<String> {
+fn run_python_program(interpreter: &str, interpreter_name: &str, case: &Case) -> Result<String> {
     run_python_file(interpreter, &case.program_path)
         .with_context(|| format!("Running {} for {}", interpreter_name, case.name))
 }
@@ -280,8 +274,7 @@ fn run_programs_for_python_backend(
         assert_eq!(
             actual_output, expected_output,
             "Backend {} mismatch for {}",
-            backend_name,
-            case.name,
+            backend_name, case.name,
         );
     }
 

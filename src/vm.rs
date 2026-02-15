@@ -205,6 +205,11 @@ impl VmRuntime<'_> {
                     let value = self.pop_stack()?;
                     environment.store(name, value);
                 }
+                Instruction::DefineClass { name, methods } => {
+                    let methods = methods.into_iter().collect::<HashMap<_, _>>();
+                    let class_value = Value::class_object(name.clone(), methods);
+                    environment.store(name, class_value);
+                }
                 Instruction::LoadAttr(attribute) => {
                     let object = self.pop_stack()?;
                     let attribute_value = object.get_attribute(&attribute)?;
