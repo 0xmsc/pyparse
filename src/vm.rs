@@ -406,19 +406,7 @@ impl VmRuntime<'_> {
                         found: args.len(),
                     });
                 }
-                let callee = args[0]
-                    .get_attribute("__len__")
-                    .map_err(|error| match error {
-                        RuntimeError::UnknownAttribute {
-                            attribute: _,
-                            type_name,
-                        } => VmError::UnsupportedOperation {
-                            operation: "len".to_string(),
-                            type_name,
-                        },
-                        other => Self::map_runtime_error(other),
-                    })?;
-                self.call_value(callee, Vec::new(), environment)
+                args[0].len().map_err(Self::map_runtime_error)
             }
             CallTarget::Function(name) => {
                 let function = self

@@ -23,6 +23,16 @@ impl IntObject {
         method: &str,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
+        if method == "__bool__" {
+            if !args.is_empty() {
+                return Err(RuntimeError::ArityMismatch {
+                    method: method.to_string(),
+                    expected: 0,
+                    found: args.len(),
+                });
+            }
+            return Ok(Value::bool_object(self.value != 0));
+        }
         if args.len() != 1 {
             return Err(RuntimeError::ArityMismatch {
                 method: method.to_string(),
@@ -62,10 +72,6 @@ pub(crate) fn try_to_output(value: &Value) -> Option<String> {
     downcast_i64(value).map(|integer| integer.to_string())
 }
 
-pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
-    downcast_i64(value).map(|integer| integer != 0)
-}
-
 fn call_method_on_receiver(
     receiver: &ObjectRef,
     method: &str,
@@ -81,7 +87,7 @@ fn call_method_on_receiver(
 
 impl RuntimeObject for IntObject {
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        if matches!(attribute, "__add__" | "__sub__" | "__lt__") {
+        if matches!(attribute, "__add__" | "__sub__" | "__lt__" | "__bool__") {
             let receiver = receiver.clone();
             let method = attribute.to_string();
             return Ok(Value::bound_method_object(Rc::new(move |args| {

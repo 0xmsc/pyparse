@@ -15,7 +15,6 @@ use std::rc::Rc;
 struct ValueBehavior {
     type_name: &'static str,
     to_output: fn(&Value) -> String,
-    is_truthy: fn(&Value) -> bool,
 }
 
 #[derive(Clone)]
@@ -36,48 +35,24 @@ pub(crate) struct CallTargetError {
     pub(crate) type_name: String,
 }
 
-fn always_truthy(_value: &Value) -> bool {
-    true
-}
-
 fn int_to_output(value: &Value) -> String {
     int::try_to_output(value).expect("int behavior must wrap IntObject")
-}
-
-fn int_is_truthy(value: &Value) -> bool {
-    int::try_is_truthy(value).expect("int behavior must wrap IntObject")
 }
 
 fn bool_to_output(value: &Value) -> String {
     bool::try_to_output(value).expect("bool behavior must wrap BoolObject")
 }
 
-fn bool_is_truthy(value: &Value) -> bool {
-    bool::try_is_truthy(value).expect("bool behavior must wrap BoolObject")
-}
-
 fn string_to_output(value: &Value) -> String {
     string::try_to_output(value).expect("string behavior must wrap StringObject")
-}
-
-fn string_is_truthy(value: &Value) -> bool {
-    string::try_is_truthy(value).expect("string behavior must wrap StringObject")
 }
 
 fn list_to_output(value: &Value) -> String {
     list::try_to_output(value).expect("list behavior must wrap ListObject")
 }
 
-fn list_is_truthy(value: &Value) -> bool {
-    list::try_is_truthy(value).expect("list behavior must wrap ListObject")
-}
-
 fn none_to_output(_value: &Value) -> String {
     "None".to_string()
-}
-
-fn none_is_truthy(_value: &Value) -> bool {
-    false
 }
 
 fn builtin_function_to_output(_value: &Value) -> String {
@@ -95,49 +70,41 @@ fn bound_method_to_output(_value: &Value) -> String {
 const INT_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "int",
     to_output: int_to_output,
-    is_truthy: int_is_truthy,
 };
 
 const BOOL_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "bool",
     to_output: bool_to_output,
-    is_truthy: bool_is_truthy,
 };
 
 const STRING_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "str",
     to_output: string_to_output,
-    is_truthy: string_is_truthy,
 };
 
 const NONE_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "NoneType",
     to_output: none_to_output,
-    is_truthy: none_is_truthy,
 };
 
 const LIST_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "list",
     to_output: list_to_output,
-    is_truthy: list_is_truthy,
 };
 
 const BUILTIN_FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "builtin_function_or_method",
     to_output: builtin_function_to_output,
-    is_truthy: always_truthy,
 };
 
 const FUNCTION_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "function",
     to_output: function_to_output,
-    is_truthy: always_truthy,
 };
 
 const BOUND_METHOD_BEHAVIOR: ValueBehavior = ValueBehavior {
     type_name: "method",
     to_output: bound_method_to_output,
-    is_truthy: always_truthy,
 };
 
 impl Value {
@@ -166,7 +133,15 @@ impl Value {
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
-        (self.behavior.is_truthy)(self)
+        if let Some(bool_value) = self.try_call_magic_method("__bool__", "__bool__") {
+            return bool::downcast_bool(&bool_value).expect("__bool__ must return bool");
+        }
+
+        if let Some(length_value) = self.try_call_magic_method("__len__", "__len__") {
+            return int::downcast_i64(&length_value).expect("__len__ must return int") != 0;
+        }
+
+        true
     }
 
     pub(crate) fn call_target(&self) -> Result<CallTarget, CallTargetError> {
@@ -194,6 +169,13 @@ impl Value {
             .map_err(|error| map_unknown_attribute_to_unsupported(error, "__setitem__"))?;
         self.call_magic_method(callee, vec![index, value], "__setitem__")?;
         Ok(())
+    }
+
+    pub(crate) fn len(&self) -> Result<Value, RuntimeError> {
+        let callee = self
+            .get_attribute("__len__")
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, "len"))?;
+        self.call_magic_method(callee, Vec::new(), "len")
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
@@ -282,6 +264,18 @@ impl Value {
                 type_name,
             }),
         }
+    }
+
+    fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {
+        let callee = match self.get_attribute(attribute) {
+            Ok(callee) => callee,
+            Err(RuntimeError::UnknownAttribute { .. }) => return None,
+            Err(error) => panic!("failed to resolve {attribute}: {error}"),
+        };
+        Some(
+            self.call_magic_method(callee, Vec::new(), operation)
+                .unwrap_or_else(|error| panic!("failed to call {attribute}: {error}")),
+        )
     }
 }
 

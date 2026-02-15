@@ -2,6 +2,7 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StringObject {
@@ -20,6 +21,19 @@ impl StringObject {
 
 impl RuntimeObject for StringObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        if attribute == "__bool__" {
+            let is_non_empty = !self.value.is_empty();
+            return Ok(Value::bound_method_object(Rc::new(move |args| {
+                if !args.is_empty() {
+                    return Err(RuntimeError::ArityMismatch {
+                        method: "__bool__".to_string(),
+                        expected: 0,
+                        found: args.len(),
+                    });
+                }
+                Ok(Value::bool_object(is_non_empty))
+            })));
+        }
         Err(RuntimeError::UnknownAttribute {
             attribute: attribute.to_string(),
             type_name: "str".to_string(),
@@ -37,8 +51,4 @@ fn downcast_string(value: &Value) -> Option<String> {
 
 pub(crate) fn try_to_output(value: &Value) -> Option<String> {
     downcast_string(value)
-}
-
-pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
-    downcast_string(value).map(|string| !string.is_empty())
 }

@@ -19,10 +19,6 @@ impl ListObject {
         self.values.len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.values.is_empty()
-    }
-
     pub(crate) fn __setitem__(&mut self, index: i64, value: Value) -> Result<(), RuntimeError> {
         if index < 0 {
             return Err(RuntimeError::NegativeIndex { index });
@@ -180,14 +176,6 @@ pub(crate) fn try_to_output(value: &Value) -> Option<String> {
             .join(", ");
         format!("[{rendered}]")
     })
-}
-
-pub(crate) fn try_is_truthy(value: &Value) -> Option<bool> {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<ListObject>()
-        .map(|list| !list.is_empty())
 }
 
 fn call_method_on_receiver(
