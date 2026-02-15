@@ -395,6 +395,7 @@ mod tests {
     use super::{VM, VmError};
     use crate::ast::{AssignTarget, Expression, Program, Statement};
     use crate::bytecode::{CompiledFunction, CompiledProgram, Instruction, compile};
+    use crate::runtime::error::RuntimeError;
     use indoc::indoc;
     use std::collections::HashMap;
 
@@ -509,6 +510,92 @@ mod tests {
                 [3]
             "}
             .trim_end()
+        );
+    }
+
+    #[test]
+    fn errors_on_calling_or_reading_undefined_name() {
+        let missing_call_program = Program {
+            statements: vec![Statement::Expr(call("missing", vec![]))],
+        };
+        let compiled = compile(&missing_call_program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected undefined name error");
+        assert_eq!(
+            error,
+            VmError::Runtime(RuntimeError::UndefinedVariable {
+                name: "missing".to_string()
+            })
+        );
+
+        let missing_read_program = Program {
+            statements: vec![Statement::Expr(call(
+                "print",
+                vec![Expression::Identifier("missing".to_string())],
+            ))],
+        };
+        let compiled = compile(&missing_read_program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected undefined name error");
+        assert_eq!(
+            error,
+            VmError::Runtime(RuntimeError::UndefinedVariable {
+                name: "missing".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn names_shadow_builtins_and_declared_functions() {
+        let builtin_shadow_program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("print".to_string()),
+                    value: Expression::Integer(1),
+                },
+                Statement::Expr(call("print", vec![])),
+            ],
+        };
+        let compiled = compile(&builtin_shadow_program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected object not callable error");
+        assert_eq!(
+            error,
+            VmError::Runtime(RuntimeError::ObjectNotCallable {
+                type_name: "int".to_string()
+            })
+        );
+
+        let function_shadow_program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec![],
+                    body: vec![Statement::Return(Some(Expression::Integer(7)))],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("f".to_string()),
+                    value: Expression::Integer(2),
+                },
+                Statement::Expr(call("f", vec![])),
+            ],
+        };
+        let compiled = compile(&function_shadow_program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let error = vm
+            .run_compiled(&compiled)
+            .expect_err("expected object not callable error");
+        assert_eq!(
+            error,
+            VmError::Runtime(RuntimeError::ObjectNotCallable {
+                type_name: "int".to_string()
+            })
         );
     }
 }

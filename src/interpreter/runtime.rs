@@ -229,6 +229,12 @@ impl<'a> InterpreterRuntime<'a> {
                 if let Some(value) = environment.load(name) {
                     return Ok(value.clone());
                 }
+                if let Some(builtin) = BuiltinFunction::from_name(name) {
+                    return Ok(Value::builtin_function_object(builtin));
+                }
+                if self.functions.contains_key(name) {
+                    return Ok(Value::function_object(name.to_string()));
+                }
                 Err(RuntimeError::UndefinedVariable {
                     name: name.to_string(),
                 }
@@ -301,35 +307,12 @@ impl<'a> InterpreterRuntime<'a> {
         args: &[Expression],
         environment: &mut Environment<'_>,
     ) -> std::result::Result<Value, InterpreterError> {
-        let callee = self.resolve_callee(callee, environment)?;
+        let callee = self.eval_expression(callee, environment)?;
         let mut evaluated_args = Vec::with_capacity(args.len());
         for arg in args {
             evaluated_args.push(self.eval_expression(arg, environment)?);
         }
         self.call_value(callee, evaluated_args, environment)
-    }
-
-    fn resolve_callee(
-        &mut self,
-        callee: &Expression,
-        environment: &mut Environment<'_>,
-    ) -> std::result::Result<Value, InterpreterError> {
-        if let Expression::Identifier(name) = callee {
-            if let Some(value) = environment.load(name) {
-                return Ok(value);
-            }
-            if let Some(builtin) = BuiltinFunction::from_name(name) {
-                return Ok(Value::builtin_function_object(builtin));
-            }
-            if self.functions.contains_key(name) {
-                return Ok(Value::function_object(name.to_string()));
-            }
-            return Err(RuntimeError::UndefinedFunction {
-                name: name.to_string(),
-            }
-            .into());
-        }
-        self.eval_expression(callee, environment)
     }
 
     fn call_value(

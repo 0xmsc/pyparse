@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_on_invalid_call_and_undefined_function() {
+    fn errors_on_invalid_call_and_undefined_name() {
         let invalid_callee_program = Program {
             statements: vec![Statement::Expr(Expression::Call {
                 callee: Box::new(int(1)),
@@ -313,12 +313,89 @@ mod tests {
         };
         let error = expect_interpreter_error(
             run_program(&interpreter, &undefined_function_program)
-                .expect_err("expected undefined function error"),
+                .expect_err("expected undefined name error"),
         );
         assert_eq!(
             error,
-            InterpreterError::Runtime(RuntimeError::UndefinedFunction {
+            InterpreterError::Runtime(RuntimeError::UndefinedVariable {
                 name: "missing".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn errors_on_reading_undefined_name() {
+        let program = Program {
+            statements: vec![print(vec![identifier("missing")])],
+        };
+
+        let interpreter = Interpreter::new();
+        let error = expect_interpreter_error(
+            run_program(&interpreter, &program).expect_err("expected undefined name error"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::Runtime(RuntimeError::UndefinedVariable {
+                name: "missing".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn local_names_shadow_builtins_and_declared_functions() {
+        let builtin_shadow_program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec![],
+                    body: vec![Statement::Return(Some(int(7)))],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("print".to_string()),
+                    value: int(1),
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("f".to_string()),
+                    value: int(2),
+                },
+                Statement::Expr(call("print", vec![])),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let error = expect_interpreter_error(
+            run_program(&interpreter, &builtin_shadow_program)
+                .expect_err("expected object not callable error"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::Runtime(RuntimeError::ObjectNotCallable {
+                type_name: "int".to_string()
+            })
+        );
+
+        let function_shadow_program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec![],
+                    body: vec![Statement::Return(Some(int(7)))],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("f".to_string()),
+                    value: int(2),
+                },
+                Statement::Expr(call("f", vec![])),
+            ],
+        };
+        let error = expect_interpreter_error(
+            run_program(&interpreter, &function_shadow_program)
+                .expect_err("expected object not callable error"),
+        );
+        assert_eq!(
+            error,
+            InterpreterError::Runtime(RuntimeError::ObjectNotCallable {
+                type_name: "int".to_string()
             })
         );
     }
