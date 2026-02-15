@@ -1,6 +1,7 @@
 use crate::runtime::error::RuntimeError;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +16,14 @@ impl NoneObject {
 impl RuntimeObject for NoneObject {
     fn type_name(&self) -> &'static str {
         "NoneType"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {

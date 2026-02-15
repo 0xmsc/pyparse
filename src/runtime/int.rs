@@ -74,8 +74,10 @@ impl IntObject {
 pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
     let object_ref = value.object_ref();
     let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<IntObject>().map(IntObject::value)
+    object
+        .as_any()
+        .downcast_ref::<IntObject>()
+        .map(IntObject::value)
 }
 
 fn call_method_on_receiver(
@@ -84,8 +86,8 @@ fn call_method_on_receiver(
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
     let mut object = receiver.borrow_mut();
-    let any = &mut **object as &mut dyn Any;
-    let int = any
+    let int = object
+        .as_any_mut()
         .downcast_mut::<IntObject>()
         .expect("int get_attribute receiver must be IntObject");
     int.call_method(method, args)
@@ -94,6 +96,14 @@ fn call_method_on_receiver(
 impl RuntimeObject for IntObject {
     fn type_name(&self) -> &'static str {
         "int"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {

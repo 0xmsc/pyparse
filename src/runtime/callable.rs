@@ -2,6 +2,7 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::object::{BoundMethodCallable, CallTarget, ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
+use std::any::Any;
 use std::fmt;
 use std::rc::Rc;
 
@@ -65,6 +66,14 @@ impl RuntimeObject for BuiltinFunctionObject {
         "builtin_function_or_method"
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__str__" || attribute == "__repr__" {
             let method = attribute.to_string();
@@ -89,6 +98,14 @@ impl RuntimeObject for BuiltinFunctionObject {
 impl RuntimeObject for FunctionObject {
     fn type_name(&self) -> &'static str {
         "function"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
@@ -116,6 +133,14 @@ impl RuntimeObject for FunctionObject {
 impl RuntimeObject for BoundMethodObject {
     fn type_name(&self) -> &'static str {
         "method"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {

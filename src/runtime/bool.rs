@@ -24,6 +24,14 @@ impl RuntimeObject for BoolObject {
         "bool"
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let value = self.value;
@@ -62,6 +70,8 @@ impl RuntimeObject for BoolObject {
 pub(crate) fn downcast_bool(value: &Value) -> Option<bool> {
     let object_ref = value.object_ref();
     let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<BoolObject>().map(BoolObject::value)
+    object
+        .as_any()
+        .downcast_ref::<BoolObject>()
+        .map(BoolObject::value)
 }

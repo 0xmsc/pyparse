@@ -24,6 +24,14 @@ impl RuntimeObject for StringObject {
         "str"
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if attribute == "__bool__" {
             let is_non_empty = !self.value.is_empty();
@@ -74,7 +82,8 @@ impl RuntimeObject for StringObject {
 pub(crate) fn downcast_string(value: &Value) -> Option<String> {
     let object_ref = value.object_ref();
     let object = object_ref.borrow();
-    let any = &**object as &dyn Any;
-    any.downcast_ref::<StringObject>()
+    object
+        .as_any()
+        .downcast_ref::<StringObject>()
         .map(|string| string.value().to_string())
 }

@@ -62,6 +62,14 @@ impl RuntimeObject for ListObject {
         "list"
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         if matches!(
             attribute,
@@ -193,8 +201,8 @@ fn call_method_on_receiver(
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
     let mut object = receiver.borrow_mut();
-    let any = &mut **object as &mut dyn Any;
-    let list = any
+    let list = object
+        .as_any_mut()
         .downcast_mut::<ListObject>()
         .expect("list get_attribute receiver must be ListObject");
     list.call_method(method, args)

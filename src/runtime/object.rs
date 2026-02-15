@@ -20,6 +20,8 @@ pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
 
 pub(crate) trait RuntimeObject: std::fmt::Debug + Any {
     fn type_name(&self) -> &'static str;
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError>;
 }
 
