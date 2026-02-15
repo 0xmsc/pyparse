@@ -17,40 +17,6 @@ impl IntObject {
     pub(crate) fn value(&self) -> i64 {
         self.value
     }
-
-    pub(crate) fn call_method(
-        &mut self,
-        method: &str,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        if method == "__bool__" {
-            RuntimeError::expect_method_arity(method, 0, args.len())?;
-            return Ok(Value::bool_object(self.value != 0));
-        }
-        if method == "__str__" || method == "__repr__" {
-            RuntimeError::expect_method_arity(method, 0, args.len())?;
-            return Ok(Value::string_object(self.value.to_string()));
-        }
-        RuntimeError::expect_method_arity(method, 1, args.len())?;
-        let rhs = args.first().expect("len checked above");
-        let Some(rhs_int) = downcast_i64(rhs) else {
-            return Err(RuntimeError::InvalidArgumentType {
-                operation: method.to_string(),
-                argument: "rhs".to_string(),
-                expected: "int".to_string(),
-                got: rhs.type_name().to_string(),
-            });
-        };
-        match method {
-            "__add__" => Ok(Value::int_object(self.value + rhs_int)),
-            "__sub__" => Ok(Value::int_object(self.value - rhs_int)),
-            "__lt__" => Ok(Value::bool_object(self.value < rhs_int)),
-            _ => Err(RuntimeError::UnknownMethod {
-                method: method.to_string(),
-                type_name: "int".to_string(),
-            }),
-        }
-    }
 }
 
 pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
@@ -62,17 +28,27 @@ pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
         .map(IntObject::value)
 }
 
-fn call_method_on_receiver(
-    receiver: &ObjectRef,
-    method: &str,
-    args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
-    let mut object = receiver.borrow_mut();
+fn with_int<R>(receiver: &ObjectRef, f: impl FnOnce(&IntObject) -> R) -> R {
+    let object = receiver.borrow();
     let int = object
-        .as_any_mut()
-        .downcast_mut::<IntObject>()
+        .as_any()
+        .downcast_ref::<IntObject>()
         .expect("int get_attribute receiver must be IntObject");
-    int.call_method(method, args)
+    f(int)
+}
+
+fn expect_rhs_int(operation: &str, args: &[Value]) -> Result<i64, RuntimeError> {
+    RuntimeError::expect_method_arity(operation, 1, args.len())?;
+    let rhs = args.first().expect("len checked above");
+    let Some(rhs_int) = downcast_i64(rhs) else {
+        return Err(RuntimeError::InvalidArgumentType {
+            operation: operation.to_string(),
+            argument: "rhs".to_string(),
+            expected: "int".to_string(),
+            got: rhs.type_name().to_string(),
+        });
+    };
+    Ok(rhs_int)
 }
 
 impl RuntimeObject for IntObject {
@@ -90,11 +66,50 @@ impl RuntimeObject for IntObject {
 
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         match attribute {
-            "__add__" | "__sub__" | "__lt__" | "__bool__" | "__str__" | "__repr__" => {
+            "__add__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__add__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::int_object(int.value + rhs_int)
+                    }))
+                }))
+            }
+            "__sub__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__sub__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::int_object(int.value - rhs_int)
+                    }))
+                }))
+            }
+            "__lt__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__lt__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::bool_object(int.value < rhs_int)
+                    }))
+                }))
+            }
+            "__bool__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::bool_object(int.value != 0)
+                    }))
+                }))
+            }
+            "__str__" | "__repr__" => {
                 let receiver = receiver.clone();
                 let method = attribute.to_string();
                 Ok(bound_method(move |_context, args| {
-                    call_method_on_receiver(&receiver, &method, args)
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::string_object(int.value.to_string())
+                    }))
                 }))
             }
             _ => Err(RuntimeError::UnknownAttribute {

@@ -13,8 +13,6 @@ pub(crate) enum RuntimeError {
         expected: usize,
         found: usize,
     },
-    #[error("Unknown method '{method}' for type {type_name}")]
-    UnknownMethod { method: String, type_name: String },
     #[error("Operation '{operation}' is not supported for type {type_name}")]
     UnsupportedOperation {
         operation: String,
