@@ -6,6 +6,7 @@ use crate::runtime::callable::{
 use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
+use crate::runtime::list::ListObject;
 use crate::runtime::none::NoneObject;
 use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, new_list_object};
 use crate::runtime::string::{self, StringObject};
@@ -55,6 +56,10 @@ impl Value {
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
+        if let Some(is_truthy) = self.try_builtin_truthiness() {
+            return is_truthy;
+        }
+
         if let Some(bool_value) = self.try_call_magic_method("__bool__", "__bool__") {
             return bool::downcast_bool(&bool_value).expect("__bool__ must return bool");
         }
@@ -64,6 +69,26 @@ impl Value {
         }
 
         true
+    }
+
+    fn try_builtin_truthiness(&self) -> Option<bool> {
+        let object = self.object.borrow();
+        if let Some(boolean) = object.as_any().downcast_ref::<BoolObject>() {
+            return Some(boolean.value());
+        }
+        if let Some(integer) = object.as_any().downcast_ref::<IntObject>() {
+            return Some(integer.value() != 0);
+        }
+        if object.as_any().downcast_ref::<NoneObject>().is_some() {
+            return Some(false);
+        }
+        if let Some(string) = object.as_any().downcast_ref::<StringObject>() {
+            return Some(!string.value().is_empty());
+        }
+        if let Some(list) = object.as_any().downcast_ref::<ListObject>() {
+            return Some(list.__len__() != 0);
+        }
+        None
     }
 
     pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
