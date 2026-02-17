@@ -35,37 +35,42 @@ impl FunctionObject {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct BoundMethodObject {
-    callable: BoundMethodCallable,
-}
-
-impl BoundMethodObject {
-    pub(crate) fn new(callable: BoundMethodCallable) -> Self {
-        Self { callable }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CallableObjectKind {
+    BoundMethod,
+    MethodWrapper,
 }
 
 #[derive(Clone)]
-pub(crate) struct MethodWrapperObject {
+pub(crate) struct CallableObject {
+    kind: CallableObjectKind,
     callable: BoundMethodCallable,
 }
 
-impl MethodWrapperObject {
-    pub(crate) fn new(callable: BoundMethodCallable) -> Self {
-        Self { callable }
+impl CallableObject {
+    pub(crate) fn bound_method(callable: BoundMethodCallable) -> Self {
+        Self {
+            kind: CallableObjectKind::BoundMethod,
+            callable,
+        }
+    }
+
+    pub(crate) fn method_wrapper(callable: BoundMethodCallable) -> Self {
+        Self {
+            kind: CallableObjectKind::MethodWrapper,
+            callable,
+        }
     }
 }
 
-impl fmt::Debug for BoundMethodObject {
+impl fmt::Debug for CallableObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("BoundMethodObject(<callable>)")
-    }
-}
-
-impl fmt::Debug for MethodWrapperObject {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("MethodWrapperObject(<callable>)")
+        match self.kind {
+            CallableObjectKind::BoundMethod => f.write_str("CallableObject(method, <callable>)"),
+            CallableObjectKind::MethodWrapper => {
+                f.write_str("CallableObject(method-wrapper, <callable>)")
+            }
+        }
     }
 }
 
@@ -90,24 +95,23 @@ fn with_function<R>(receiver: &ObjectRef, f: impl FnOnce(&FunctionObject) -> R) 
     f(function)
 }
 
-fn bound_method_callable(receiver: &ObjectRef) -> BoundMethodCallable {
+fn callable_for(receiver: &ObjectRef) -> BoundMethodCallable {
     let object = receiver.borrow();
     object
         .as_any()
-        .downcast_ref::<BoundMethodObject>()
-        .expect("bound method receiver must be BoundMethodObject")
+        .downcast_ref::<CallableObject>()
+        .expect("callable receiver must be CallableObject")
         .callable
         .clone()
 }
 
-fn method_wrapper_callable(receiver: &ObjectRef) -> BoundMethodCallable {
+fn callable_kind(receiver: &ObjectRef) -> CallableObjectKind {
     let object = receiver.borrow();
     object
         .as_any()
-        .downcast_ref::<MethodWrapperObject>()
-        .expect("method wrapper receiver must be MethodWrapperObject")
-        .callable
-        .clone()
+        .downcast_ref::<CallableObject>()
+        .expect("callable receiver must be CallableObject")
+        .kind
 }
 
 impl RuntimeObject for BuiltinFunctionObject {
@@ -138,7 +142,7 @@ impl RuntimeObject for FunctionObject {
     }
 }
 
-impl RuntimeObject for BoundMethodObject {
+impl RuntimeObject for CallableObject {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -148,21 +152,10 @@ impl RuntimeObject for BoundMethodObject {
     }
 
     fn type_object(&self) -> &'static TypeObject {
-        &BOUND_METHOD_TYPE
-    }
-}
-
-impl RuntimeObject for MethodWrapperObject {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    fn type_object(&self) -> &'static TypeObject {
-        &METHOD_WRAPPER_TYPE
+        match self.kind {
+            CallableObjectKind::BoundMethod => &BOUND_METHOD_TYPE,
+            CallableObjectKind::MethodWrapper => &METHOD_WRAPPER_TYPE,
+        }
     }
 }
 
@@ -184,14 +177,14 @@ static BOUND_METHOD_TYPE: TypeObject = TypeObject {
     name: "method",
     get_attribute: bound_method_get_attribute,
     set_attribute: unsupported_attribute_assignment,
-    call: bound_method_call,
+    call: callable_object_call,
 };
 
 static METHOD_WRAPPER_TYPE: TypeObject = TypeObject {
     name: "method-wrapper",
     get_attribute: method_wrapper_get_attribute,
     set_attribute: unsupported_attribute_assignment,
-    call: method_wrapper_call,
+    call: callable_object_call,
 };
 
 fn builtin_function_get_attribute(
@@ -257,9 +250,10 @@ fn function_call(
 }
 
 fn bound_method_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+    debug_assert_eq!(callable_kind(&receiver), CallableObjectKind::BoundMethod);
     match attribute {
         "__call__" => {
-            let callable = bound_method_callable(&receiver);
+            let callable = callable_for(&receiver);
             Ok(Value::method_wrapper_object(callable))
         }
         "__str__" | "__repr__" => {
@@ -273,22 +267,14 @@ fn bound_method_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Va
     }
 }
 
-fn bound_method_call(
-    receiver: ObjectRef,
-    context: &mut dyn CallContext,
-    args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
-    let callable = bound_method_callable(&receiver);
-    callable(context, args)
-}
-
 fn method_wrapper_get_attribute(
     receiver: ObjectRef,
     attribute: &str,
 ) -> Result<Value, RuntimeError> {
+    debug_assert_eq!(callable_kind(&receiver), CallableObjectKind::MethodWrapper);
     match attribute {
         "__call__" => {
-            let callable = method_wrapper_callable(&receiver);
+            let callable = callable_for(&receiver);
             Ok(Value::method_wrapper_object(callable))
         }
         "__str__" | "__repr__" => {
@@ -304,12 +290,12 @@ fn method_wrapper_get_attribute(
     }
 }
 
-fn method_wrapper_call(
+fn callable_object_call(
     receiver: ObjectRef,
     context: &mut dyn CallContext,
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
-    let callable = method_wrapper_callable(&receiver);
+    let callable = callable_for(&receiver);
     callable(context, args)
 }
 

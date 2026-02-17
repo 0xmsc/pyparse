@@ -1,8 +1,6 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::{self, BoolObject};
-use crate::runtime::callable::{
-    BoundMethodObject, BuiltinFunctionObject, FunctionObject, MethodWrapperObject,
-};
+use crate::runtime::callable::{BuiltinFunctionObject, CallableObject, FunctionObject};
 use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
@@ -221,12 +219,12 @@ impl Value {
     }
 
     pub(crate) fn bound_method_object(callable: BoundMethodCallable) -> Self {
-        let bound_method_object = BoundMethodObject::new(callable);
+        let bound_method_object = CallableObject::bound_method(callable);
         Self::new(Rc::new(RefCell::new(Box::new(bound_method_object))))
     }
 
     pub(crate) fn method_wrapper_object(callable: BoundMethodCallable) -> Self {
-        let method_wrapper_object = MethodWrapperObject::new(callable);
+        let method_wrapper_object = CallableObject::method_wrapper(callable);
         Self::new(Rc::new(RefCell::new(Box::new(method_wrapper_object))))
     }
 
