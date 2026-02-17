@@ -263,7 +263,7 @@ impl Value {
         let object_ref = callee.object_ref();
         object_ref
             .borrow()
-            .invoke(object_ref.clone(), context, args)
+            .call(object_ref.clone(), context, args)
             .map_err(|error| match error {
                 RuntimeError::ObjectNotCallable { .. } if operation != "__call__" => {
                     RuntimeError::UnsupportedOperation {
