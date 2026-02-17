@@ -88,18 +88,66 @@ impl Value {
         self.call_bound_method(callee, context, args, "__call__")
     }
 
-    pub(crate) fn get_item(&self, index: Value) -> Result<Value, RuntimeError> {
+    pub(crate) fn add(
+        &self,
+        context: &mut dyn CallContext,
+        rhs: Value,
+    ) -> Result<Value, RuntimeError> {
+        if let (Some(left_int), Some(right_int)) =
+            (int::downcast_i64(self), int::downcast_i64(&rhs))
+        {
+            return Ok(Value::int_object(left_int + right_int));
+        }
+        self.call_binary_operator(context, "__add__", rhs)
+    }
+
+    pub(crate) fn sub(
+        &self,
+        context: &mut dyn CallContext,
+        rhs: Value,
+    ) -> Result<Value, RuntimeError> {
+        if let (Some(left_int), Some(right_int)) =
+            (int::downcast_i64(self), int::downcast_i64(&rhs))
+        {
+            return Ok(Value::int_object(left_int - right_int));
+        }
+        self.call_binary_operator(context, "__sub__", rhs)
+    }
+
+    pub(crate) fn less_than(
+        &self,
+        context: &mut dyn CallContext,
+        rhs: Value,
+    ) -> Result<Value, RuntimeError> {
+        if let (Some(left_int), Some(right_int)) =
+            (int::downcast_i64(self), int::downcast_i64(&rhs))
+        {
+            return Ok(Value::bool_object(left_int < right_int));
+        }
+        self.call_binary_operator(context, "__lt__", rhs)
+    }
+
+    pub(crate) fn get_item_with_context(
+        &self,
+        context: &mut dyn CallContext,
+        index: Value,
+    ) -> Result<Value, RuntimeError> {
         let callee = self
             .get_attribute("__getitem__")
             .map_err(|error| map_unknown_attribute_to_unsupported(error, "__getitem__"))?;
-        self.call_magic_method(callee, vec![index], "__getitem__")
+        self.call_bound_method(callee, context, vec![index], "__getitem__")
     }
 
-    pub(crate) fn set_item(&self, index: Value, value: Value) -> Result<(), RuntimeError> {
+    pub(crate) fn set_item_with_context(
+        &self,
+        context: &mut dyn CallContext,
+        index: Value,
+        value: Value,
+    ) -> Result<(), RuntimeError> {
         let callee = self
             .get_attribute("__setitem__")
             .map_err(|error| map_unknown_attribute_to_unsupported(error, "__setitem__"))?;
-        self.call_magic_method(callee, vec![index, value], "__setitem__")?;
+        self.call_bound_method(callee, context, vec![index, value], "__setitem__")?;
         Ok(())
     }
 
@@ -168,6 +216,18 @@ impl Value {
     ) -> Result<Value, RuntimeError> {
         let mut context = NoopCallContext;
         self.call_bound_method(callee, &mut context, args, operation)
+    }
+
+    fn call_binary_operator(
+        &self,
+        context: &mut dyn CallContext,
+        operation: &str,
+        rhs: Value,
+    ) -> Result<Value, RuntimeError> {
+        let callee = self
+            .get_attribute(operation)
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, operation))?;
+        self.call_bound_method(callee, context, vec![rhs], operation)
     }
 
     fn call_bound_method(

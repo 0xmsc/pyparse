@@ -159,68 +159,41 @@ impl<'a> VmRuntime<'a> {
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let callee = left.get_attribute("__add__").map_err(|error| match error {
-                        RuntimeError::UnknownAttribute {
-                            attribute: _,
-                            type_name,
-                        } => VmError::from(RuntimeError::UnsupportedOperation {
-                            operation: "__add__".to_string(),
-                            type_name,
-                        }),
-                        other => VmError::from(other),
-                    })?;
-                    let result = self.call_value(callee, vec![right], environment)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let result = left.add(&mut context, right)?;
                     self.stack.push(result);
                 }
                 Instruction::Sub => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let callee = left.get_attribute("__sub__").map_err(|error| match error {
-                        RuntimeError::UnknownAttribute {
-                            attribute: _,
-                            type_name,
-                        } => VmError::from(RuntimeError::UnsupportedOperation {
-                            operation: "__sub__".to_string(),
-                            type_name,
-                        }),
-                        other => VmError::from(other),
-                    })?;
-                    let result = self.call_value(callee, vec![right], environment)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let result = left.sub(&mut context, right)?;
                     self.stack.push(result);
                 }
                 Instruction::LessThan => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;
-                    let callee = left.get_attribute("__lt__").map_err(|error| match error {
-                        RuntimeError::UnknownAttribute {
-                            attribute: _,
-                            type_name,
-                        } => VmError::from(RuntimeError::UnsupportedOperation {
-                            operation: "__lt__".to_string(),
-                            type_name,
-                        }),
-                        other => VmError::from(other),
-                    })?;
-                    let result = self.call_value(callee, vec![right], environment)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let result = left.less_than(&mut context, right)?;
                     self.stack.push(result);
                 }
                 Instruction::LoadIndex => {
                     let index_value = self.pop_stack()?;
                     let object_value = self.pop_stack()?;
-                    let callee =
-                        object_value
-                            .get_attribute("__getitem__")
-                            .map_err(|error| match error {
-                                RuntimeError::UnknownAttribute {
-                                    attribute: _,
-                                    type_name,
-                                } => VmError::from(RuntimeError::UnsupportedOperation {
-                                    operation: "__getitem__".to_string(),
-                                    type_name,
-                                }),
-                                other => VmError::from(other),
-                            })?;
-                    let value = self.call_value(callee, vec![index_value], environment)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let value = object_value.get_item_with_context(&mut context, index_value)?;
                     self.stack.push(value);
                 }
                 Instruction::StoreIndex(name) => {
@@ -230,20 +203,11 @@ impl<'a> VmRuntime<'a> {
                         .load(&name)
                         .cloned()
                         .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
-                    let callee =
-                        target
-                            .get_attribute("__setitem__")
-                            .map_err(|error| match error {
-                                RuntimeError::UnknownAttribute {
-                                    attribute: _,
-                                    type_name,
-                                } => VmError::from(RuntimeError::UnsupportedOperation {
-                                    operation: "__setitem__".to_string(),
-                                    type_name,
-                                }),
-                                other => VmError::from(other),
-                            })?;
-                    self.call_value(callee, vec![index_value, value], environment)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    target.set_item_with_context(&mut context, index_value, value)?;
                 }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);

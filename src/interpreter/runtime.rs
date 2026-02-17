@@ -46,15 +46,6 @@ impl<'a> Environment<'a> {
         self.globals.get(name).cloned()
     }
 
-    fn load_mut(&mut self, name: &str) -> Option<&mut Value> {
-        if let Some(locals) = self.locals.as_deref_mut()
-            && locals.contains_key(name)
-        {
-            return locals.get_mut(name);
-        }
-        self.globals.get_mut(name)
-    }
-
     fn store(&mut self, name: String, value: Value) {
         if let Some(locals) = self.locals.as_deref_mut() {
             locals.insert(name, value);
@@ -190,12 +181,18 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                     AssignTarget::Index { name, index } => {
                         let index_value = self.eval_expression(index, environment)?;
-                        let list = environment.load_mut(name).ok_or_else(|| {
+                        let target = environment.load(name).ok_or_else(|| {
                             RuntimeError::UndefinedVariable {
                                 name: name.to_string(),
                             }
                         })?;
-                        list.set_item(index_value, value)?;
+                        let mut context = InterpreterCallContext {
+                            runtime: self,
+                            environment,
+                        };
+                        target
+                            .set_item_with_context(&mut context, index_value, value)
+                            .map_err(InterpreterError::from)?;
                     }
                 }
                 Ok(ExecResult::Continue)
@@ -273,54 +270,27 @@ impl<'a> InterpreterRuntime<'a> {
             Expression::Index { object, index } => {
                 let object_value = self.eval_expression(object, environment)?;
                 let index_value = self.eval_expression(index, environment)?;
-                object_value.get_item(index_value).map_err(Into::into)
+                let mut context = InterpreterCallContext {
+                    runtime: self,
+                    environment,
+                };
+                object_value
+                    .get_item_with_context(&mut context, index_value)
+                    .map_err(Into::into)
             }
             Expression::BinaryOp { left, op, right } => {
                 let left = self.eval_expression(left, environment)?;
                 let right = self.eval_expression(right, environment)?;
+                let mut context = InterpreterCallContext {
+                    runtime: self,
+                    environment,
+                };
                 match op {
-                    BinaryOperator::Add => {
-                        let callee =
-                            left.get_attribute("__add__").map_err(|error| match error {
-                                RuntimeError::UnknownAttribute {
-                                    attribute: _,
-                                    type_name,
-                                } => RuntimeError::UnsupportedOperation {
-                                    operation: "__add__".to_string(),
-                                    type_name,
-                                },
-                                other => other,
-                            })?;
-                        self.call_value(callee, vec![right], environment)
-                    }
-                    BinaryOperator::Sub => {
-                        let callee =
-                            left.get_attribute("__sub__").map_err(|error| match error {
-                                RuntimeError::UnknownAttribute {
-                                    attribute: _,
-                                    type_name,
-                                } => RuntimeError::UnsupportedOperation {
-                                    operation: "__sub__".to_string(),
-                                    type_name,
-                                },
-                                other => other,
-                            })?;
-                        self.call_value(callee, vec![right], environment)
-                    }
-                    BinaryOperator::LessThan => {
-                        let callee = left.get_attribute("__lt__").map_err(|error| match error {
-                            RuntimeError::UnknownAttribute {
-                                attribute: _,
-                                type_name,
-                            } => RuntimeError::UnsupportedOperation {
-                                operation: "__lt__".to_string(),
-                                type_name,
-                            },
-                            other => other,
-                        })?;
-                        self.call_value(callee, vec![right], environment)
-                    }
+                    BinaryOperator::Add => left.add(&mut context, right),
+                    BinaryOperator::Sub => left.sub(&mut context, right),
+                    BinaryOperator::LessThan => left.less_than(&mut context, right),
                 }
+                .map_err(Into::into)
             }
             Expression::Attribute { object, name } => {
                 let object = self.eval_expression(object, environment)?;
