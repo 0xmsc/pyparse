@@ -1,10 +1,7 @@
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::downcast_i64;
 use crate::runtime::method::bound_method;
-use crate::runtime::object::{
-    ObjectRef, RuntimeObject, TypeObject, object_not_callable, unknown_attribute,
-    unsupported_attribute_assignment,
-};
+use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 
@@ -69,68 +66,64 @@ impl RuntimeObject for ListObject {
         self
     }
 
-    fn type_object(&self) -> &'static TypeObject {
-        &LIST_TYPE
+    fn type_name(&self) -> &'static str {
+        "list"
     }
-}
 
-static LIST_TYPE: TypeObject = TypeObject {
-    name: "list",
-    get_attribute: list_get_attribute,
-    set_attribute: unsupported_attribute_assignment,
-    call: object_not_callable,
-};
-
-fn list_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-    match attribute {
-        "append" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, mut args| {
-                RuntimeError::expect_method_arity("append", 1, args.len())?;
-                with_list_mut(&receiver, |list| {
-                    list.append(args.pop().expect("len checked above"));
-                });
-                Ok(Value::none_object())
-            }))
-        }
-        "__len__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity("__len__", 0, args.len())?;
-                Ok(with_list(&receiver, |list| {
-                    Value::int_object(list.__len__() as i64)
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        match attribute {
+            "append" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, mut args| {
+                    RuntimeError::expect_method_arity("append", 1, args.len())?;
+                    with_list_mut(&receiver, |list| {
+                        list.append(args.pop().expect("len checked above"));
+                    });
+                    Ok(Value::none_object())
                 }))
-            }))
-        }
-        "__getitem__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, mut args| {
-                RuntimeError::expect_method_arity("__getitem__", 1, args.len())?;
-                let index = args.pop().expect("len checked above");
-                with_list(&receiver, |list| list.get_item_value(index))
-            }))
-        }
-        "__setitem__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, mut args| {
-                RuntimeError::expect_method_arity("__setitem__", 2, args.len())?;
-                let value = args.pop().expect("len checked above");
-                let index = args.pop().expect("len checked above");
-                with_list_mut(&receiver, |list| list.set_item_value(index, value))?;
-                Ok(Value::none_object())
-            }))
-        }
-        "__str__" | "__repr__" => {
-            let receiver = receiver.clone();
-            let method = attribute.to_string();
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                Ok(with_list(&receiver, |list| {
-                    Value::string_object(list.render())
+            }
+            "__len__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__len__", 0, args.len())?;
+                    Ok(with_list(&receiver, |list| {
+                        Value::int_object(list.__len__() as i64)
+                    }))
                 }))
-            }))
+            }
+            "__getitem__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, mut args| {
+                    RuntimeError::expect_method_arity("__getitem__", 1, args.len())?;
+                    let index = args.pop().expect("len checked above");
+                    with_list(&receiver, |list| list.get_item_value(index))
+                }))
+            }
+            "__setitem__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, mut args| {
+                    RuntimeError::expect_method_arity("__setitem__", 2, args.len())?;
+                    let value = args.pop().expect("len checked above");
+                    let index = args.pop().expect("len checked above");
+                    with_list_mut(&receiver, |list| list.set_item_value(index, value))?;
+                    Ok(Value::none_object())
+                }))
+            }
+            "__str__" | "__repr__" => {
+                let receiver = receiver.clone();
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(with_list(&receiver, |list| {
+                        Value::string_object(list.render())
+                    }))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: self.type_name().to_string(),
+            }),
         }
-        _ => unknown_attribute(receiver, attribute),
     }
 }
 

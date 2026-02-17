@@ -1,9 +1,6 @@
 use crate::runtime::error::RuntimeError;
 use crate::runtime::method::bound_method;
-use crate::runtime::object::{
-    ObjectRef, RuntimeObject, TypeObject, object_not_callable, unknown_attribute,
-    unsupported_attribute_assignment,
-};
+use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 
@@ -63,66 +60,62 @@ impl RuntimeObject for IntObject {
         self
     }
 
-    fn type_object(&self) -> &'static TypeObject {
-        &INT_TYPE
+    fn type_name(&self) -> &'static str {
+        "int"
     }
-}
 
-static INT_TYPE: TypeObject = TypeObject {
-    name: "int",
-    get_attribute: int_get_attribute,
-    set_attribute: unsupported_attribute_assignment,
-    call: object_not_callable,
-};
-
-fn int_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-    match attribute {
-        "__add__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, args| {
-                let rhs_int = expect_rhs_int("__add__", &args)?;
-                Ok(with_int(&receiver, |int| {
-                    Value::int_object(int.value + rhs_int)
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        match attribute {
+            "__add__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__add__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::int_object(int.value + rhs_int)
+                    }))
                 }))
-            }))
-        }
-        "__sub__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, args| {
-                let rhs_int = expect_rhs_int("__sub__", &args)?;
-                Ok(with_int(&receiver, |int| {
-                    Value::int_object(int.value - rhs_int)
+            }
+            "__sub__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__sub__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::int_object(int.value - rhs_int)
+                    }))
                 }))
-            }))
-        }
-        "__lt__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, args| {
-                let rhs_int = expect_rhs_int("__lt__", &args)?;
-                Ok(with_int(&receiver, |int| {
-                    Value::bool_object(int.value < rhs_int)
+            }
+            "__lt__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    let rhs_int = expect_rhs_int("__lt__", &args)?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::bool_object(int.value < rhs_int)
+                    }))
                 }))
-            }))
-        }
-        "__bool__" => {
-            let receiver = receiver.clone();
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
-                Ok(with_int(&receiver, |int| {
-                    Value::bool_object(int.value != 0)
+            }
+            "__bool__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::bool_object(int.value != 0)
+                    }))
                 }))
-            }))
-        }
-        "__str__" | "__repr__" => {
-            let receiver = receiver.clone();
-            let method = attribute.to_string();
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                Ok(with_int(&receiver, |int| {
-                    Value::string_object(int.value.to_string())
+            }
+            "__str__" | "__repr__" => {
+                let receiver = receiver.clone();
+                let method = attribute.to_string();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                    Ok(with_int(&receiver, |int| {
+                        Value::string_object(int.value.to_string())
+                    }))
                 }))
-            }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: self.type_name().to_string(),
+            }),
         }
-        _ => unknown_attribute(receiver, attribute),
     }
 }

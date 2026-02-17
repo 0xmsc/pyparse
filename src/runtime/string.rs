@@ -1,9 +1,6 @@
 use crate::runtime::error::RuntimeError;
 use crate::runtime::method::bound_method;
-use crate::runtime::object::{
-    ObjectRef, RuntimeObject, TypeObject, object_not_callable, unknown_attribute,
-    unsupported_attribute_assignment,
-};
+use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
 
@@ -31,48 +28,38 @@ impl RuntimeObject for StringObject {
         self
     }
 
-    fn type_object(&self) -> &'static TypeObject {
-        &STRING_TYPE
+    fn type_name(&self) -> &'static str {
+        "str"
     }
-}
 
-static STRING_TYPE: TypeObject = TypeObject {
-    name: "str",
-    get_attribute: string_get_attribute,
-    set_attribute: unsupported_attribute_assignment,
-    call: object_not_callable,
-};
-
-fn string_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-    let value = {
-        let object = receiver.borrow();
-        object
-            .as_any()
-            .downcast_ref::<StringObject>()
-            .expect("str get_attribute receiver must be StringObject")
-            .value
-            .clone()
-    };
-    match attribute {
-        "__bool__" => {
-            let is_non_empty = !value.is_empty();
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
-                Ok(Value::bool_object(is_non_empty))
-            }))
+    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        match attribute {
+            "__bool__" => {
+                let is_non_empty = !self.value.is_empty();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                    Ok(Value::bool_object(is_non_empty))
+                }))
+            }
+            "__str__" => {
+                let value = self.value.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__str__", 0, args.len())?;
+                    Ok(Value::string_object(value.clone()))
+                }))
+            }
+            "__repr__" => {
+                let rendered = format!("{:?}", self.value);
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
+                    Ok(Value::string_object(rendered.clone()))
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: self.type_name().to_string(),
+            }),
         }
-        "__str__" => Ok(bound_method(move |_context, args| {
-            RuntimeError::expect_method_arity("__str__", 0, args.len())?;
-            Ok(Value::string_object(value.clone()))
-        })),
-        "__repr__" => {
-            let rendered = format!("{:?}", value);
-            Ok(bound_method(move |_context, args| {
-                RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
-                Ok(Value::string_object(rendered.clone()))
-            }))
-        }
-        _ => unknown_attribute(receiver, attribute),
     }
 }
 
