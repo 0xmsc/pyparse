@@ -44,10 +44,6 @@ impl BoundMethodObject {
     pub(crate) fn new(callable: BoundMethodCallable) -> Self {
         Self { callable }
     }
-
-    pub(crate) fn callable(&self) -> BoundMethodCallable {
-        self.callable.clone()
-    }
 }
 
 #[derive(Clone)]
@@ -58,10 +54,6 @@ pub(crate) struct MethodWrapperObject {
 impl MethodWrapperObject {
     pub(crate) fn new(callable: BoundMethodCallable) -> Self {
         Self { callable }
-    }
-
-    pub(crate) fn callable(&self) -> BoundMethodCallable {
-        self.callable.clone()
     }
 }
 
@@ -98,22 +90,24 @@ fn with_function<R>(receiver: &ObjectRef, f: impl FnOnce(&FunctionObject) -> R) 
     f(function)
 }
 
-fn with_bound_method<R>(receiver: &ObjectRef, f: impl FnOnce(&BoundMethodObject) -> R) -> R {
+fn bound_method_callable(receiver: &ObjectRef) -> BoundMethodCallable {
     let object = receiver.borrow();
-    let method = object
+    object
         .as_any()
         .downcast_ref::<BoundMethodObject>()
-        .expect("bound method receiver must be BoundMethodObject");
-    f(method)
+        .expect("bound method receiver must be BoundMethodObject")
+        .callable
+        .clone()
 }
 
-fn with_method_wrapper<R>(receiver: &ObjectRef, f: impl FnOnce(&MethodWrapperObject) -> R) -> R {
+fn method_wrapper_callable(receiver: &ObjectRef) -> BoundMethodCallable {
     let object = receiver.borrow();
-    let method_wrapper = object
+    object
         .as_any()
         .downcast_ref::<MethodWrapperObject>()
-        .expect("method wrapper receiver must be MethodWrapperObject");
-    f(method_wrapper)
+        .expect("method wrapper receiver must be MethodWrapperObject")
+        .callable
+        .clone()
 }
 
 impl RuntimeObject for BuiltinFunctionObject {
@@ -265,7 +259,7 @@ fn function_call(
 fn bound_method_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     match attribute {
         "__call__" => {
-            let callable = with_bound_method(&receiver, BoundMethodObject::callable);
+            let callable = bound_method_callable(&receiver);
             Ok(Value::method_wrapper_object(callable))
         }
         "__str__" | "__repr__" => {
@@ -284,7 +278,7 @@ fn bound_method_call(
     context: &mut dyn CallContext,
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
-    let callable = with_bound_method(&receiver, BoundMethodObject::callable);
+    let callable = bound_method_callable(&receiver);
     callable(context, args)
 }
 
@@ -294,7 +288,7 @@ fn method_wrapper_get_attribute(
 ) -> Result<Value, RuntimeError> {
     match attribute {
         "__call__" => {
-            let callable = with_method_wrapper(&receiver, MethodWrapperObject::callable);
+            let callable = method_wrapper_callable(&receiver);
             Ok(Value::method_wrapper_object(callable))
         }
         "__str__" | "__repr__" => {
@@ -315,7 +309,7 @@ fn method_wrapper_call(
     context: &mut dyn CallContext,
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
-    let callable = with_method_wrapper(&receiver, MethodWrapperObject::callable);
+    let callable = method_wrapper_callable(&receiver);
     callable(context, args)
 }
 
