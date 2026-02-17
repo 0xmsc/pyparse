@@ -139,6 +139,16 @@ impl RuntimeObject for InstanceObject {
         }
     }
 
+    fn set_attribute(
+        &mut self,
+        _receiver: ObjectRef,
+        attribute: &str,
+        value: Value,
+    ) -> Result<(), RuntimeError> {
+        self.attributes.insert(attribute.to_string(), value);
+        Ok(())
+    }
+
     fn invoke(
         &self,
         _receiver: ObjectRef,

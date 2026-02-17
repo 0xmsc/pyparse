@@ -620,4 +620,47 @@ mod tests {
         let output = run_program(&interpreter, &program).expect("run failed");
         assert_eq!(output, "[3]");
     }
+
+    #[test]
+    fn supports_instance_attribute_assignment() {
+        let value_attr = Expression::Attribute {
+            object: Box::new(identifier("b")),
+            name: "value".to_string(),
+        };
+        let program = Program {
+            statements: vec![
+                Statement::ClassDef {
+                    name: "Box".to_string(),
+                    body: vec![Statement::FunctionDef {
+                        name: "__init__".to_string(),
+                        params: vec!["self".to_string(), "value".to_string()],
+                        body: vec![Statement::Assign {
+                            target: AssignTarget::Attribute {
+                                object: identifier("self"),
+                                name: "value".to_string(),
+                            },
+                            value: identifier("value"),
+                        }],
+                    }],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("b".to_string()),
+                    value: call("Box", vec![int(7)]),
+                },
+                print(vec![value_attr.clone()]),
+                Statement::Assign {
+                    target: AssignTarget::Attribute {
+                        object: identifier("b"),
+                        name: "value".to_string(),
+                    },
+                    value: int(9),
+                },
+                print(vec![value_attr]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "7\n9");
+    }
 }

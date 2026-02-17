@@ -97,6 +97,12 @@ impl Value {
             .get_attribute(self.object_ref(), attribute)
     }
 
+    pub(crate) fn set_attribute(&self, attribute: &str, value: Value) -> Result<(), RuntimeError> {
+        self.object
+            .borrow_mut()
+            .set_attribute(self.object_ref(), attribute, value)
+    }
+
     pub(crate) fn call(
         &self,
         context: &mut dyn CallContext,

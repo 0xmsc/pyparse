@@ -64,6 +64,7 @@ pub enum Statement {
 pub enum AssignTarget {
     Name(String),
     Index { name: String, index: Expression },
+    Attribute { object: Expression, name: String },
 }
 
 #[derive(Debug, PartialEq, Clone)]

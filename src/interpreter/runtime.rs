@@ -194,6 +194,10 @@ impl<'a> InterpreterRuntime<'a> {
                             .set_item_with_context(&mut context, index_value, value)
                             .map_err(InterpreterError::from)?;
                     }
+                    AssignTarget::Attribute { object, name } => {
+                        let object = self.eval_expression(object, environment)?;
+                        object.set_attribute(name, value)?;
+                    }
                 }
                 Ok(ExecResult::Continue)
             }

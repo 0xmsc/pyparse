@@ -63,9 +63,7 @@ impl<'a> Parser<'a> {
             (TokenKind::While, _) => self.parse_while(),
             (TokenKind::Return, _) => self.parse_return(),
             (TokenKind::Pass, _) => self.parse_pass(),
-            (TokenKind::Identifier(_), TokenKind::Equal | TokenKind::LBracket) => {
-                self.parse_identifier_led_statement()
-            }
+            (TokenKind::Identifier(_), _) => self.parse_identifier_led_statement(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -110,24 +108,38 @@ impl<'a> Parser<'a> {
     /// Examples:
     /// - `x = 1\n`
     /// - `values[1] = 7\n`
+    /// - `self.x = 3\n`
     /// - `print(x)\n`
     fn parse_identifier_led_statement(&mut self) -> ParseResult<Statement> {
-        let checkpoint = self.pos;
-        let name = self.expect_identifier()?;
-        let target = if self.try_consume(TokenKind::LBracket) {
-            let index = self.parse_expression()?;
-            self.expect_token(TokenKind::RBracket, "]")?;
-            AssignTarget::Index { name, index }
-        } else {
-            AssignTarget::Name(name)
-        };
-        if !self.try_consume(TokenKind::Equal) {
-            self.pos = checkpoint;
-            return self.parse_expression_statement();
+        let expr = self.parse_expression()?;
+        if !matches!(self.current_kind(), TokenKind::Equal) {
+            self.expect_token(TokenKind::Newline, "newline")?;
+            return Ok(Statement::Expr(expr));
         }
+
+        let target = self.assignment_target(expr)?;
+        self.expect_token(TokenKind::Equal, "=")?;
         let value = self.parse_expression()?;
         self.expect_token(TokenKind::Newline, "newline")?;
         Ok(Statement::Assign { target, value })
+    }
+
+    fn assignment_target(&self, expr: Expression) -> ParseResult<AssignTarget> {
+        match expr {
+            Expression::Identifier(name) => Ok(AssignTarget::Name(name)),
+            Expression::Index { object, index } => match *object {
+                Expression::Identifier(name) => Ok(AssignTarget::Index {
+                    name,
+                    index: *index,
+                }),
+                _ => Err(self.error("assignment target")),
+            },
+            Expression::Attribute { object, name } => Ok(AssignTarget::Attribute {
+                object: *object,
+                name,
+            }),
+            _ => Err(self.error("assignment target")),
+        }
     }
 
     /// Parse an expression statement followed by newline.
@@ -759,6 +771,33 @@ mod tests {
                     }),
                     args: vec![Expression::Integer(3)],
                 })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_attribute_assignment() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("self")),
+            tok(TokenKind::Dot),
+            tok(TokenKind::Identifier("value")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Assign {
+                    target: AssignTarget::Attribute {
+                        object: Expression::Identifier("self".to_string()),
+                        name: "value".to_string(),
+                    },
+                    value: Expression::Integer(1),
+                }],
             }
         );
     }

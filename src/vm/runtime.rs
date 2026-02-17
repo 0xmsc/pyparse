@@ -156,6 +156,11 @@ impl<'a> VmRuntime<'a> {
                     let attribute_value = object.get_attribute(&attribute)?;
                     self.stack.push(attribute_value);
                 }
+                Instruction::StoreAttr(attribute) => {
+                    let object = self.pop_stack()?;
+                    let value = self.pop_stack()?;
+                    object.set_attribute(&attribute, value)?;
+                }
                 Instruction::Add => {
                     let right = self.pop_stack()?;
                     let left = self.pop_stack()?;

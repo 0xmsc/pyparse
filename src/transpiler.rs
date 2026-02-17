@@ -137,6 +137,10 @@ impl Transpiler {
                 target: AssignTarget::Index { .. },
                 ..
             } => {}
+            Statement::Assign {
+                target: AssignTarget::Attribute { .. },
+                ..
+            } => {}
             Statement::If {
                 then_body,
                 else_body,
@@ -173,6 +177,10 @@ impl Transpiler {
             }
             Statement::Assign {
                 target: AssignTarget::Index { .. },
+                ..
+            } => {}
+            Statement::Assign {
+                target: AssignTarget::Attribute { .. },
                 ..
             } => {}
             Statement::If {
@@ -218,6 +226,9 @@ impl Transpiler {
                 }
                 AssignTarget::Index { .. } => {
                     bail!("List index assignment is not supported in the transpiler");
+                }
+                AssignTarget::Attribute { .. } => {
+                    bail!("Attribute assignment is not supported in the transpiler");
                 }
             },
             Statement::While { condition, body } => {

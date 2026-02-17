@@ -24,6 +24,7 @@ pub enum Instruction {
     Sub,
     LessThan,
     LoadAttr(String),
+    StoreAttr(String),
     LoadIndex,
     StoreIndex(String),
     Call {
@@ -118,6 +119,11 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
                 code.extend(compile_expression(index)?);
                 code.extend(compile_expression(value)?);
                 code.push(Instruction::StoreIndex(name.to_string()));
+            }
+            AssignTarget::Attribute { object, name } => {
+                code.extend(compile_expression(value)?);
+                code.extend(compile_expression(object)?);
+                code.push(Instruction::StoreAttr(name.to_string()));
             }
         },
         Statement::If {
@@ -509,6 +515,29 @@ mod tests {
                 Instruction::LoadIndex,
                 Instruction::Call { argc: 1 },
                 Instruction::Pop
+            ]
+        );
+    }
+
+    #[test]
+    fn compiles_attribute_assignment() {
+        let program = Program {
+            statements: vec![Statement::Assign {
+                target: AssignTarget::Attribute {
+                    object: Expression::Identifier("obj".to_string()),
+                    name: "value".to_string(),
+                },
+                value: Expression::Integer(7),
+            }],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::PushInt(7),
+                Instruction::LoadName("obj".to_string()),
+                Instruction::StoreAttr("value".to_string())
             ]
         );
     }

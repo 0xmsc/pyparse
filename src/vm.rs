@@ -179,6 +179,57 @@ mod tests {
     }
 
     #[test]
+    fn supports_instance_attribute_assignment() {
+        let value_attr = Expression::Attribute {
+            object: Box::new(Expression::Identifier("b".to_string())),
+            name: "value".to_string(),
+        };
+        let program = Program {
+            statements: vec![
+                Statement::ClassDef {
+                    name: "Box".to_string(),
+                    body: vec![Statement::FunctionDef {
+                        name: "__init__".to_string(),
+                        params: vec!["self".to_string(), "value".to_string()],
+                        body: vec![Statement::Assign {
+                            target: AssignTarget::Attribute {
+                                object: Expression::Identifier("self".to_string()),
+                                name: "value".to_string(),
+                            },
+                            value: Expression::Identifier("value".to_string()),
+                        }],
+                    }],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("b".to_string()),
+                    value: call("Box", vec![Expression::Integer(7)]),
+                },
+                Statement::Expr(call("print", vec![value_attr.clone()])),
+                Statement::Assign {
+                    target: AssignTarget::Attribute {
+                        object: Expression::Identifier("b".to_string()),
+                        name: "value".to_string(),
+                    },
+                    value: Expression::Integer(9),
+                },
+                Statement::Expr(call("print", vec![value_attr])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                7
+                9
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
     fn errors_on_calling_or_reading_undefined_name() {
         let missing_call_program = Program {
             statements: vec![Statement::Expr(call("missing", vec![]))],

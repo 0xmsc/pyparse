@@ -871,6 +871,9 @@ fn define_function(
             Instruction::LoadAttr(_) => {
                 bail!("Attribute access is not supported in the JIT backend");
             }
+            Instruction::StoreAttr(_) => {
+                bail!("Attribute assignment is not supported in the JIT backend");
+            }
             Instruction::Call { .. } => {
                 bail!("Generic calls are not supported in the JIT backend");
             }
@@ -1056,6 +1059,7 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::LoadIndex => -1,
         Instruction::StoreIndex(_) => -2,
+        Instruction::StoreAttr(_) => -2,
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,
         Instruction::Jump(_) | Instruction::Return => 0,
         Instruction::ReturnValue => -1,

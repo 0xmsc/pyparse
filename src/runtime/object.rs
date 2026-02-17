@@ -27,6 +27,17 @@ pub(crate) trait RuntimeObject: std::fmt::Debug + Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError>;
+    fn set_attribute(
+        &mut self,
+        _receiver: ObjectRef,
+        attribute: &str,
+        _value: Value,
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: self.type_name().to_string(),
+        })
+    }
     fn invoke(
         &self,
         receiver: ObjectRef,
