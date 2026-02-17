@@ -56,14 +56,14 @@ impl<'a> Parser<'a> {
     /// - `if True:\n    pass\n`
     /// - `print(x)\n`
     fn parse_statement(&mut self) -> ParseResult<Statement> {
-        match (self.current_kind(), self.peek_kind()) {
-            (TokenKind::Class, _) => self.parse_class_def(),
-            (TokenKind::Def, _) => self.parse_function_def(),
-            (TokenKind::If, _) => self.parse_if(),
-            (TokenKind::While, _) => self.parse_while(),
-            (TokenKind::Return, _) => self.parse_return(),
-            (TokenKind::Pass, _) => self.parse_pass(),
-            (TokenKind::Identifier(_), _) => self.parse_identifier_led_statement(),
+        match self.current_kind() {
+            TokenKind::Class => self.parse_class_def(),
+            TokenKind::Def => self.parse_function_def(),
+            TokenKind::If => self.parse_if(),
+            TokenKind::While => self.parse_while(),
+            TokenKind::Return => self.parse_return(),
+            TokenKind::Pass => self.parse_pass(),
+            TokenKind::Identifier(_) => self.parse_identifier_led_statement(),
             _ => self.parse_expression_statement(),
         }
     }
@@ -427,13 +427,6 @@ impl<'a> Parser<'a> {
 
     fn current_span(&self) -> Span {
         self.tokens[self.pos].span
-    }
-
-    fn peek_kind(&self) -> TokenKind<'a> {
-        self.tokens
-            .get(self.pos + 1)
-            .map(|token| token.kind)
-            .unwrap_or(TokenKind::EOF)
     }
 
     fn error(&self, expected: &'static str) -> ParseError {
