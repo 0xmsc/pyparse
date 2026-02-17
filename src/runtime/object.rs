@@ -22,33 +22,20 @@ pub(crate) type BoundMethodCallable =
 
 pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
 
-type GetAttributeSlot = fn(ObjectRef, &str) -> Result<Value, RuntimeError>;
-type SetAttributeSlot = fn(ObjectRef, &str, Value) -> Result<(), RuntimeError>;
-type CallSlot = fn(ObjectRef, &mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError>;
+pub(crate) type GetAttributeSlot = fn(ObjectRef, &str) -> Result<Value, RuntimeError>;
+pub(crate) type SetAttributeSlot = fn(ObjectRef, &str, Value) -> Result<(), RuntimeError>;
+pub(crate) type CallSlot =
+    fn(ObjectRef, &mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError>;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TypeObject {
-    name: &'static str,
-    get_attribute: GetAttributeSlot,
-    set_attribute: SetAttributeSlot,
-    call: CallSlot,
+    pub(crate) name: &'static str,
+    pub(crate) get_attribute: GetAttributeSlot,
+    pub(crate) set_attribute: SetAttributeSlot,
+    pub(crate) call: CallSlot,
 }
 
 impl TypeObject {
-    pub(crate) const fn new(
-        name: &'static str,
-        get_attribute: GetAttributeSlot,
-        set_attribute: SetAttributeSlot,
-        call: CallSlot,
-    ) -> Self {
-        Self {
-            name,
-            get_attribute,
-            set_attribute,
-            call,
-        }
-    }
-
     pub(crate) fn name(&self) -> &'static str {
         self.name
     }

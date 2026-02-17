@@ -36,12 +36,12 @@ impl RuntimeObject for BoolObject {
     }
 }
 
-static BOOL_TYPE: TypeObject = TypeObject::new(
-    "bool",
-    bool_get_attribute,
-    unsupported_attribute_assignment,
-    object_not_callable,
-);
+static BOOL_TYPE: TypeObject = TypeObject {
+    name: "bool",
+    get_attribute: bool_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: object_not_callable,
+};
 
 fn bool_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     let value = {

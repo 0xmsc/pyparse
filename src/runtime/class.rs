@@ -71,19 +71,19 @@ impl RuntimeObject for InstanceObject {
     }
 }
 
-static CLASS_TYPE: TypeObject = TypeObject::new(
-    "type",
-    class_get_attribute,
-    unsupported_attribute_assignment,
-    class_call,
-);
+static CLASS_TYPE: TypeObject = TypeObject {
+    name: "type",
+    get_attribute: class_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: class_call,
+};
 
-static INSTANCE_TYPE: TypeObject = TypeObject::new(
-    "instance",
-    instance_get_attribute,
-    instance_set_attribute,
-    object_not_callable,
-);
+static INSTANCE_TYPE: TypeObject = TypeObject {
+    name: "instance",
+    get_attribute: instance_get_attribute,
+    set_attribute: instance_set_attribute,
+    call: object_not_callable,
+};
 
 fn class_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     match attribute {

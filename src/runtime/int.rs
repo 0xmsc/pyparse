@@ -68,12 +68,12 @@ impl RuntimeObject for IntObject {
     }
 }
 
-static INT_TYPE: TypeObject = TypeObject::new(
-    "int",
-    int_get_attribute,
-    unsupported_attribute_assignment,
-    object_not_callable,
-);
+static INT_TYPE: TypeObject = TypeObject {
+    name: "int",
+    get_attribute: int_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: object_not_callable,
+};
 
 fn int_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     match attribute {

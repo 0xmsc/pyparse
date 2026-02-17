@@ -36,12 +36,12 @@ impl RuntimeObject for StringObject {
     }
 }
 
-static STRING_TYPE: TypeObject = TypeObject::new(
-    "str",
-    string_get_attribute,
-    unsupported_attribute_assignment,
-    object_not_callable,
-);
+static STRING_TYPE: TypeObject = TypeObject {
+    name: "str",
+    get_attribute: string_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: object_not_callable,
+};
 
 fn string_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     let value = {

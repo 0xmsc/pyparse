@@ -30,12 +30,12 @@ impl RuntimeObject for NoneObject {
     }
 }
 
-static NONE_TYPE: TypeObject = TypeObject::new(
-    "NoneType",
-    none_get_attribute,
-    unsupported_attribute_assignment,
-    object_not_callable,
-);
+static NONE_TYPE: TypeObject = TypeObject {
+    name: "NoneType",
+    get_attribute: none_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: object_not_callable,
+};
 
 fn none_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     match attribute {

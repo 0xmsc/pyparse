@@ -74,12 +74,12 @@ impl RuntimeObject for ListObject {
     }
 }
 
-static LIST_TYPE: TypeObject = TypeObject::new(
-    "list",
-    list_get_attribute,
-    unsupported_attribute_assignment,
-    object_not_callable,
-);
+static LIST_TYPE: TypeObject = TypeObject {
+    name: "list",
+    get_attribute: list_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: object_not_callable,
+};
 
 fn list_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
     match attribute {

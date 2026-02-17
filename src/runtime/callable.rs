@@ -172,33 +172,33 @@ impl RuntimeObject for MethodWrapperObject {
     }
 }
 
-static BUILTIN_FUNCTION_TYPE: TypeObject = TypeObject::new(
-    "builtin_function_or_method",
-    builtin_function_get_attribute,
-    unsupported_attribute_assignment,
-    builtin_function_call,
-);
+static BUILTIN_FUNCTION_TYPE: TypeObject = TypeObject {
+    name: "builtin_function_or_method",
+    get_attribute: builtin_function_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: builtin_function_call,
+};
 
-static FUNCTION_TYPE: TypeObject = TypeObject::new(
-    "function",
-    function_get_attribute,
-    unsupported_attribute_assignment,
-    function_call,
-);
+static FUNCTION_TYPE: TypeObject = TypeObject {
+    name: "function",
+    get_attribute: function_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: function_call,
+};
 
-static BOUND_METHOD_TYPE: TypeObject = TypeObject::new(
-    "method",
-    bound_method_get_attribute,
-    unsupported_attribute_assignment,
-    bound_method_call,
-);
+static BOUND_METHOD_TYPE: TypeObject = TypeObject {
+    name: "method",
+    get_attribute: bound_method_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: bound_method_call,
+};
 
-static METHOD_WRAPPER_TYPE: TypeObject = TypeObject::new(
-    "method-wrapper",
-    method_wrapper_get_attribute,
-    unsupported_attribute_assignment,
-    method_wrapper_call,
-);
+static METHOD_WRAPPER_TYPE: TypeObject = TypeObject {
+    name: "method-wrapper",
+    get_attribute: method_wrapper_get_attribute,
+    set_attribute: unsupported_attribute_assignment,
+    call: method_wrapper_call,
+};
 
 fn builtin_function_get_attribute(
     receiver: ObjectRef,
