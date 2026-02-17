@@ -1,3 +1,6 @@
-- [x] Split VM runtime internals from `src/vm.rs` into `src/vm/runtime.rs`.
-- [x] Keep `VM` backend wiring and tests passing with the new runtime module.
-- [x] Run `just lint` and `just test` to verify no behavioral changes.
+- [x] Create feature branch and checkpoint commit before type-slot refactor.
+- [x] Introduce runtime `TypeObject` slot model (`getattr`, `setattr`, `call`) and make it available from all runtime objects.
+- [x] Route `Value` attribute/call dispatch through type slots instead of direct `RuntimeObject` behavior methods.
+- [x] Port builtins, scalars, list, callable wrappers, class, and instance runtime implementations to slot handlers.
+- [x] Update VM/interpreter integration code for the new runtime interfaces and fix compile errors.
+- [x] Run `just test` and `just lint`, then update TODO statuses.

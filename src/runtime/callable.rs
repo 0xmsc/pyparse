@@ -1,7 +1,10 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::method::bound_method;
-use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, RuntimeObject};
+use crate::runtime::object::{
+    BoundMethodCallable, CallContext, ObjectRef, RuntimeObject, TypeObject, unknown_attribute,
+    unsupported_attribute_assignment,
+};
 use crate::runtime::value::Value;
 use std::any::Any;
 use std::fmt;
@@ -74,11 +77,46 @@ impl fmt::Debug for MethodWrapperObject {
     }
 }
 
-impl RuntimeObject for BuiltinFunctionObject {
-    fn type_name(&self) -> &'static str {
-        "builtin_function_or_method"
-    }
+fn with_builtin_function<R>(
+    receiver: &ObjectRef,
+    f: impl FnOnce(&BuiltinFunctionObject) -> R,
+) -> R {
+    let object = receiver.borrow();
+    let builtin = object
+        .as_any()
+        .downcast_ref::<BuiltinFunctionObject>()
+        .expect("builtin function receiver must be BuiltinFunctionObject");
+    f(builtin)
+}
 
+fn with_function<R>(receiver: &ObjectRef, f: impl FnOnce(&FunctionObject) -> R) -> R {
+    let object = receiver.borrow();
+    let function = object
+        .as_any()
+        .downcast_ref::<FunctionObject>()
+        .expect("function receiver must be FunctionObject");
+    f(function)
+}
+
+fn with_bound_method<R>(receiver: &ObjectRef, f: impl FnOnce(&BoundMethodObject) -> R) -> R {
+    let object = receiver.borrow();
+    let method = object
+        .as_any()
+        .downcast_ref::<BoundMethodObject>()
+        .expect("bound method receiver must be BoundMethodObject");
+    f(method)
+}
+
+fn with_method_wrapper<R>(receiver: &ObjectRef, f: impl FnOnce(&MethodWrapperObject) -> R) -> R {
+    let object = receiver.borrow();
+    let method_wrapper = object
+        .as_any()
+        .downcast_ref::<MethodWrapperObject>()
+        .expect("method wrapper receiver must be MethodWrapperObject");
+    f(method_wrapper)
+}
+
+impl RuntimeObject for BuiltinFunctionObject {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -87,45 +125,12 @@ impl RuntimeObject for BuiltinFunctionObject {
         self
     }
 
-    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        match attribute {
-            "__call__" => {
-                let builtin = self.builtin;
-                Ok(bound_method(move |context, args| {
-                    context.call_builtin(builtin, args)
-                }))
-            }
-            "__str__" | "__repr__" => {
-                let method = attribute.to_string();
-                Ok(bound_method(move |_context, args| {
-                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                    Ok(Value::string_object("<built-in function>".to_string()))
-                }))
-            }
-            _ => Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: "builtin_function_or_method".to_string(),
-            }),
-        }
-    }
-
-    fn invoke(
-        &self,
-        _receiver: ObjectRef,
-        _context: &mut dyn CallContext,
-        _args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        Err(RuntimeError::ObjectNotCallable {
-            type_name: self.type_name().to_string(),
-        })
+    fn type_object(&self) -> &'static TypeObject {
+        &BUILTIN_FUNCTION_TYPE
     }
 }
 
 impl RuntimeObject for FunctionObject {
-    fn type_name(&self) -> &'static str {
-        "function"
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -134,46 +139,12 @@ impl RuntimeObject for FunctionObject {
         self
     }
 
-    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        match attribute {
-            "__call__" => {
-                let function_name = self.name.clone();
-                Ok(bound_method(move |context, args| {
-                    context.call_function_named(&function_name, args)
-                }))
-            }
-            "__str__" | "__repr__" => {
-                let method = attribute.to_string();
-                let rendered = format!("<function {}>", self.name());
-                Ok(bound_method(move |_context, args| {
-                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                    Ok(Value::string_object(rendered.clone()))
-                }))
-            }
-            _ => Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: "function".to_string(),
-            }),
-        }
-    }
-
-    fn invoke(
-        &self,
-        _receiver: ObjectRef,
-        _context: &mut dyn CallContext,
-        _args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        Err(RuntimeError::ObjectNotCallable {
-            type_name: self.type_name().to_string(),
-        })
+    fn type_object(&self) -> &'static TypeObject {
+        &FUNCTION_TYPE
     }
 }
 
 impl RuntimeObject for BoundMethodObject {
-    fn type_name(&self) -> &'static str {
-        "method"
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -182,42 +153,12 @@ impl RuntimeObject for BoundMethodObject {
         self
     }
 
-    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        match attribute {
-            "__call__" => {
-                let callable = self.callable();
-                Ok(Value::method_wrapper_object(callable))
-            }
-            "__str__" | "__repr__" => {
-                let method = attribute.to_string();
-                Ok(bound_method(move |_context, args| {
-                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                    Ok(Value::string_object("<bound method>".to_string()))
-                }))
-            }
-            _ => Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: "method".to_string(),
-            }),
-        }
-    }
-
-    fn invoke(
-        &self,
-        _receiver: ObjectRef,
-        context: &mut dyn CallContext,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        let callable = self.callable();
-        callable(context, args)
+    fn type_object(&self) -> &'static TypeObject {
+        &BOUND_METHOD_TYPE
     }
 }
 
 impl RuntimeObject for MethodWrapperObject {
-    fn type_name(&self) -> &'static str {
-        "method-wrapper"
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -226,37 +167,156 @@ impl RuntimeObject for MethodWrapperObject {
         self
     }
 
-    fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
-        match attribute {
-            "__call__" => {
-                let callable = self.callable();
-                Ok(Value::method_wrapper_object(callable))
-            }
-            "__str__" | "__repr__" => {
-                let method = attribute.to_string();
-                Ok(bound_method(move |_context, args| {
-                    RuntimeError::expect_method_arity(&method, 0, args.len())?;
-                    Ok(Value::string_object(
-                        "<method-wrapper '__call__'>".to_string(),
-                    ))
-                }))
-            }
-            _ => Err(RuntimeError::UnknownAttribute {
-                attribute: attribute.to_string(),
-                type_name: "method-wrapper".to_string(),
-            }),
-        }
+    fn type_object(&self) -> &'static TypeObject {
+        &METHOD_WRAPPER_TYPE
     }
+}
 
-    fn invoke(
-        &self,
-        _receiver: ObjectRef,
-        context: &mut dyn CallContext,
-        args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        let callable = self.callable();
-        callable(context, args)
+static BUILTIN_FUNCTION_TYPE: TypeObject = TypeObject::new(
+    "builtin_function_or_method",
+    builtin_function_get_attribute,
+    unsupported_attribute_assignment,
+    builtin_function_call,
+);
+
+static FUNCTION_TYPE: TypeObject = TypeObject::new(
+    "function",
+    function_get_attribute,
+    unsupported_attribute_assignment,
+    function_call,
+);
+
+static BOUND_METHOD_TYPE: TypeObject = TypeObject::new(
+    "method",
+    bound_method_get_attribute,
+    unsupported_attribute_assignment,
+    bound_method_call,
+);
+
+static METHOD_WRAPPER_TYPE: TypeObject = TypeObject::new(
+    "method-wrapper",
+    method_wrapper_get_attribute,
+    unsupported_attribute_assignment,
+    method_wrapper_call,
+);
+
+fn builtin_function_get_attribute(
+    receiver: ObjectRef,
+    attribute: &str,
+) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__call__" => {
+            let builtin = with_builtin_function(&receiver, |builtin| builtin.builtin);
+            Ok(bound_method(move |context, args| {
+                context.call_builtin(builtin, args)
+            }))
+        }
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object("<built-in function>".to_string()))
+            }))
+        }
+        _ => unknown_attribute(receiver, attribute),
     }
+}
+
+fn builtin_function_call(
+    receiver: ObjectRef,
+    context: &mut dyn CallContext,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let builtin = with_builtin_function(&receiver, |builtin| builtin.builtin);
+    context.call_builtin(builtin, args)
+}
+
+fn function_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__call__" => {
+            let function_name = with_function(&receiver, |function| function.name.clone());
+            Ok(bound_method(move |context, args| {
+                context.call_function_named(&function_name, args)
+            }))
+        }
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            let rendered = with_function(&receiver, |function| {
+                format!("<function {}>", function.name())
+            });
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object(rendered.clone()))
+            }))
+        }
+        _ => unknown_attribute(receiver, attribute),
+    }
+}
+
+fn function_call(
+    receiver: ObjectRef,
+    context: &mut dyn CallContext,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let function_name = with_function(&receiver, |function| function.name.clone());
+    context.call_function_named(&function_name, args)
+}
+
+fn bound_method_get_attribute(receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__call__" => {
+            let callable = with_bound_method(&receiver, BoundMethodObject::callable);
+            Ok(Value::method_wrapper_object(callable))
+        }
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object("<bound method>".to_string()))
+            }))
+        }
+        _ => unknown_attribute(receiver, attribute),
+    }
+}
+
+fn bound_method_call(
+    receiver: ObjectRef,
+    context: &mut dyn CallContext,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let callable = with_bound_method(&receiver, BoundMethodObject::callable);
+    callable(context, args)
+}
+
+fn method_wrapper_get_attribute(
+    receiver: ObjectRef,
+    attribute: &str,
+) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__call__" => {
+            let callable = with_method_wrapper(&receiver, MethodWrapperObject::callable);
+            Ok(Value::method_wrapper_object(callable))
+        }
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object(
+                    "<method-wrapper '__call__'>".to_string(),
+                ))
+            }))
+        }
+        _ => unknown_attribute(receiver, attribute),
+    }
+}
+
+fn method_wrapper_call(
+    receiver: ObjectRef,
+    context: &mut dyn CallContext,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let callable = with_method_wrapper(&receiver, MethodWrapperObject::callable);
+    callable(context, args)
 }
 
 #[cfg(test)]

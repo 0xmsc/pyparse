@@ -40,7 +40,7 @@ impl Value {
     }
 
     pub(crate) fn type_name(&self) -> &'static str {
-        self.object.borrow().type_name()
+        self.object.borrow().type_object().name()
     }
 
     pub(crate) fn to_output(&self) -> String {
@@ -92,15 +92,13 @@ impl Value {
     }
 
     pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
-        self.object
-            .borrow()
-            .get_attribute(self.object_ref(), attribute)
+        let type_object = { self.object.borrow().type_object() };
+        type_object.get_attribute(self.object_ref(), attribute)
     }
 
     pub(crate) fn set_attribute(&self, attribute: &str, value: Value) -> Result<(), RuntimeError> {
-        self.object
-            .borrow_mut()
-            .set_attribute(self.object_ref(), attribute, value)
+        let type_object = { self.object.borrow().type_object() };
+        type_object.set_attribute(self.object_ref(), attribute, value)
     }
 
     pub(crate) fn call(
@@ -108,15 +106,8 @@ impl Value {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let callee = self
-            .get_attribute("__call__")
-            .map_err(|error| match error {
-                RuntimeError::UnknownAttribute { .. } => RuntimeError::ObjectNotCallable {
-                    type_name: self.type_name().to_string(),
-                },
-                other => other,
-            })?;
-        self.call_bound_method(callee, context, args, "__call__")
+        let type_object = { self.object.borrow().type_object() };
+        type_object.call(self.object_ref(), context, args)
     }
 
     pub(crate) fn add(
