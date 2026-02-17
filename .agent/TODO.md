@@ -1,7 +1,3 @@
-- [x] Add `DefineFunction` bytecode instruction and emit it for top-level `def` statements.
-- [x] Execute `DefineFunction` in VM and remove lazy function fallback from `LoadName`.
-- [x] Make interpreter bind `def` at statement execution time (no function lookup fallback in identifier eval).
-- [x] Keep class method/class fixture behavior working with unified runtime definition semantics.
-- [x] Update affected unit tests for new bytecode/interpreter binding behavior.
-- [x] Run `just lint` and `just test`.
-- [ ] Introduce class-body temporary namespace execution and remove `mangle_class_method_name` indirection.
+- [x] Split VM runtime internals from `src/vm.rs` into `src/vm/runtime.rs`.
+- [x] Keep `VM` backend wiring and tests passing with the new runtime module.
+- [x] Run `just lint` and `just test` to verify no behavioral changes.

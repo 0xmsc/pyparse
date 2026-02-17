@@ -1,0 +1,360 @@
+use std::collections::HashMap;
+
+use crate::builtins::BuiltinFunction;
+use crate::bytecode::{CompiledProgram, Instruction};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallContext;
+use crate::runtime::value::Value;
+use thiserror::Error;
+
+pub(super) type VmResult<T> = std::result::Result<T, VmError>;
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub(super) enum VmError {
+    #[error("Stack underflow")]
+    StackUnderflow,
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+    #[error("Invalid jump target")]
+    InvalidJumpTarget,
+}
+
+pub(super) fn run_compiled_program(
+    program: &CompiledProgram,
+    globals: &mut HashMap<String, Value>,
+) -> VmResult<String> {
+    let mut runtime = VmRuntime::new(program);
+    let mut environment = Environment::top_level(globals);
+    runtime.execute_code(&program.main, &mut environment)?;
+    Ok(runtime.output_string())
+}
+
+struct VmRuntime<'a> {
+    program: &'a CompiledProgram,
+    output: Vec<String>,
+    stack: Vec<Value>,
+}
+
+struct VmCallContext<'runtime, 'program, 'env> {
+    runtime: &'runtime mut VmRuntime<'program>,
+    environment: &'runtime mut Environment<'env>,
+}
+
+impl CallContext for VmCallContext<'_, '_, '_> {
+    fn call_builtin(
+        &mut self,
+        builtin: BuiltinFunction,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match builtin {
+            BuiltinFunction::Print => {
+                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                self.runtime.output.push(rendered.join(" "));
+                Ok(Value::none_object())
+            }
+            BuiltinFunction::Len => {
+                RuntimeError::expect_function_arity("len", 1, args.len())?;
+                args[0].len()
+            }
+        }
+    }
+
+    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        let function = self
+            .runtime
+            .program
+            .functions
+            .get(name)
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: name.to_string(),
+            })?
+            .clone();
+        RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
+        let mut locals_map = HashMap::new();
+        for (param, value) in function.params.iter().zip(args) {
+            locals_map.insert(param.to_string(), value);
+        }
+        let mut child_environment = self.environment.child_with_locals(&mut locals_map);
+        let parent_stack = std::mem::take(&mut self.runtime.stack);
+        let result = self
+            .runtime
+            .execute_code(&function.code, &mut child_environment);
+        self.runtime.stack = parent_stack;
+        result.map_err(map_vm_error_to_runtime_error)
+    }
+}
+
+impl<'a> VmRuntime<'a> {
+    fn new(program: &'a CompiledProgram) -> Self {
+        Self {
+            program,
+            output: Vec::new(),
+            stack: Vec::new(),
+        }
+    }
+
+    fn output_string(self) -> String {
+        self.output.join("\n")
+    }
+
+    fn execute_code(
+        &mut self,
+        code: &[Instruction],
+        environment: &mut Environment<'_>,
+    ) -> VmResult<Value> {
+        let mut ip = 0;
+        loop {
+            let instruction = match code.get(ip) {
+                Some(instruction) => instruction.clone(),
+                None => return Ok(Value::none_object()),
+            };
+            ip += 1;
+            match instruction {
+                Instruction::PushInt(value) => self.stack.push(Value::int_object(value)),
+                Instruction::PushBool(value) => self.stack.push(Value::bool_object(value)),
+                Instruction::PushString(value) => self.stack.push(Value::string_object(value)),
+                Instruction::BuildList(count) => {
+                    let mut values = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let value = self.pop_stack()?;
+                        values.push(value);
+                    }
+                    values.reverse();
+                    self.stack.push(Value::list_object(values));
+                }
+                Instruction::PushNone => self.stack.push(Value::none_object()),
+                Instruction::LoadName(name) => {
+                    let value = if let Some(value) = environment.load(&name).cloned() {
+                        value
+                    } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
+                        Value::builtin_function_object(builtin)
+                    } else {
+                        return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
+                    };
+                    self.stack.push(value);
+                }
+                Instruction::DefineFunction { name, symbol } => {
+                    if !self.program.functions.contains_key(&symbol) {
+                        return Err(RuntimeError::UndefinedFunction { name: symbol }.into());
+                    }
+                    environment.store(name, Value::function_object(symbol));
+                }
+                Instruction::StoreName(name) => {
+                    let value = self.pop_stack()?;
+                    environment.store(name, value);
+                }
+                Instruction::DefineClass { name, methods } => {
+                    let methods = methods
+                        .into_iter()
+                        .map(|(method_name, symbol)| (method_name, Value::function_object(symbol)))
+                        .collect::<HashMap<_, _>>();
+                    let class_value = Value::class_object(name.clone(), methods);
+                    environment.store(name, class_value);
+                }
+                Instruction::LoadAttr(attribute) => {
+                    let object = self.pop_stack()?;
+                    let attribute_value = object.get_attribute(&attribute)?;
+                    self.stack.push(attribute_value);
+                }
+                Instruction::Add => {
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
+                    let callee = left.get_attribute("__add__").map_err(|error| match error {
+                        RuntimeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
+                            operation: "__add__".to_string(),
+                            type_name,
+                        }),
+                        other => VmError::from(other),
+                    })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
+                    self.stack.push(result);
+                }
+                Instruction::Sub => {
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
+                    let callee = left.get_attribute("__sub__").map_err(|error| match error {
+                        RuntimeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
+                            operation: "__sub__".to_string(),
+                            type_name,
+                        }),
+                        other => VmError::from(other),
+                    })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
+                    self.stack.push(result);
+                }
+                Instruction::LessThan => {
+                    let right = self.pop_stack()?;
+                    let left = self.pop_stack()?;
+                    let callee = left.get_attribute("__lt__").map_err(|error| match error {
+                        RuntimeError::UnknownAttribute {
+                            attribute: _,
+                            type_name,
+                        } => VmError::from(RuntimeError::UnsupportedOperation {
+                            operation: "__lt__".to_string(),
+                            type_name,
+                        }),
+                        other => VmError::from(other),
+                    })?;
+                    let result = self.call_value(callee, vec![right], environment)?;
+                    self.stack.push(result);
+                }
+                Instruction::LoadIndex => {
+                    let index_value = self.pop_stack()?;
+                    let object_value = self.pop_stack()?;
+                    let callee =
+                        object_value
+                            .get_attribute("__getitem__")
+                            .map_err(|error| match error {
+                                RuntimeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => VmError::from(RuntimeError::UnsupportedOperation {
+                                    operation: "__getitem__".to_string(),
+                                    type_name,
+                                }),
+                                other => VmError::from(other),
+                            })?;
+                    let value = self.call_value(callee, vec![index_value], environment)?;
+                    self.stack.push(value);
+                }
+                Instruction::StoreIndex(name) => {
+                    let value = self.pop_stack()?;
+                    let index_value = self.pop_stack()?;
+                    let target = environment
+                        .load(&name)
+                        .cloned()
+                        .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
+                    let callee =
+                        target
+                            .get_attribute("__setitem__")
+                            .map_err(|error| match error {
+                                RuntimeError::UnknownAttribute {
+                                    attribute: _,
+                                    type_name,
+                                } => VmError::from(RuntimeError::UnsupportedOperation {
+                                    operation: "__setitem__".to_string(),
+                                    type_name,
+                                }),
+                                other => VmError::from(other),
+                            })?;
+                    self.call_value(callee, vec![index_value, value], environment)?;
+                }
+                Instruction::Call { argc } => {
+                    let mut args = Vec::with_capacity(argc);
+                    for _ in 0..argc {
+                        let value = self.pop_stack()?;
+                        args.push(value);
+                    }
+                    args.reverse();
+                    let callee = self.pop_stack()?;
+                    let value = self.call_value(callee, args, environment)?;
+                    self.stack.push(value);
+                }
+                Instruction::JumpIfFalse(target) => {
+                    let value = self.pop_stack()?;
+                    if !value.is_truthy() {
+                        let next_ip = (ip as isize) + target;
+                        if next_ip < 0 || (next_ip as usize) > code.len() {
+                            return Err(VmError::InvalidJumpTarget);
+                        }
+                        ip = next_ip as usize;
+                    }
+                }
+                Instruction::Jump(target) => {
+                    let next_ip = (ip as isize) + target;
+                    if next_ip < 0 || (next_ip as usize) > code.len() {
+                        return Err(VmError::InvalidJumpTarget);
+                    }
+                    ip = next_ip as usize;
+                }
+                Instruction::Pop => {
+                    self.pop_stack()?;
+                }
+                Instruction::Return => return Ok(Value::none_object()),
+                Instruction::ReturnValue => {
+                    let value = self.pop_stack()?;
+                    return Ok(value);
+                }
+            }
+        }
+    }
+
+    fn pop_stack(&mut self) -> VmResult<Value> {
+        self.stack.pop().ok_or(VmError::StackUnderflow)
+    }
+
+    fn call_value(
+        &mut self,
+        callee: Value,
+        args: Vec<Value>,
+        environment: &mut Environment<'_>,
+    ) -> VmResult<Value> {
+        let mut context = VmCallContext {
+            runtime: self,
+            environment,
+        };
+        callee.call(&mut context, args).map_err(Into::into)
+    }
+}
+
+struct Environment<'a> {
+    globals: &'a mut HashMap<String, Value>,
+    locals: Option<&'a mut HashMap<String, Value>>,
+}
+
+impl<'a> Environment<'a> {
+    fn top_level(globals: &'a mut HashMap<String, Value>) -> Self {
+        Self {
+            globals,
+            locals: None,
+        }
+    }
+
+    fn with_locals(
+        globals: &'a mut HashMap<String, Value>,
+        locals: &'a mut HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            globals,
+            locals: Some(locals),
+        }
+    }
+
+    fn load(&self, name: &str) -> Option<&Value> {
+        if let Some(locals) = self.locals.as_deref()
+            && let Some(value) = locals.get(name)
+        {
+            return Some(value);
+        }
+        self.globals.get(name)
+    }
+
+    fn store(&mut self, name: String, value: Value) {
+        if let Some(locals) = self.locals.as_deref_mut() {
+            locals.insert(name, value);
+        } else {
+            self.globals.insert(name, value);
+        }
+    }
+
+    fn child_with_locals<'b>(
+        &'b mut self,
+        locals: &'b mut HashMap<String, Value>,
+    ) -> Environment<'b> {
+        Environment::with_locals(self.globals, locals)
+    }
+}
+
+fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
+    match error {
+        VmError::StackUnderflow => panic!("stack underflow while calling function"),
+        VmError::Runtime(error) => error,
+        VmError::InvalidJumpTarget => panic!("invalid jump target while calling function"),
+    }
+}
