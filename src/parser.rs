@@ -113,14 +113,14 @@ impl<'a> Parser<'a> {
     fn parse_identifier_led_statement(&mut self) -> ParseResult<Statement> {
         let expr = self.parse_expression()?;
         if !matches!(self.current_kind(), TokenKind::Equal) {
-            self.expect_token(TokenKind::Newline, "newline")?;
+            self.expect_statement_terminator()?;
             return Ok(Statement::Expr(expr));
         }
 
         let target = self.assignment_target(expr)?;
         self.expect_token(TokenKind::Equal, "=")?;
         let value = self.parse_expression()?;
-        self.expect_token(TokenKind::Newline, "newline")?;
+        self.expect_statement_terminator()?;
         Ok(Statement::Assign { target, value })
     }
 
@@ -146,7 +146,7 @@ impl<'a> Parser<'a> {
     /// Examples: `print(x)\n`, `f(1, 2)\n`, `values[0]\n`.
     fn parse_expression_statement(&mut self) -> ParseResult<Statement> {
         let expr = self.parse_expression()?;
-        self.expect_token(TokenKind::Newline, "newline")?;
+        self.expect_statement_terminator()?;
         Ok(Statement::Expr(expr))
     }
 
@@ -199,11 +199,15 @@ impl<'a> Parser<'a> {
     /// Examples: `return\n`, `return a + b\n`.
     fn parse_return(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Return, "return")?;
-        if self.try_consume(TokenKind::Newline) {
+        if matches!(
+            self.current_kind(),
+            TokenKind::Newline | TokenKind::Dedent | TokenKind::EOF
+        ) {
+            self.expect_statement_terminator()?;
             return Ok(Statement::Return(None));
         }
         let value = self.parse_expression()?;
-        self.expect_token(TokenKind::Newline, "newline")?;
+        self.expect_statement_terminator()?;
         Ok(Statement::Return(Some(value)))
     }
 
@@ -211,7 +215,7 @@ impl<'a> Parser<'a> {
     /// Example: `pass\n`.
     fn parse_pass(&mut self) -> ParseResult<Statement> {
         self.expect_token(TokenKind::Pass, "pass")?;
-        self.expect_token(TokenKind::Newline, "newline")?;
+        self.expect_statement_terminator()?;
         Ok(Statement::Pass)
     }
 
@@ -306,7 +310,11 @@ impl<'a> Parser<'a> {
         }
         loop {
             identifiers.push(self.expect_identifier()?);
-            if !self.try_consume(TokenKind::Comma) {
+            if self.try_consume(TokenKind::Comma) {
+                if self.current_kind() == terminator {
+                    break;
+                }
+            } else {
                 break;
             }
         }
@@ -325,7 +333,11 @@ impl<'a> Parser<'a> {
         }
         loop {
             expressions.push(self.parse_expression()?);
-            if !self.try_consume(TokenKind::Comma) {
+            if self.try_consume(TokenKind::Comma) {
+                if self.current_kind() == terminator {
+                    break;
+                }
+            } else {
                 break;
             }
         }
@@ -365,6 +377,17 @@ impl<'a> Parser<'a> {
             consumed = true;
         }
         consumed
+    }
+
+    fn expect_statement_terminator(&mut self) -> ParseResult<()> {
+        match self.current_kind() {
+            TokenKind::Newline => {
+                self.advance();
+                Ok(())
+            }
+            TokenKind::Dedent | TokenKind::EOF => Ok(()),
+            _ => Err(self.error("newline")),
+        }
     }
 
     /// Parse an indented statement block between `Indent` and `Dedent`.
@@ -522,11 +545,14 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_newline_is_missing_after_statement() {
+    fn errors_when_statement_separator_is_missing() {
         let tokens = vec![
             tok(TokenKind::Identifier("x")),
             tok(TokenKind::Equal),
             tok(TokenKind::Integer(1)),
+            tok(TokenKind::Identifier("y")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(2)),
             tok(TokenKind::EOF),
         ];
 
@@ -535,9 +561,72 @@ mod tests {
             err,
             ParseError::UnexpectedToken {
                 expected: "newline",
-                found: "EOF".to_string(),
+                found: "Identifier(\"y\")".to_string(),
                 start: 0,
                 end: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_last_top_level_statement_without_trailing_newline() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::RParen),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![
+                    Statement::Assign {
+                        target: AssignTarget::Name("x".to_string()),
+                        value: Expression::Integer(1),
+                    },
+                    Statement::Expr(Expression::Call {
+                        callee: Box::new(Expression::Identifier("print".to_string())),
+                        args: vec![Expression::Identifier("x".to_string())],
+                    }),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_last_block_statement_without_trailing_newline() {
+        let tokens = vec![
+            tok(TokenKind::If),
+            tok(TokenKind::True),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::Equal),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::If {
+                    condition: Expression::Boolean(true),
+                    then_body: vec![Statement::Assign {
+                        target: AssignTarget::Name("x".to_string()),
+                        value: Expression::Integer(1),
+                    }],
+                    else_body: vec![],
+                }],
             }
         );
     }
@@ -666,6 +755,60 @@ mod tests {
     }
 
     #[test]
+    fn parses_trailing_commas_in_params_and_call_arguments() {
+        let tokens = vec![
+            tok(TokenKind::Def),
+            tok(TokenKind::Identifier("sum2")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("a")),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Identifier("b")),
+            tok(TokenKind::Comma),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Return),
+            tok(TokenKind::Identifier("a")),
+            tok(TokenKind::Plus),
+            tok(TokenKind::Identifier("b")),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Identifier("sum2")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Integer(2)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![
+                    Statement::FunctionDef {
+                        name: "sum2".to_string(),
+                        params: vec!["a".to_string(), "b".to_string()],
+                        body: vec![Statement::Return(Some(Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier("a".to_string())),
+                            op: BinaryOperator::Add,
+                            right: Box::new(Expression::Identifier("b".to_string())),
+                        }))],
+                    },
+                    Statement::Expr(Expression::Call {
+                        callee: Box::new(Expression::Identifier("sum2".to_string())),
+                        args: vec![Expression::Integer(1), Expression::Integer(2)],
+                    }),
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn parses_list_literal() {
         let tokens = vec![
             tok(TokenKind::Identifier("print")),
@@ -674,6 +817,37 @@ mod tests {
             tok(TokenKind::Integer(1)),
             tok(TokenKind::Comma),
             tok(TokenKind::Integer(2)),
+            tok(TokenKind::RBracket),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Expr(Expression::Call {
+                    callee: Box::new(Expression::Identifier("print".to_string())),
+                    args: vec![Expression::List(vec![
+                        Expression::Integer(1),
+                        Expression::Integer(2),
+                    ])],
+                })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_list_literal_with_trailing_comma() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::LBracket),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::Integer(2)),
+            tok(TokenKind::Comma),
             tok(TokenKind::RBracket),
             tok(TokenKind::RParen),
             tok(TokenKind::Newline),
