@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::CallContext;
 
 use super::{Function, InterpreterError, Value};
@@ -11,59 +12,6 @@ use super::{Function, InterpreterError, Value};
 pub(super) enum ExecResult {
     Continue,
     Return(Value),
-}
-
-/// Scoped variable environment with shared globals and optional function locals.
-pub(super) struct Environment<'a> {
-    globals: &'a mut HashMap<String, Value>,
-    locals: Option<&'a mut HashMap<String, Value>>,
-}
-
-impl<'a> Environment<'a> {
-    pub(super) fn top_level(globals: &'a mut HashMap<String, Value>) -> Self {
-        Self {
-            globals,
-            locals: None,
-        }
-    }
-
-    fn with_locals(
-        globals: &'a mut HashMap<String, Value>,
-        locals: &'a mut HashMap<String, Value>,
-    ) -> Self {
-        Self {
-            globals,
-            locals: Some(locals),
-        }
-    }
-
-    fn load(&self, name: &str) -> Option<Value> {
-        if let Some(locals) = self.locals.as_deref()
-            && let Some(value) = locals.get(name)
-        {
-            return Some(value.clone());
-        }
-        self.globals.get(name).cloned()
-    }
-
-    fn store(&mut self, name: String, value: Value) {
-        if let Some(locals) = self.locals.as_deref_mut() {
-            locals.insert(name, value);
-        } else {
-            self.globals.insert(name, value);
-        }
-    }
-
-    fn child_with_locals<'b>(
-        &'b mut self,
-        locals: &'b mut HashMap<String, Value>,
-    ) -> Environment<'b> {
-        Environment::with_locals(self.globals, locals)
-    }
-
-    fn is_top_level(&self) -> bool {
-        self.locals.is_none()
-    }
 }
 
 /// Runtime executor for interpreted statements and expressions.
@@ -83,17 +31,7 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
         builtin: BuiltinFunction,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        match builtin {
-            BuiltinFunction::Print => {
-                let outputs = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                self.runtime.output.push(outputs.join(" "));
-                Ok(Value::none_object())
-            }
-            BuiltinFunction::Len => {
-                RuntimeError::expect_function_arity("len", 1, args.len())?;
-                args[0].len()
-            }
-        }
+        call_builtin_with_output(builtin, args, &mut self.runtime.output)
     }
 
     fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -181,7 +119,7 @@ impl<'a> InterpreterRuntime<'a> {
                     }
                     AssignTarget::Index { name, index } => {
                         let index_value = self.eval_expression(index, environment)?;
-                        let target = environment.load(name).ok_or_else(|| {
+                        let target = environment.load_cloned(name).ok_or_else(|| {
                             RuntimeError::UndefinedVariable {
                                 name: name.to_string(),
                             }
@@ -260,8 +198,8 @@ impl<'a> InterpreterRuntime<'a> {
                 Ok(Value::list_object(values))
             }
             Expression::Identifier(name) => {
-                if let Some(value) = environment.load(name) {
-                    return Ok(value.clone());
+                if let Some(value) = environment.load_cloned(name) {
+                    return Ok(value);
                 }
                 if let Some(builtin) = BuiltinFunction::from_name(name) {
                     return Ok(Value::builtin_function_object(builtin));

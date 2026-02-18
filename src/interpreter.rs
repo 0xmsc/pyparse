@@ -4,13 +4,14 @@ use std::collections::HashMap;
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 use crate::runtime::error::RuntimeError;
+use crate::runtime::execution::Environment;
 
 mod error;
 mod runtime;
 mod value;
 
 use error::InterpreterError;
-use runtime::{Environment, ExecResult, InterpreterRuntime};
+use runtime::{ExecResult, InterpreterRuntime};
 use value::Value;
 
 #[derive(Debug, Clone)]

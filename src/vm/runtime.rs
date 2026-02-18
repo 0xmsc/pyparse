@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
+use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::CallContext;
 use crate::runtime::value::Value;
 use thiserror::Error;
@@ -46,17 +47,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
         builtin: BuiltinFunction,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        match builtin {
-            BuiltinFunction::Print => {
-                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                self.runtime.output.push(rendered.join(" "));
-                Ok(Value::none_object())
-            }
-            BuiltinFunction::Len => {
-                RuntimeError::expect_function_arity("len", 1, args.len())?;
-                args[0].len()
-            }
-        }
+        call_builtin_with_output(builtin, args, &mut self.runtime.output)
     }
 
     fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -124,7 +115,7 @@ impl<'a> VmRuntime<'a> {
                 }
                 Instruction::PushNone => self.stack.push(Value::none_object()),
                 Instruction::LoadName(name) => {
-                    let value = if let Some(value) = environment.load(&name).cloned() {
+                    let value = if let Some(value) = environment.load_cloned(&name) {
                         value
                     } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
                         Value::builtin_function_object(builtin)
@@ -205,8 +196,7 @@ impl<'a> VmRuntime<'a> {
                     let value = self.pop_stack()?;
                     let index_value = self.pop_stack()?;
                     let target = environment
-                        .load(&name)
-                        .cloned()
+                        .load_cloned(&name)
                         .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
                     let mut context = VmCallContext {
                         runtime: self,
@@ -269,54 +259,6 @@ impl<'a> VmRuntime<'a> {
             environment,
         };
         callee.call(&mut context, args).map_err(Into::into)
-    }
-}
-
-struct Environment<'a> {
-    globals: &'a mut HashMap<String, Value>,
-    locals: Option<&'a mut HashMap<String, Value>>,
-}
-
-impl<'a> Environment<'a> {
-    fn top_level(globals: &'a mut HashMap<String, Value>) -> Self {
-        Self {
-            globals,
-            locals: None,
-        }
-    }
-
-    fn with_locals(
-        globals: &'a mut HashMap<String, Value>,
-        locals: &'a mut HashMap<String, Value>,
-    ) -> Self {
-        Self {
-            globals,
-            locals: Some(locals),
-        }
-    }
-
-    fn load(&self, name: &str) -> Option<&Value> {
-        if let Some(locals) = self.locals.as_deref()
-            && let Some(value) = locals.get(name)
-        {
-            return Some(value);
-        }
-        self.globals.get(name)
-    }
-
-    fn store(&mut self, name: String, value: Value) {
-        if let Some(locals) = self.locals.as_deref_mut() {
-            locals.insert(name, value);
-        } else {
-            self.globals.insert(name, value);
-        }
-    }
-
-    fn child_with_locals<'b>(
-        &'b mut self,
-        locals: &'b mut HashMap<String, Value>,
-    ) -> Environment<'b> {
-        Environment::with_locals(self.globals, locals)
     }
 }
 
