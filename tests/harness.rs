@@ -4,6 +4,7 @@ use std::path::Path;
 
 use pyparse::backend::Backend;
 use pyparse::backend::interpreter::Interpreter;
+use pyparse::backend::jit::JIT;
 use pyparse::backend::transpiler::Transpiler;
 use pyparse::backend::vm::VM;
 use pyparse::{lexer, parser};
@@ -294,8 +295,7 @@ fn runs_programs_vm_backend() -> Result<()> {
 
 #[test]
 fn runs_programs_jit_backend() -> Result<()> {
-    eprintln!("Skipping JIT backend runtime test: generic Call bytecode not supported yet.");
-    Ok(())
+    run_programs_for_backend(&JIT::new())
 }
 
 #[test]

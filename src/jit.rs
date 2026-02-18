@@ -10,71 +10,41 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
+use crate::builtins::BuiltinFunction;
 use crate::bytecode::{Instruction, compile};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::object::CallContext;
+use crate::runtime::value::Value;
 
-type EntryFn = extern "C" fn(*mut Runtime) -> *mut RuntimeValue;
+type RuntimeValue = Value;
+type EntryFn = extern "C" fn(*mut Runtime, *const *mut RuntimeValue) -> *mut RuntimeValue;
 
-#[derive(Debug)]
-enum RuntimeValue {
-    Integer(i64),
-    Boolean(bool),
-    String(String),
-    None,
-}
-
-impl RuntimeValue {
-    fn to_output(&self) -> String {
-        match self {
-            RuntimeValue::Integer(value) => value.to_string(),
-            RuntimeValue::Boolean(value) => {
-                if *value {
-                    "True".to_string()
-                } else {
-                    "False".to_string()
-                }
-            }
-            RuntimeValue::String(value) => value.clone(),
-            RuntimeValue::None => "None".to_string(),
-        }
-    }
-
-    fn is_truthy(&self) -> bool {
-        match self {
-            RuntimeValue::Integer(value) => *value != 0,
-            RuntimeValue::Boolean(value) => *value,
-            RuntimeValue::String(value) => !value.is_empty(),
-            RuntimeValue::None => false,
-        }
-    }
+#[derive(Clone, Copy)]
+struct CompiledFunctionPointer {
+    entry: EntryFn,
+    arity: usize,
 }
 
 struct Runtime {
-    globals: Vec<*mut RuntimeValue>,
-    globals_set: Vec<bool>,
-    global_names: Vec<String>,
+    globals: HashMap<String, RuntimeValue>,
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<RuntimeValue>>,
-    none_ptr: *mut RuntimeValue,
+    functions: HashMap<String, CompiledFunctionPointer>,
     error: Option<String>,
+    runtime_error: Option<RuntimeError>,
 }
 
 impl Runtime {
-    fn new(global_names: Vec<String>) -> Self {
-        let mut runtime = Self {
-            globals: Vec::new(),
-            globals_set: Vec::new(),
-            global_names,
+    fn new(functions: HashMap<String, CompiledFunctionPointer>) -> Self {
+        Self {
+            globals: HashMap::new(),
             output: Vec::new(),
             values: Vec::new(),
-            none_ptr: ptr::null_mut(),
+            functions,
             error: None,
-        };
-        let none_ptr = runtime.alloc_value(RuntimeValue::None);
-        runtime.none_ptr = none_ptr;
-        runtime.globals = vec![none_ptr; runtime.global_names.len()];
-        runtime.globals_set = vec![false; runtime.global_names.len()];
-        runtime
+            runtime_error: None,
+        }
     }
 
     fn alloc_value(&mut self, value: RuntimeValue) -> *mut RuntimeValue {
@@ -84,21 +54,86 @@ impl Runtime {
         ptr
     }
 
-    fn set_error(&mut self, message: String) {
+    fn set_error_message(&mut self, message: String) {
         if self.error.is_none() {
             self.error = Some(message);
         }
     }
+
+    fn set_runtime_error(&mut self, error: RuntimeError) {
+        if self.runtime_error.is_none() {
+            self.runtime_error = Some(error.clone());
+        }
+        self.set_error_message(error.to_string());
+    }
+}
+
+impl CallContext for Runtime {
+    fn call_builtin(
+        &mut self,
+        builtin: BuiltinFunction,
+        args: Vec<RuntimeValue>,
+    ) -> std::result::Result<RuntimeValue, RuntimeError> {
+        match builtin {
+            BuiltinFunction::Print => {
+                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                self.output.push(rendered.join(" "));
+                Ok(Value::none_object())
+            }
+            BuiltinFunction::Len => {
+                RuntimeError::expect_function_arity("len", 1, args.len())?;
+                args[0].len()
+            }
+        }
+    }
+
+    fn call_function_named(
+        &mut self,
+        name: &str,
+        args: Vec<RuntimeValue>,
+    ) -> std::result::Result<RuntimeValue, RuntimeError> {
+        let function =
+            self.functions
+                .get(name)
+                .copied()
+                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                    name: name.to_string(),
+                })?;
+        RuntimeError::expect_function_arity(name, function.arity, args.len())?;
+
+        let mut arg_ptrs = Vec::with_capacity(args.len());
+        for arg in args {
+            arg_ptrs.push(self.alloc_value(arg));
+        }
+
+        let runtime_ptr = self as *mut Runtime;
+        let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
+        if result.is_null() {
+            if let Some(error) = self.runtime_error.clone() {
+                return Err(error);
+            }
+            return Err(RuntimeError::UnsupportedOperation {
+                operation: "call".to_string(),
+                type_name: "function".to_string(),
+            });
+        }
+        Ok(unsafe { (&*result).clone() })
+    }
+}
+
+fn decode_runtime_string(ptr: *const u8, len: i64) -> String {
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    String::from_utf8_lossy(slice).to_string()
 }
 
 unsafe extern "C" fn runtime_make_int(ctx: *mut Runtime, value: i64) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.alloc_value(RuntimeValue::Integer(value))
+    runtime.alloc_value(Value::int_object(value))
 }
 
 unsafe extern "C" fn runtime_make_bool(ctx: *mut Runtime, value: u8) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.alloc_value(RuntimeValue::Boolean(value != 0))
+    runtime.alloc_value(Value::bool_object(value != 0))
 }
 
 unsafe extern "C" fn runtime_make_string(
@@ -107,14 +142,22 @@ unsafe extern "C" fn runtime_make_string(
     len: i64,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    let value = String::from_utf8_lossy(slice).to_string();
-    runtime.alloc_value(RuntimeValue::String(value))
+    runtime.alloc_value(Value::string_object(decode_runtime_string(ptr, len)))
 }
 
 unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.none_ptr
+    runtime.alloc_value(Value::none_object())
+}
+
+unsafe extern "C" fn runtime_make_function(
+    ctx: *mut Runtime,
+    ptr: *const u8,
+    len: i64,
+) -> *mut RuntimeValue {
+    let runtime = unsafe { &mut *ctx };
+    let symbol = decode_runtime_string(ptr, len);
+    runtime.alloc_value(Value::function_object(symbol))
 }
 
 unsafe extern "C" fn runtime_add(
@@ -123,21 +166,15 @@ unsafe extern "C" fn runtime_add(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left_value = match unsafe { &*left } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
+    let left = unsafe { (&*left).clone() };
+    let right = unsafe { (&*right).clone() };
+    match left.add(runtime, right) {
+        Ok(value) => runtime.alloc_value(value),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
         }
-    };
-    let right_value = match unsafe { &*right } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
-        }
-    };
-    runtime.alloc_value(RuntimeValue::Integer(left_value + right_value))
+    }
 }
 
 unsafe extern "C" fn runtime_sub(
@@ -146,21 +183,15 @@ unsafe extern "C" fn runtime_sub(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left_value = match unsafe { &*left } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
+    let left = unsafe { (&*left).clone() };
+    let right = unsafe { (&*right).clone() };
+    match left.sub(runtime, right) {
+        Ok(value) => runtime.alloc_value(value),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
         }
-    };
-    let right_value = match unsafe { &*right } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
-        }
-    };
-    runtime.alloc_value(RuntimeValue::Integer(left_value - right_value))
+    }
 }
 
 unsafe extern "C" fn runtime_less_than(
@@ -169,78 +200,97 @@ unsafe extern "C" fn runtime_less_than(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left_value = match unsafe { &*left } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
+    let left = unsafe { (&*left).clone() };
+    let right = unsafe { (&*right).clone() };
+    match left.less_than(runtime, right) {
+        Ok(value) => runtime.alloc_value(value),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
         }
-    };
-    let right_value = match unsafe { &*right } {
-        RuntimeValue::Integer(value) => *value,
-        other => {
-            runtime.set_error(format!("Expected integer, got {other:?}"));
-            return ptr::null_mut();
-        }
-    };
-    runtime.alloc_value(RuntimeValue::Boolean(left_value < right_value))
+    }
 }
 
 unsafe extern "C" fn runtime_is_truthy(value: *mut RuntimeValue) -> u8 {
+    if value.is_null() {
+        return 0;
+    }
     let value = unsafe { &*value };
     if value.is_truthy() { 1 } else { 0 }
 }
 
-unsafe extern "C" fn runtime_print(
+unsafe extern "C" fn runtime_call(
     ctx: *mut Runtime,
-    values: *const *mut RuntimeValue,
+    callee: *mut RuntimeValue,
+    args: *const *mut RuntimeValue,
     count: i64,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let mut rendered = Vec::new();
-    for idx in 0..count {
-        let value_ptr = unsafe { *values.offset(idx as isize) };
-        rendered.push((unsafe { &*value_ptr }).to_output());
-    }
-    runtime.output.push(rendered.join(" "));
-    runtime.none_ptr
-}
-
-unsafe extern "C" fn runtime_load_global(ctx: *mut Runtime, index: i64) -> *mut RuntimeValue {
-    let runtime = unsafe { &mut *ctx };
-    let idx = index as usize;
-    if idx >= runtime.globals.len() {
-        runtime.set_error("Undefined variable".to_string());
+    if count < 0 {
+        runtime.set_error_message("Call argument count cannot be negative".to_string());
         return ptr::null_mut();
     }
-    if runtime.globals_set[idx] {
-        runtime.globals[idx]
-    } else {
-        let name = runtime.global_names[idx].clone();
-        runtime.set_error(format!("Undefined variable '{name}'"));
-        ptr::null_mut()
+    if callee.is_null() {
+        runtime.set_error_message("Call target cannot be null".to_string());
+        return ptr::null_mut();
+    }
+
+    let argc = count as usize;
+    if argc > 0 && args.is_null() {
+        runtime.set_error_message("Call arguments cannot be null".to_string());
+        return ptr::null_mut();
+    }
+
+    let mut evaluated_args = Vec::with_capacity(argc);
+    for index in 0..argc {
+        let value_ptr = unsafe { *args.add(index) };
+        if value_ptr.is_null() {
+            runtime.set_error_message("Call argument cannot be null".to_string());
+            return ptr::null_mut();
+        }
+        evaluated_args.push(unsafe { (&*value_ptr).clone() });
+    }
+
+    let callee_value = unsafe { (&*callee).clone() };
+    match callee_value.call(runtime, evaluated_args) {
+        Ok(value) => runtime.alloc_value(value),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
+        }
     }
 }
 
-unsafe extern "C" fn runtime_store_global(ctx: *mut Runtime, index: i64, value: *mut RuntimeValue) {
+unsafe extern "C" fn runtime_load_name(
+    ctx: *mut Runtime,
+    ptr: *const u8,
+    len: i64,
+) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let idx = index as usize;
-    if idx >= runtime.globals.len() {
-        runtime.set_error("Undefined variable".to_string());
-        return;
+    let name = decode_runtime_string(ptr, len);
+    if let Some(value) = runtime.globals.get(&name).cloned() {
+        return runtime.alloc_value(value);
     }
-    runtime.globals[idx] = value;
-    runtime.globals_set[idx] = true;
+    if let Some(builtin) = BuiltinFunction::from_name(&name) {
+        return runtime.alloc_value(Value::builtin_function_object(builtin));
+    }
+    runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
+    ptr::null_mut()
 }
 
-unsafe extern "C" fn runtime_set_error(ctx: *mut Runtime, ptr: *const u8, len: i64) {
+unsafe extern "C" fn runtime_store_name(
+    ctx: *mut Runtime,
+    ptr: *const u8,
+    len: i64,
+    value: *mut RuntimeValue,
+) {
     let runtime = unsafe { &mut *ctx };
-    if runtime.error.is_some() {
+    if value.is_null() {
+        runtime.set_error_message("Cannot store null value".to_string());
         return;
     }
-    let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-    let message = String::from_utf8_lossy(slice).to_string();
-    runtime.error = Some(message);
+    let name = decode_runtime_string(ptr, len);
+    runtime.globals.insert(name, unsafe { (&*value).clone() });
 }
 
 pub struct JIT;
@@ -248,7 +298,7 @@ pub struct JIT;
 pub struct PreparedProgram {
     _module: JITModule,
     entry: EntryFn,
-    global_names: Vec<String>,
+    functions: HashMap<String, CompiledFunctionPointer>,
 }
 
 pub struct PreparedJIT {
@@ -262,14 +312,6 @@ impl JIT {
 
     pub fn prepare(&self, program: &Program) -> Result<PreparedProgram> {
         let compiled = compile(program)?;
-        let globals = collect_store_names(&compiled.main);
-        let mut global_names: Vec<String> = globals.iter().cloned().collect();
-        global_names.sort();
-        let global_indices: HashMap<String, i64> = global_names
-            .iter()
-            .enumerate()
-            .map(|(idx, name)| (name.clone(), idx as i64))
-            .collect();
         let mut function_names: Vec<&String> = compiled.functions.keys().collect();
         function_names.sort();
 
@@ -278,14 +320,15 @@ impl JIT {
         builder.symbol("runtime_make_bool", runtime_make_bool as *const u8);
         builder.symbol("runtime_make_string", runtime_make_string as *const u8);
         builder.symbol("runtime_make_none", runtime_make_none as *const u8);
+        builder.symbol("runtime_make_function", runtime_make_function as *const u8);
         builder.symbol("runtime_add", runtime_add as *const u8);
         builder.symbol("runtime_sub", runtime_sub as *const u8);
         builder.symbol("runtime_less_than", runtime_less_than as *const u8);
         builder.symbol("runtime_is_truthy", runtime_is_truthy as *const u8);
-        builder.symbol("runtime_print", runtime_print as *const u8);
-        builder.symbol("runtime_load_global", runtime_load_global as *const u8);
-        builder.symbol("runtime_store_global", runtime_store_global as *const u8);
-        builder.symbol("runtime_set_error", runtime_set_error as *const u8);
+        builder.symbol("runtime_call", runtime_call as *const u8);
+        builder.symbol("runtime_load_name", runtime_load_name as *const u8);
+        builder.symbol("runtime_store_name", runtime_store_name as *const u8);
+
         let mut module = JITModule::new(builder);
         let ptr_type = module.target_config().pointer_type();
         let runtime_funcs = declare_runtime_functions(&mut module, ptr_type)?;
@@ -300,13 +343,13 @@ impl JIT {
                 .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?
                 .params
                 .len();
-            let func_sig = value_function_signature(&mut module, ptr_type, arity);
+            let func_sig = value_function_signature(&mut module, ptr_type);
             let func_id =
                 module.declare_function(&function_symbol(name), Linkage::Local, &func_sig)?;
             function_ids.insert((*name).clone(), func_id);
             function_arities.insert((*name).clone(), arity);
         }
-        let main_sig = value_function_signature(&mut module, ptr_type, 0);
+        let main_sig = value_function_signature(&mut module, ptr_type);
         let main_id = module.declare_function("run_main", Linkage::Local, &main_sig)?;
 
         for name in &function_names {
@@ -322,9 +365,6 @@ impl JIT {
                 &mut module,
                 &runtime_funcs,
                 &mut string_data,
-                &function_ids,
-                &function_arities,
-                &global_indices,
                 function_ids.get(*name).copied().unwrap(),
                 &function.params,
                 &function.code,
@@ -336,9 +376,6 @@ impl JIT {
             &mut module,
             &runtime_funcs,
             &mut string_data,
-            &function_ids,
-            &function_arities,
-            &global_indices,
             main_id,
             &[],
             &compiled.main,
@@ -349,16 +386,27 @@ impl JIT {
         let entry = module.get_finalized_function(main_id);
         let entry: EntryFn = unsafe { std::mem::transmute(entry) };
 
+        let mut functions = HashMap::new();
+        for (name, func_id) in &function_ids {
+            let entry = module.get_finalized_function(*func_id);
+            let entry: EntryFn = unsafe { std::mem::transmute(entry) };
+            let arity = function_arities
+                .get(name)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("Missing arity for function '{name}'"))?;
+            functions.insert(name.clone(), CompiledFunctionPointer { entry, arity });
+        }
+
         Ok(PreparedProgram {
             _module: module,
             entry,
-            global_names,
+            functions,
         })
     }
 
     pub fn run_prepared(&self, prepared: &PreparedProgram) -> Result<String> {
-        let mut runtime = Runtime::new(prepared.global_names.clone());
-        let result = (prepared.entry)(&mut runtime as *mut Runtime);
+        let mut runtime = Runtime::new(prepared.functions.clone());
+        let result = (prepared.entry)(&mut runtime as *mut Runtime, ptr::null());
         if let Some(error) = runtime.error {
             bail!("{error}");
         }
@@ -398,14 +446,14 @@ struct RuntimeFunctions {
     make_bool: FuncId,
     make_string: FuncId,
     make_none: FuncId,
+    make_function: FuncId,
     add: FuncId,
     sub: FuncId,
     less_than: FuncId,
     is_truthy: FuncId,
-    print: FuncId,
-    load_global: FuncId,
-    store_global: FuncId,
-    set_error: FuncId,
+    call: FuncId,
+    load_name: FuncId,
+    store_name: FuncId,
 }
 
 struct StringData {
@@ -436,13 +484,10 @@ impl StringData {
 fn value_function_signature(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
-    arity: usize,
 ) -> Signature {
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(ptr_type));
-    for _ in 0..arity {
-        sig.params.push(AbiParam::new(ptr_type));
-    }
+    sig.params.push(AbiParam::new(ptr_type));
     sig.returns.push(AbiParam::new(ptr_type));
     sig
 }
@@ -471,6 +516,12 @@ fn declare_runtime_functions(
     make_none_sig.params.push(AbiParam::new(ptr_type));
     make_none_sig.returns.push(AbiParam::new(ptr_type));
 
+    let mut make_function_sig = module.make_signature();
+    make_function_sig.params.push(AbiParam::new(ptr_type));
+    make_function_sig.params.push(AbiParam::new(ptr_type));
+    make_function_sig.params.push(AbiParam::new(types::I64));
+    make_function_sig.returns.push(AbiParam::new(ptr_type));
+
     let mut binary_sig = module.make_signature();
     binary_sig.params.push(AbiParam::new(ptr_type));
     binary_sig.params.push(AbiParam::new(ptr_type));
@@ -481,26 +532,24 @@ fn declare_runtime_functions(
     truthy_sig.params.push(AbiParam::new(ptr_type));
     truthy_sig.returns.push(AbiParam::new(types::I8));
 
-    let mut print_sig = module.make_signature();
-    print_sig.params.push(AbiParam::new(ptr_type));
-    print_sig.params.push(AbiParam::new(ptr_type));
-    print_sig.params.push(AbiParam::new(types::I64));
-    print_sig.returns.push(AbiParam::new(ptr_type));
+    let mut call_sig = module.make_signature();
+    call_sig.params.push(AbiParam::new(ptr_type));
+    call_sig.params.push(AbiParam::new(ptr_type));
+    call_sig.params.push(AbiParam::new(ptr_type));
+    call_sig.params.push(AbiParam::new(types::I64));
+    call_sig.returns.push(AbiParam::new(ptr_type));
 
-    let mut load_global_sig = module.make_signature();
-    load_global_sig.params.push(AbiParam::new(ptr_type));
-    load_global_sig.params.push(AbiParam::new(types::I64));
-    load_global_sig.returns.push(AbiParam::new(ptr_type));
+    let mut load_name_sig = module.make_signature();
+    load_name_sig.params.push(AbiParam::new(ptr_type));
+    load_name_sig.params.push(AbiParam::new(ptr_type));
+    load_name_sig.params.push(AbiParam::new(types::I64));
+    load_name_sig.returns.push(AbiParam::new(ptr_type));
 
-    let mut store_global_sig = module.make_signature();
-    store_global_sig.params.push(AbiParam::new(ptr_type));
-    store_global_sig.params.push(AbiParam::new(types::I64));
-    store_global_sig.params.push(AbiParam::new(ptr_type));
-
-    let mut set_error_sig = module.make_signature();
-    set_error_sig.params.push(AbiParam::new(ptr_type));
-    set_error_sig.params.push(AbiParam::new(ptr_type));
-    set_error_sig.params.push(AbiParam::new(types::I64));
+    let mut store_name_sig = module.make_signature();
+    store_name_sig.params.push(AbiParam::new(ptr_type));
+    store_name_sig.params.push(AbiParam::new(ptr_type));
+    store_name_sig.params.push(AbiParam::new(types::I64));
+    store_name_sig.params.push(AbiParam::new(ptr_type));
 
     Ok(RuntimeFunctions {
         make_int: module.declare_function("runtime_make_int", Linkage::Import, &make_int_sig)?,
@@ -511,22 +560,22 @@ fn declare_runtime_functions(
             &make_string_sig,
         )?,
         make_none: module.declare_function("runtime_make_none", Linkage::Import, &make_none_sig)?,
+        make_function: module.declare_function(
+            "runtime_make_function",
+            Linkage::Import,
+            &make_function_sig,
+        )?,
         add: module.declare_function("runtime_add", Linkage::Import, &binary_sig)?,
         sub: module.declare_function("runtime_sub", Linkage::Import, &binary_sig)?,
         less_than: module.declare_function("runtime_less_than", Linkage::Import, &binary_sig)?,
         is_truthy: module.declare_function("runtime_is_truthy", Linkage::Import, &truthy_sig)?,
-        print: module.declare_function("runtime_print", Linkage::Import, &print_sig)?,
-        load_global: module.declare_function(
-            "runtime_load_global",
+        call: module.declare_function("runtime_call", Linkage::Import, &call_sig)?,
+        load_name: module.declare_function("runtime_load_name", Linkage::Import, &load_name_sig)?,
+        store_name: module.declare_function(
+            "runtime_store_name",
             Linkage::Import,
-            &load_global_sig,
+            &store_name_sig,
         )?,
-        store_global: module.declare_function(
-            "runtime_store_global",
-            Linkage::Import,
-            &store_global_sig,
-        )?,
-        set_error: module.declare_function("runtime_set_error", Linkage::Import, &set_error_sig)?,
     })
 }
 
@@ -535,9 +584,6 @@ fn define_function(
     module: &mut JITModule,
     runtime_funcs: &RuntimeFunctions,
     string_data: &mut StringData,
-    _function_ids: &HashMap<String, FuncId>,
-    _function_arities: &HashMap<String, usize>,
-    global_indices: &HashMap<String, i64>,
     func_id: FuncId,
     param_names: &[String],
     code: &[Instruction],
@@ -554,19 +600,19 @@ fn define_function(
         .collect();
 
     let mut ctx = module.make_context();
-    ctx.func.signature = value_function_signature(module, ptr_type, param_names.len());
+    ctx.func.signature = value_function_signature(module, ptr_type);
     let make_int = module.declare_func_in_func(runtime_funcs.make_int, &mut ctx.func);
     let make_bool = module.declare_func_in_func(runtime_funcs.make_bool, &mut ctx.func);
     let make_string = module.declare_func_in_func(runtime_funcs.make_string, &mut ctx.func);
     let make_none = module.declare_func_in_func(runtime_funcs.make_none, &mut ctx.func);
+    let make_function = module.declare_func_in_func(runtime_funcs.make_function, &mut ctx.func);
     let add = module.declare_func_in_func(runtime_funcs.add, &mut ctx.func);
     let sub = module.declare_func_in_func(runtime_funcs.sub, &mut ctx.func);
     let less_than = module.declare_func_in_func(runtime_funcs.less_than, &mut ctx.func);
     let is_truthy = module.declare_func_in_func(runtime_funcs.is_truthy, &mut ctx.func);
-    let _print = module.declare_func_in_func(runtime_funcs.print, &mut ctx.func);
-    let load_global = module.declare_func_in_func(runtime_funcs.load_global, &mut ctx.func);
-    let store_global = module.declare_func_in_func(runtime_funcs.store_global, &mut ctx.func);
-    let set_error = module.declare_func_in_func(runtime_funcs.set_error, &mut ctx.func);
+    let call_value = module.declare_func_in_func(runtime_funcs.call, &mut ctx.func);
+    let load_name = module.declare_func_in_func(runtime_funcs.load_name, &mut ctx.func);
+    let store_name = module.declare_func_in_func(runtime_funcs.store_name, &mut ctx.func);
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -576,6 +622,7 @@ fn define_function(
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     let ctx_param = builder.block_params(entry_block)[0];
+    let args_param = builder.block_params(entry_block)[1];
 
     let ptr_align_shift = (ptr_size as u32).trailing_zeros() as u8;
     let stack_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
@@ -583,6 +630,12 @@ fn define_function(
         (stack_size as u32) * (ptr_size as u32),
         ptr_align_shift,
     ));
+    let call_args_slot =
+        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+            (stack_size as u32) * (ptr_size as u32),
+            ptr_align_shift,
+        ));
     let sp_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
         cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
         ptr_size as u32,
@@ -617,6 +670,7 @@ fn define_function(
     };
 
     let stack_base = builder.ins().stack_addr(ptr_type, stack_slot, 0);
+    let call_args_base = builder.ins().stack_addr(ptr_type, call_args_slot, 0);
     let sp_addr = builder.ins().stack_addr(ptr_type, sp_slot, 0);
     let tmp_addr = builder.ins().stack_addr(ptr_type, tmp_slot, 0);
     let zero = builder.ins().iconst(ptr_type, 0);
@@ -642,7 +696,10 @@ fn define_function(
             let local_index = local_indices.get(param_name).copied().ok_or_else(|| {
                 anyhow::anyhow!("Missing local slot for parameter '{param_name}'")
             })?;
-            let value = builder.block_params(entry_block)[index + 1];
+            let param_addr = builder
+                .ins()
+                .iadd_imm(args_param, (index as i64) * ptr_size);
+            let value = builder.ins().load(ptr_type, MemFlags::new(), param_addr, 0);
             let local_addr = builder.ins().iadd_imm(locals_base, local_index * ptr_size);
             builder.ins().store(MemFlags::new(), value, local_addr, 0);
             let set_addr = builder.ins().iadd_imm(locals_set_base, local_index);
@@ -727,13 +784,53 @@ fn define_function(
             Instruction::DefineClass { .. } => {
                 bail!("Class definitions are not supported in the JIT backend");
             }
-            Instruction::DefineFunction { .. } => {
-                bail!("Function definitions are not supported in the JIT backend");
+            Instruction::DefineFunction { name, symbol } => {
+                let (symbol_data_id, symbol_len) =
+                    string_data.declare(module, "fn_symbol", symbol)?;
+                let symbol_gv = module.declare_data_in_func(symbol_data_id, builder.func);
+                let symbol_ptr = builder.ins().global_value(ptr_type, symbol_gv);
+                let symbol_len_val = builder.ins().iconst(types::I64, symbol_len);
+                let call = builder
+                    .ins()
+                    .call(make_function, &[ctx_param, symbol_ptr, symbol_len_val]);
+                let function_value = builder.inst_results(call)[0];
+                let ok_block = check_null(&mut builder, function_value);
+                builder.switch_to_block(ok_block);
+
+                if let Some(local_idx) = local_indices.get(name).copied() {
+                    if locals_set_slot.is_none() || locals_slot.is_none() {
+                        bail!("Missing locals storage for '{name}'");
+                    }
+                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
+                    let locals_set_base =
+                        builder
+                            .ins()
+                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
+                    let local_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
+                    builder
+                        .ins()
+                        .store(MemFlags::new(), function_value, local_addr, 0);
+                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
+                    let one = builder.ins().iconst(types::I8, 1);
+                    builder.ins().store(MemFlags::new(), one, set_addr, 0);
+                } else {
+                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
+                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
+                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
+                    let name_len_val = builder.ins().iconst(types::I64, name_len);
+                    builder.ins().call(
+                        store_name,
+                        &[ctx_param, name_ptr, name_len_val, function_value],
+                    );
+                }
             }
             Instruction::LoadName(name) => {
-                let local_index = local_indices.get(name).copied();
-                let global_index = global_indices.get(name).copied();
-                if let Some(local_idx) = local_index {
+                let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
+                let name_gv = module.declare_data_in_func(name_data_id, builder.func);
+                let name_ptr = builder.ins().global_value(ptr_type, name_gv);
+                let name_len_val = builder.ins().iconst(types::I64, name_len);
+
+                if let Some(local_idx) = local_indices.get(name).copied() {
                     if locals_set_slot.is_none() || locals_slot.is_none() {
                         bail!("Missing locals storage for '{name}'");
                     }
@@ -758,47 +855,26 @@ fn define_function(
                     builder.ins().jump(cont_block, &[]);
 
                     builder.switch_to_block(global_block);
-                    if let Some(index) = global_index {
-                        let idx_val = builder.ins().iconst(types::I64, index);
-                        let call = builder.ins().call(load_global, &[ctx_param, idx_val]);
-                        let result = builder.inst_results(call)[0];
-                        let ok_block = check_null(&mut builder, result);
-                        builder.switch_to_block(ok_block);
-                        builder.ins().store(MemFlags::new(), result, tmp_addr, 0);
-                        builder.ins().jump(cont_block, &[]);
-                    } else {
-                        emit_error(
-                            module,
-                            string_data,
-                            &mut builder,
-                            set_error,
-                            ctx_param,
-                            &format!("Undefined variable '{name}'"),
-                        )?;
-                        builder.ins().jump(error_block, &[]);
-                    }
+                    let call = builder
+                        .ins()
+                        .call(load_name, &[ctx_param, name_ptr, name_len_val]);
+                    let result = builder.inst_results(call)[0];
+                    let ok_block = check_null(&mut builder, result);
+                    builder.switch_to_block(ok_block);
+                    builder.ins().store(MemFlags::new(), result, tmp_addr, 0);
+                    builder.ins().jump(cont_block, &[]);
 
                     builder.switch_to_block(cont_block);
                     let value = builder.ins().load(ptr_type, MemFlags::new(), tmp_addr, 0);
                     push_value(&mut builder, value);
-                } else if let Some(index) = global_index {
-                    let idx_val = builder.ins().iconst(types::I64, index);
-                    let call = builder.ins().call(load_global, &[ctx_param, idx_val]);
+                } else {
+                    let call = builder
+                        .ins()
+                        .call(load_name, &[ctx_param, name_ptr, name_len_val]);
                     let result = builder.inst_results(call)[0];
                     let ok_block = check_null(&mut builder, result);
                     builder.switch_to_block(ok_block);
                     push_value(&mut builder, result);
-                } else {
-                    emit_error(
-                        module,
-                        string_data,
-                        &mut builder,
-                        set_error,
-                        ctx_param,
-                        &format!("Undefined variable '{name}'"),
-                    )?;
-                    builder.ins().jump(error_block, &[]);
-                    terminated = true;
                 }
             }
             Instruction::StoreName(name) => {
@@ -817,22 +893,14 @@ fn define_function(
                     let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
                     let one = builder.ins().iconst(types::I8, 1);
                     builder.ins().store(MemFlags::new(), one, set_addr, 0);
-                } else if let Some(index) = global_indices.get(name).copied() {
-                    let idx_val = builder.ins().iconst(types::I64, index);
+                } else {
+                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
+                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
+                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
+                    let name_len_val = builder.ins().iconst(types::I64, name_len);
                     builder
                         .ins()
-                        .call(store_global, &[ctx_param, idx_val, value]);
-                } else {
-                    emit_error(
-                        module,
-                        string_data,
-                        &mut builder,
-                        set_error,
-                        ctx_param,
-                        &format!("Undefined variable '{name}'"),
-                    )?;
-                    builder.ins().jump(error_block, &[]);
-                    terminated = true;
+                        .call(store_name, &[ctx_param, name_ptr, name_len_val, value]);
                 }
             }
             Instruction::Add => {
@@ -874,8 +942,23 @@ fn define_function(
             Instruction::StoreAttr(_) => {
                 bail!("Attribute assignment is not supported in the JIT backend");
             }
-            Instruction::Call { .. } => {
-                bail!("Generic calls are not supported in the JIT backend");
+            Instruction::Call { argc } => {
+                for arg_index in (0..*argc).rev() {
+                    let arg_value = pop_value(&mut builder);
+                    let arg_addr = builder
+                        .ins()
+                        .iadd_imm(call_args_base, (arg_index as i64) * ptr_size);
+                    builder.ins().store(MemFlags::new(), arg_value, arg_addr, 0);
+                }
+                let callee = pop_value(&mut builder);
+                let argc_val = builder.ins().iconst(types::I64, *argc as i64);
+                let call = builder
+                    .ins()
+                    .call(call_value, &[ctx_param, callee, call_args_base, argc_val]);
+                let result = builder.inst_results(call)[0];
+                let ok_block = check_null(&mut builder, result);
+                builder.switch_to_block(ok_block);
+                push_value(&mut builder, result);
             }
             Instruction::JumpIfFalse(target) => {
                 let target_index = resolve_relative_target(idx, *target, code.len())?;
@@ -928,25 +1011,6 @@ fn define_function(
     module.define_function(func_id, &mut ctx)?;
     module.clear_context(&mut ctx);
 
-    Ok(())
-}
-
-fn emit_error(
-    module: &mut JITModule,
-    string_data: &mut StringData,
-    builder: &mut FunctionBuilder,
-    set_error: cranelift_codegen::ir::FuncRef,
-    ctx_param: cranelift_codegen::ir::Value,
-    message: &str,
-) -> Result<()> {
-    let (data_id, len) = string_data.declare(module, "err", message)?;
-    let gv = module.declare_data_in_func(data_id, builder.func);
-    let ptr_type = builder.func.dfg.value_type(ctx_param);
-    let data_ptr = builder.ins().global_value(ptr_type, gv);
-    let len_val = builder.ins().iconst(types::I64, len);
-    builder
-        .ins()
-        .call(set_error, &[ctx_param, data_ptr, len_val]);
     Ok(())
 }
 
