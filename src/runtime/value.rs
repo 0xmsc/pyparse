@@ -49,6 +49,19 @@ impl Value {
             .map(IntObject::value)
     }
 
+    pub(crate) fn as_bool(&self) -> Option<bool> {
+        let object = self.object.borrow();
+        object
+            .as_any()
+            .downcast_ref::<BoolObject>()
+            .map(BoolObject::value)
+    }
+
+    pub(crate) fn is_none(&self) -> bool {
+        let object = self.object.borrow();
+        object.as_any().downcast_ref::<NoneObject>().is_some()
+    }
+
     pub(crate) fn to_output(&self) -> String {
         if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
             return string::downcast_string(&str_value).expect("__str__ must return str");

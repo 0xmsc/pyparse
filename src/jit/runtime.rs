@@ -31,6 +31,9 @@ pub(super) const SYMBOL_RUNTIME_LOAD_INDEX: &str = "runtime_load_index";
 pub(super) const SYMBOL_RUNTIME_STORE_INDEX_VALUE: &str = "runtime_store_index_value";
 pub(super) const SYMBOL_RUNTIME_STORE_INDEX_NAME: &str = "runtime_store_index_name";
 
+const MIN_INTERNED_INT: i64 = -4096;
+const MAX_INTERNED_INT: i64 = 16384;
+
 pub(super) type RuntimeValue = Value;
 pub(super) type EntryFunction =
     extern "C" fn(*mut Runtime, *const *mut RuntimeValue) -> *mut RuntimeValue;
@@ -46,6 +49,9 @@ pub(super) struct Runtime {
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<RuntimeValue>>,
+    #[allow(clippy::vec_box)]
+    interned_values: Vec<Box<RuntimeValue>>,
+    int_intern: HashMap<i64, usize>,
     functions: Arc<HashMap<String, CompiledFunctionPointer>>,
     symbol_cache: HashMap<(usize, i64), String>,
     error: Option<String>,
@@ -54,10 +60,17 @@ pub(super) struct Runtime {
 
 impl Runtime {
     fn new(functions: Arc<HashMap<String, CompiledFunctionPointer>>) -> Self {
+        let interned_values = vec![
+            Box::new(Value::bool_object(false)),
+            Box::new(Value::bool_object(true)),
+            Box::new(Value::none_object()),
+        ];
         Self {
             globals: HashMap::new(),
             output: Vec::new(),
             values: Vec::new(),
+            interned_values,
+            int_intern: HashMap::new(),
             functions,
             symbol_cache: HashMap::new(),
             error: None,
@@ -70,6 +83,45 @@ impl Runtime {
         let ptr = &mut *boxed as *mut RuntimeValue;
         self.values.push(boxed);
         ptr
+    }
+
+    fn interned_ptr(&mut self, index: usize) -> *mut RuntimeValue {
+        &mut *self.interned_values[index] as *mut RuntimeValue
+    }
+
+    fn bool_ptr(&mut self, value: bool) -> *mut RuntimeValue {
+        self.interned_ptr(if value { 1 } else { 0 })
+    }
+
+    fn none_ptr(&mut self) -> *mut RuntimeValue {
+        self.interned_ptr(2)
+    }
+
+    fn int_ptr(&mut self, value: i64) -> *mut RuntimeValue {
+        if !(MIN_INTERNED_INT..=MAX_INTERNED_INT).contains(&value) {
+            return self.alloc_value(Value::int_object(value));
+        }
+        if let Some(index) = self.int_intern.get(&value).copied() {
+            return self.interned_ptr(index);
+        }
+        let index = self.interned_values.len();
+        self.interned_values
+            .push(Box::new(Value::int_object(value)));
+        self.int_intern.insert(value, index);
+        self.interned_ptr(index)
+    }
+
+    fn alloc_or_intern_value(&mut self, value: RuntimeValue) -> *mut RuntimeValue {
+        if let Some(integer) = value.as_int() {
+            return self.int_ptr(integer);
+        }
+        if let Some(boolean) = value.as_bool() {
+            return self.bool_ptr(boolean);
+        }
+        if value.is_none() {
+            return self.none_ptr();
+        }
+        self.alloc_value(value)
     }
 
     fn set_error_message(&mut self, message: String) {
@@ -156,12 +208,12 @@ fn decode_runtime_string(ptr: *const u8, len: i64) -> String {
 
 unsafe extern "C" fn runtime_make_int(ctx: *mut Runtime, value: i64) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.alloc_value(Value::int_object(value))
+    runtime.int_ptr(value)
 }
 
 unsafe extern "C" fn runtime_make_bool(ctx: *mut Runtime, value: u8) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.alloc_value(Value::bool_object(value != 0))
+    runtime.bool_ptr(value != 0)
 }
 
 unsafe extern "C" fn runtime_make_string(
@@ -175,7 +227,7 @@ unsafe extern "C" fn runtime_make_string(
 
 unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    runtime.alloc_value(Value::none_object())
+    runtime.none_ptr()
 }
 
 unsafe extern "C" fn runtime_make_function(
@@ -271,12 +323,12 @@ unsafe extern "C" fn runtime_add(
     let left = unsafe { &*left };
     let right = unsafe { &*right };
     if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
-        return runtime.alloc_value(Value::int_object(left_int + right_int));
+        return runtime.int_ptr(left_int + right_int);
     }
     let left = left.clone();
     let right = right.clone();
     match left.add(runtime, right) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
@@ -293,12 +345,12 @@ unsafe extern "C" fn runtime_sub(
     let left = unsafe { &*left };
     let right = unsafe { &*right };
     if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
-        return runtime.alloc_value(Value::int_object(left_int - right_int));
+        return runtime.int_ptr(left_int - right_int);
     }
     let left = left.clone();
     let right = right.clone();
     match left.sub(runtime, right) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
@@ -315,12 +367,12 @@ unsafe extern "C" fn runtime_less_than(
     let left = unsafe { &*left };
     let right = unsafe { &*right };
     if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
-        return runtime.alloc_value(Value::bool_object(left_int < right_int));
+        return runtime.bool_ptr(left_int < right_int);
     }
     let left = left.clone();
     let right = right.clone();
     match left.less_than(runtime, right) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
@@ -399,7 +451,7 @@ unsafe extern "C" fn runtime_call(
 
     let callee_value = unsafe { (&*callee).clone() };
     match callee_value.call(runtime, evaluated_args) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
@@ -415,7 +467,7 @@ unsafe extern "C" fn runtime_load_name(
     let runtime = unsafe { &mut *ctx };
     let name = runtime.decode_symbol(ptr, len);
     if let Some(value) = runtime.globals.get(&name).cloned() {
-        return runtime.alloc_value(value);
+        return runtime.alloc_or_intern_value(value);
     }
     if let Some(builtin) = BuiltinFunction::from_name(&name) {
         return runtime.alloc_value(Value::builtin_function_object(builtin));
@@ -453,7 +505,7 @@ unsafe extern "C" fn runtime_load_attr(
     let attribute = runtime.decode_symbol(ptr, len);
     let object = unsafe { (&*object).clone() };
     match object.get_attribute(&attribute) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
@@ -503,7 +555,7 @@ unsafe extern "C" fn runtime_load_index(
     let object = unsafe { (&*object).clone() };
     let index = unsafe { (&*index).clone() };
     match object.get_item_with_context(runtime, index) {
-        Ok(value) => runtime.alloc_value(value),
+        Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
