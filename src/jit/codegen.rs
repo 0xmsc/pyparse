@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use cranelift_codegen::ir::condcodes::IntCC;
@@ -91,7 +92,7 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     Ok(PreparedProgram {
         _module: module,
         entry,
-        functions,
+        functions: Arc::new(functions),
     })
 }
 
@@ -106,6 +107,7 @@ struct RuntimeFunctions {
     add: FuncId,
     sub: FuncId,
     less_than: FuncId,
+    less_than_truthy: FuncId,
     is_truthy: FuncId,
     call: FuncId,
     load_name: FuncId,
@@ -206,6 +208,12 @@ fn declare_runtime_functions(
     binary_sig.params.push(AbiParam::new(ptr_type));
     binary_sig.returns.push(AbiParam::new(ptr_type));
 
+    let mut binary_truthy_sig = module.make_signature();
+    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
+    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
+    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
+    binary_truthy_sig.returns.push(AbiParam::new(types::I8));
+
     let mut truthy_sig = module.make_signature();
     truthy_sig.params.push(AbiParam::new(ptr_type));
     truthy_sig.returns.push(AbiParam::new(types::I8));
@@ -305,6 +313,11 @@ fn declare_runtime_functions(
             Linkage::Import,
             &binary_sig,
         )?,
+        less_than_truthy: module.declare_function(
+            runtime::SYMBOL_RUNTIME_LESS_THAN_TRUTHY,
+            Linkage::Import,
+            &binary_truthy_sig,
+        )?,
         is_truthy: module.declare_function(
             runtime::SYMBOL_RUNTIME_IS_TRUTHY,
             Linkage::Import,
@@ -381,6 +394,8 @@ fn define_function(
     let add = module.declare_func_in_func(runtime_funcs.add, &mut ctx.func);
     let sub = module.declare_func_in_func(runtime_funcs.sub, &mut ctx.func);
     let less_than = module.declare_func_in_func(runtime_funcs.less_than, &mut ctx.func);
+    let less_than_truthy =
+        module.declare_func_in_func(runtime_funcs.less_than_truthy, &mut ctx.func);
     let is_truthy = module.declare_func_in_func(runtime_funcs.is_truthy, &mut ctx.func);
     let call_value = module.declare_func_in_func(runtime_funcs.call, &mut ctx.func);
     let load_name = module.declare_func_in_func(runtime_funcs.load_name, &mut ctx.func);
@@ -878,11 +893,33 @@ fn define_function(
             Instruction::LessThan => {
                 let right = pop_value(&mut builder);
                 let left = pop_value(&mut builder);
-                let call = builder.ins().call(less_than, &[ctx_param, left, right]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
+                if let Some(Instruction::JumpIfFalse(target)) = code.get(idx + 1) {
+                    let call = builder
+                        .ins()
+                        .call(less_than_truthy, &[ctx_param, left, right]);
+                    let truthy_or_error = builder.inst_results(call)[0];
+                    let non_error_block = builder.create_block();
+                    let is_error = builder.ins().icmp_imm(IntCC::Equal, truthy_or_error, 2);
+                    builder
+                        .ins()
+                        .brif(is_error, error_block, &[], non_error_block, &[]);
+                    builder.switch_to_block(non_error_block);
+                    let target_index = resolve_relative_target(idx + 1, *target, code.len())?;
+                    builder.ins().brif(
+                        truthy_or_error,
+                        blocks[idx + 2],
+                        &[],
+                        blocks[target_index],
+                        &[],
+                    );
+                    terminated = true;
+                } else {
+                    let call = builder.ins().call(less_than, &[ctx_param, left, right]);
+                    let result = builder.inst_results(call)[0];
+                    let ok_block = check_null(&mut builder, result);
+                    builder.switch_to_block(ok_block);
+                    push_value(&mut builder, result);
+                }
             }
             Instruction::LoadIndex => {
                 let index = pop_value(&mut builder);

@@ -41,6 +41,14 @@ impl Value {
         self.object.borrow().type_name()
     }
 
+    pub(crate) fn as_int(&self) -> Option<i64> {
+        let object = self.object.borrow();
+        object
+            .as_any()
+            .downcast_ref::<IntObject>()
+            .map(IntObject::value)
+    }
+
     pub(crate) fn to_output(&self) -> String {
         if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
             return string::downcast_string(&str_value).expect("__str__ must return str");

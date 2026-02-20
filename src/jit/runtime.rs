@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ptr;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use cranelift_jit::JITBuilder;
@@ -19,6 +20,7 @@ pub(super) const SYMBOL_RUNTIME_DEFINE_CLASS: &str = "runtime_define_class";
 pub(super) const SYMBOL_RUNTIME_ADD: &str = "runtime_add";
 pub(super) const SYMBOL_RUNTIME_SUB: &str = "runtime_sub";
 pub(super) const SYMBOL_RUNTIME_LESS_THAN: &str = "runtime_less_than";
+pub(super) const SYMBOL_RUNTIME_LESS_THAN_TRUTHY: &str = "runtime_less_than_truthy";
 pub(super) const SYMBOL_RUNTIME_IS_TRUTHY: &str = "runtime_is_truthy";
 pub(super) const SYMBOL_RUNTIME_CALL: &str = "runtime_call";
 pub(super) const SYMBOL_RUNTIME_LOAD_NAME: &str = "runtime_load_name";
@@ -44,18 +46,20 @@ pub(super) struct Runtime {
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<RuntimeValue>>,
-    functions: HashMap<String, CompiledFunctionPointer>,
+    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
+    symbol_cache: HashMap<(usize, i64), String>,
     error: Option<String>,
     runtime_error: Option<RuntimeError>,
 }
 
 impl Runtime {
-    fn new(functions: HashMap<String, CompiledFunctionPointer>) -> Self {
+    fn new(functions: Arc<HashMap<String, CompiledFunctionPointer>>) -> Self {
         Self {
             globals: HashMap::new(),
             output: Vec::new(),
             values: Vec::new(),
             functions,
+            symbol_cache: HashMap::new(),
             error: None,
             runtime_error: None,
         }
@@ -79,6 +83,16 @@ impl Runtime {
             self.runtime_error = Some(error.clone());
         }
         self.set_error_message(error.to_string());
+    }
+
+    fn decode_symbol(&mut self, ptr: *const u8, len: i64) -> String {
+        let key = (ptr as usize, len);
+        if let Some(symbol) = self.symbol_cache.get(&key) {
+            return symbol.clone();
+        }
+        let symbol = decode_runtime_string(ptr, len);
+        self.symbol_cache.insert(key, symbol.clone());
+        symbol
     }
 }
 
@@ -170,7 +184,7 @@ unsafe extern "C" fn runtime_make_function(
     len: i64,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let symbol = decode_runtime_string(ptr, len);
+    let symbol = runtime.decode_symbol(ptr, len);
     runtime.alloc_value(Value::function_object(symbol))
 }
 
@@ -228,7 +242,7 @@ unsafe extern "C" fn runtime_define_class(
         return ptr::null_mut();
     }
 
-    let class_name = decode_runtime_string(class_name_ptr, class_name_len);
+    let class_name = runtime.decode_symbol(class_name_ptr, class_name_len);
     let mut methods = HashMap::with_capacity(count);
     for index in 0..count {
         let method_name_ptr = unsafe { *method_name_ptrs.add(index) };
@@ -241,8 +255,8 @@ unsafe extern "C" fn runtime_define_class(
             return ptr::null_mut();
         }
 
-        let method_name = decode_runtime_string(method_name_ptr, method_name_len);
-        let method_symbol = decode_runtime_string(method_symbol_ptr, method_symbol_len);
+        let method_name = runtime.decode_symbol(method_name_ptr, method_name_len);
+        let method_symbol = runtime.decode_symbol(method_symbol_ptr, method_symbol_len);
         methods.insert(method_name, Value::function_object(method_symbol));
     }
     runtime.alloc_value(Value::class_object(class_name, methods))
@@ -254,8 +268,13 @@ unsafe extern "C" fn runtime_add(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left = unsafe { (&*left).clone() };
-    let right = unsafe { (&*right).clone() };
+    let left = unsafe { &*left };
+    let right = unsafe { &*right };
+    if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
+        return runtime.alloc_value(Value::int_object(left_int + right_int));
+    }
+    let left = left.clone();
+    let right = right.clone();
     match left.add(runtime, right) {
         Ok(value) => runtime.alloc_value(value),
         Err(error) => {
@@ -271,8 +290,13 @@ unsafe extern "C" fn runtime_sub(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left = unsafe { (&*left).clone() };
-    let right = unsafe { (&*right).clone() };
+    let left = unsafe { &*left };
+    let right = unsafe { &*right };
+    if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
+        return runtime.alloc_value(Value::int_object(left_int - right_int));
+    }
+    let left = left.clone();
+    let right = right.clone();
     match left.sub(runtime, right) {
         Ok(value) => runtime.alloc_value(value),
         Err(error) => {
@@ -288,13 +312,47 @@ unsafe extern "C" fn runtime_less_than(
     right: *mut RuntimeValue,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let left = unsafe { (&*left).clone() };
-    let right = unsafe { (&*right).clone() };
+    let left = unsafe { &*left };
+    let right = unsafe { &*right };
+    if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
+        return runtime.alloc_value(Value::bool_object(left_int < right_int));
+    }
+    let left = left.clone();
+    let right = right.clone();
     match left.less_than(runtime, right) {
         Ok(value) => runtime.alloc_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
             ptr::null_mut()
+        }
+    }
+}
+
+unsafe extern "C" fn runtime_less_than_truthy(
+    ctx: *mut Runtime,
+    left: *mut RuntimeValue,
+    right: *mut RuntimeValue,
+) -> u8 {
+    let runtime = unsafe { &mut *ctx };
+    let left = unsafe { &*left };
+    let right = unsafe { &*right };
+    if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
+        return if left_int < right_int { 1 } else { 0 };
+    }
+
+    let left = left.clone();
+    let right = right.clone();
+    match left.less_than(runtime, right) {
+        Ok(value) => {
+            if value.is_truthy() {
+                1
+            } else {
+                0
+            }
+        }
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            2
         }
     }
 }
@@ -355,7 +413,7 @@ unsafe extern "C" fn runtime_load_name(
     len: i64,
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
-    let name = decode_runtime_string(ptr, len);
+    let name = runtime.decode_symbol(ptr, len);
     if let Some(value) = runtime.globals.get(&name).cloned() {
         return runtime.alloc_value(value);
     }
@@ -377,7 +435,7 @@ unsafe extern "C" fn runtime_store_name(
         runtime.set_error_message("Cannot store null value".to_string());
         return;
     }
-    let name = decode_runtime_string(ptr, len);
+    let name = runtime.decode_symbol(ptr, len);
     runtime.globals.insert(name, unsafe { (&*value).clone() });
 }
 
@@ -392,7 +450,7 @@ unsafe extern "C" fn runtime_load_attr(
         runtime.set_error_message("Cannot load attribute from null value".to_string());
         return ptr::null_mut();
     }
-    let attribute = decode_runtime_string(ptr, len);
+    let attribute = runtime.decode_symbol(ptr, len);
     let object = unsafe { (&*object).clone() };
     match object.get_attribute(&attribute) {
         Ok(value) => runtime.alloc_value(value),
@@ -419,7 +477,7 @@ unsafe extern "C" fn runtime_store_attr(
         runtime.set_error_message("Cannot store null attribute value".to_string());
         return;
     }
-    let attribute = decode_runtime_string(ptr, len);
+    let attribute = runtime.decode_symbol(ptr, len);
     let object = unsafe { (&*object).clone() };
     let value = unsafe { (&*value).clone() };
     if let Err(error) = object.set_attribute(&attribute, value) {
@@ -498,7 +556,7 @@ unsafe extern "C" fn runtime_store_index_name(
         return;
     }
 
-    let name = decode_runtime_string(ptr, len);
+    let name = runtime.decode_symbol(ptr, len);
     let Some(target) = runtime.globals.get(&name).cloned() else {
         runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
         return;
@@ -527,6 +585,10 @@ pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
     builder.symbol(SYMBOL_RUNTIME_ADD, runtime_add as *const u8);
     builder.symbol(SYMBOL_RUNTIME_SUB, runtime_sub as *const u8);
     builder.symbol(SYMBOL_RUNTIME_LESS_THAN, runtime_less_than as *const u8);
+    builder.symbol(
+        SYMBOL_RUNTIME_LESS_THAN_TRUTHY,
+        runtime_less_than_truthy as *const u8,
+    );
     builder.symbol(SYMBOL_RUNTIME_IS_TRUTHY, runtime_is_truthy as *const u8);
     builder.symbol(SYMBOL_RUNTIME_CALL, runtime_call as *const u8);
     builder.symbol(SYMBOL_RUNTIME_LOAD_NAME, runtime_load_name as *const u8);
@@ -546,7 +608,7 @@ pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
 
 pub(super) fn run_prepared(
     entry: EntryFunction,
-    functions: HashMap<String, CompiledFunctionPointer>,
+    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
 ) -> Result<String> {
     let mut runtime = Runtime::new(functions);
     let result = (entry)(&mut runtime as *mut Runtime, ptr::null());

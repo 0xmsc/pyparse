@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use cranelift_jit::JITModule;
@@ -16,7 +17,7 @@ pub struct JIT;
 pub struct PreparedProgram {
     _module: JITModule,
     entry: EntryFunction,
-    functions: HashMap<String, CompiledFunctionPointer>,
+    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
 }
 
 pub struct PreparedJIT {
