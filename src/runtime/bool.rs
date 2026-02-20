@@ -58,10 +58,5 @@ impl RuntimeObject for BoolObject {
 }
 
 pub(crate) fn downcast_bool(value: &Value) -> Option<bool> {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    object
-        .as_any()
-        .downcast_ref::<BoolObject>()
-        .map(BoolObject::value)
+    value.as_bool()
 }

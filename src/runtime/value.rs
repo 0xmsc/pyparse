@@ -16,6 +16,15 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub(crate) struct Value {
     object: ObjectRef,
+    kind: ValueKind,
+}
+
+#[derive(Clone, Copy)]
+enum ValueKind {
+    Int(i64),
+    Bool(bool),
+    None,
+    Other,
 }
 
 impl fmt::Debug for Value {
@@ -26,7 +35,11 @@ impl fmt::Debug for Value {
 
 impl Value {
     fn new(object: ObjectRef) -> Self {
-        Self { object }
+        Self::new_with_kind(object, ValueKind::Other)
+    }
+
+    fn new_with_kind(object: ObjectRef, kind: ValueKind) -> Self {
+        Self { object, kind }
     }
 
     pub(crate) fn from_object_ref(object: ObjectRef) -> Self {
@@ -38,10 +51,18 @@ impl Value {
     }
 
     pub(crate) fn type_name(&self) -> &'static str {
-        self.object.borrow().type_name()
+        match self.kind {
+            ValueKind::Int(_) => "int",
+            ValueKind::Bool(_) => "bool",
+            ValueKind::None => "NoneType",
+            ValueKind::Other => self.object.borrow().type_name(),
+        }
     }
 
     pub(crate) fn as_int(&self) -> Option<i64> {
+        if let ValueKind::Int(value) = self.kind {
+            return Some(value);
+        }
         let object = self.object.borrow();
         object
             .as_any()
@@ -50,6 +71,9 @@ impl Value {
     }
 
     pub(crate) fn as_bool(&self) -> Option<bool> {
+        if let ValueKind::Bool(value) = self.kind {
+            return Some(value);
+        }
         let object = self.object.borrow();
         object
             .as_any()
@@ -58,6 +82,9 @@ impl Value {
     }
 
     pub(crate) fn is_none(&self) -> bool {
+        if matches!(self.kind, ValueKind::None) {
+            return true;
+        }
         let object = self.object.borrow();
         object.as_any().downcast_ref::<NoneObject>().is_some()
     }
@@ -91,16 +118,13 @@ impl Value {
     }
 
     fn try_builtin_truthiness(&self) -> Option<bool> {
+        match self.kind {
+            ValueKind::Bool(value) => return Some(value),
+            ValueKind::Int(value) => return Some(value != 0),
+            ValueKind::None => return Some(false),
+            ValueKind::Other => {}
+        }
         let object = self.object.borrow();
-        if let Some(boolean) = object.as_any().downcast_ref::<BoolObject>() {
-            return Some(boolean.value());
-        }
-        if let Some(integer) = object.as_any().downcast_ref::<IntObject>() {
-            return Some(integer.value() != 0);
-        }
-        if object.as_any().downcast_ref::<NoneObject>().is_some() {
-            return Some(false);
-        }
         if let Some(string) = object.as_any().downcast_ref::<StringObject>() {
             return Some(!string.value().is_empty());
         }
@@ -206,11 +230,17 @@ impl Value {
     }
 
     pub(crate) fn int_object(value: i64) -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(IntObject::new(value)))))
+        Self::new_with_kind(
+            Rc::new(RefCell::new(Box::new(IntObject::new(value)))),
+            ValueKind::Int(value),
+        )
     }
 
     pub(crate) fn bool_object(value: bool) -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(BoolObject::new(value)))))
+        Self::new_with_kind(
+            Rc::new(RefCell::new(Box::new(BoolObject::new(value)))),
+            ValueKind::Bool(value),
+        )
     }
 
     pub(crate) fn string_object(value: String) -> Self {
@@ -218,7 +248,10 @@ impl Value {
     }
 
     pub(crate) fn none_object() -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(NoneObject::new()))))
+        Self::new_with_kind(
+            Rc::new(RefCell::new(Box::new(NoneObject::new()))),
+            ValueKind::None,
+        )
     }
 
     pub(crate) fn builtin_function_object(builtin: BuiltinFunction) -> Self {

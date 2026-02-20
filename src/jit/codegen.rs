@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, types};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
@@ -430,11 +430,6 @@ fn define_function(
             (stack_size as u32) * (ptr_size as u32),
             ptr_align_shift,
         ));
-    let sp_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-        ptr_size as u32,
-        ptr_align_shift,
-    ));
     let tmp_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
         cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
         ptr_size as u32,
@@ -465,10 +460,11 @@ fn define_function(
 
     let stack_base = builder.ins().stack_addr(ptr_type, stack_slot, 0);
     let call_args_base = builder.ins().stack_addr(ptr_type, call_args_slot, 0);
-    let sp_addr = builder.ins().stack_addr(ptr_type, sp_slot, 0);
     let tmp_addr = builder.ins().stack_addr(ptr_type, tmp_slot, 0);
+    let sp_var = Variable::from_u32(0);
+    builder.declare_var(sp_var, ptr_type);
     let zero = builder.ins().iconst(ptr_type, 0);
-    builder.ins().store(MemFlags::new(), zero, sp_addr, 0);
+    builder.def_var(sp_var, zero);
 
     if let Some(set_slot) = locals_set_slot {
         let locals_set_base = builder.ins().stack_addr(ptr_type, set_slot, 0);
@@ -515,9 +511,7 @@ fn define_function(
         builder.switch_to_block(block);
         let mut terminated = false;
 
-        let load_sp = |builder: &mut FunctionBuilder| {
-            builder.ins().load(ptr_type, MemFlags::new(), sp_addr, 0)
-        };
+        let load_sp = |builder: &mut FunctionBuilder| builder.use_var(sp_var);
         let stack_addr = |builder: &mut FunctionBuilder, index| {
             let offset = builder.ins().imul_imm(index, ptr_size);
             builder.ins().iadd(stack_base, offset)
@@ -527,12 +521,12 @@ fn define_function(
             let addr = stack_addr(builder, sp_value);
             builder.ins().store(MemFlags::new(), value, addr, 0);
             let new_sp = builder.ins().iadd_imm(sp_value, 1);
-            builder.ins().store(MemFlags::new(), new_sp, sp_addr, 0);
+            builder.def_var(sp_var, new_sp);
         };
         let pop_value = |builder: &mut FunctionBuilder| {
             let sp_value = load_sp(builder);
             let new_sp = builder.ins().iadd_imm(sp_value, -1);
-            builder.ins().store(MemFlags::new(), new_sp, sp_addr, 0);
+            builder.def_var(sp_var, new_sp);
             let addr = stack_addr(builder, new_sp);
             builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
         };

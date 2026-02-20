@@ -20,12 +20,7 @@ impl IntObject {
 }
 
 pub(crate) fn downcast_i64(value: &Value) -> Option<i64> {
-    let object_ref = value.object_ref();
-    let object = object_ref.borrow();
-    object
-        .as_any()
-        .downcast_ref::<IntObject>()
-        .map(IntObject::value)
+    value.as_int()
 }
 
 fn with_int<R>(receiver: &ObjectRef, f: impl FnOnce(&IntObject) -> R) -> R {
