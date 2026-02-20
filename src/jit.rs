@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use cranelift_jit::JITModule;
@@ -11,6 +12,8 @@ mod codegen;
 mod runtime;
 
 use runtime::{CompiledFunctionPointer, EntryFunction};
+
+static DUMP_CLIF: AtomicBool = AtomicBool::new(false);
 
 pub struct JIT;
 
@@ -36,6 +39,14 @@ impl JIT {
     pub fn run_prepared(&self, prepared: &PreparedProgram) -> Result<String> {
         runtime::run_prepared(prepared.entry, prepared.functions.clone())
     }
+}
+
+pub fn set_dump_clif(enabled: bool) {
+    DUMP_CLIF.store(enabled, Ordering::Relaxed);
+}
+
+pub(super) fn dump_clif_enabled() -> bool {
+    DUMP_CLIF.load(Ordering::Relaxed)
 }
 
 impl Default for JIT {

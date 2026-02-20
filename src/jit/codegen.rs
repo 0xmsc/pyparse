@@ -27,8 +27,10 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let runtime_funcs = declare_runtime_functions(&mut module, ptr_type)?;
     let mut string_data = StringData::new();
 
+    // Declare all function symbols up front so later lowering can reference them.
     let mut function_ids = HashMap::new();
     let mut function_arities = HashMap::new();
+    // Lower each user-defined function into Cranelift IR, one function at a time.
     for name in &function_names {
         let arity = compiled
             .functions
@@ -57,6 +59,7 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
             &mut module,
             &runtime_funcs,
             &mut string_data,
+            name,
             function_ids.get(*name).copied().unwrap(),
             &function.params,
             &function.code,
@@ -68,12 +71,14 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
         &mut module,
         &runtime_funcs,
         &mut string_data,
+        "run_main",
         main_id,
         &[],
         &compiled.main,
         &BTreeSet::new(),
     )?;
 
+    // Finalize all emitted function bodies into executable machine code.
     module.finalize_definitions()?;
     let entry = module.get_finalized_function(main_id);
     let entry: EntryFunction = unsafe { std::mem::transmute(entry) };
@@ -97,26 +102,16 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
 }
 
 struct RuntimeFunctions {
-    make_int: FuncId,
-    make_bool: FuncId,
-    make_string: FuncId,
-    make_none: FuncId,
-    make_function: FuncId,
-    make_list: FuncId,
-    define_class: FuncId,
-    add: FuncId,
-    sub: FuncId,
-    less_than: FuncId,
-    less_than_truthy: FuncId,
-    is_truthy: FuncId,
-    call: FuncId,
-    load_name: FuncId,
-    store_name: FuncId,
-    load_attr: FuncId,
-    store_attr: FuncId,
-    load_index: FuncId,
-    store_index_value: FuncId,
-    store_index_name: FuncId,
+    by_id: HashMap<runtime::RuntimeFunctionId, FuncId>,
+}
+
+impl RuntimeFunctions {
+    fn get(&self, id: runtime::RuntimeFunctionId) -> Result<FuncId> {
+        self.by_id
+            .get(&id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("Missing runtime function import: {id:?}"))
+    }
 }
 
 struct StringData {
@@ -155,211 +150,115 @@ fn value_function_signature(
     sig
 }
 
+fn runtime_function_signature(
+    module: &mut JITModule,
+    ptr_type: cranelift_codegen::ir::Type,
+    signature: runtime::RuntimeFunctionSignature,
+) -> Signature {
+    let mut sig = module.make_signature();
+    match signature {
+        runtime::RuntimeFunctionSignature::CtxI64ToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxI8ToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I8));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxPtrI64ToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxPtrPtrI64ToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxDefineClassToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxValueValueToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxValueValueToI8 => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.returns.push(AbiParam::new(types::I8));
+        }
+        runtime::RuntimeFunctionSignature::ValueToI8 => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.returns.push(AbiParam::new(types::I8));
+        }
+        runtime::RuntimeFunctionSignature::CtxPtrI64ValueToVoid => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxValuePtrI64ToValue => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxValuePtrI64ValueToVoid => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxValueValueValueToVoid => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+        }
+        runtime::RuntimeFunctionSignature::CtxPtrI64ValueValueToVoid => {
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(ptr_type));
+        }
+    }
+    sig
+}
+
 fn declare_runtime_functions(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
 ) -> Result<RuntimeFunctions> {
-    let mut make_int_sig = module.make_signature();
-    make_int_sig.params.push(AbiParam::new(ptr_type));
-    make_int_sig.params.push(AbiParam::new(types::I64));
-    make_int_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut make_bool_sig = module.make_signature();
-    make_bool_sig.params.push(AbiParam::new(ptr_type));
-    make_bool_sig.params.push(AbiParam::new(types::I8));
-    make_bool_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut make_string_sig = module.make_signature();
-    make_string_sig.params.push(AbiParam::new(ptr_type));
-    make_string_sig.params.push(AbiParam::new(ptr_type));
-    make_string_sig.params.push(AbiParam::new(types::I64));
-    make_string_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut make_none_sig = module.make_signature();
-    make_none_sig.params.push(AbiParam::new(ptr_type));
-    make_none_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut make_function_sig = module.make_signature();
-    make_function_sig.params.push(AbiParam::new(ptr_type));
-    make_function_sig.params.push(AbiParam::new(ptr_type));
-    make_function_sig.params.push(AbiParam::new(types::I64));
-    make_function_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut make_list_sig = module.make_signature();
-    make_list_sig.params.push(AbiParam::new(ptr_type));
-    make_list_sig.params.push(AbiParam::new(ptr_type));
-    make_list_sig.params.push(AbiParam::new(types::I64));
-    make_list_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut define_class_sig = module.make_signature();
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(types::I64));
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(ptr_type));
-    define_class_sig.params.push(AbiParam::new(types::I64));
-    define_class_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut binary_sig = module.make_signature();
-    binary_sig.params.push(AbiParam::new(ptr_type));
-    binary_sig.params.push(AbiParam::new(ptr_type));
-    binary_sig.params.push(AbiParam::new(ptr_type));
-    binary_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut binary_truthy_sig = module.make_signature();
-    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
-    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
-    binary_truthy_sig.params.push(AbiParam::new(ptr_type));
-    binary_truthy_sig.returns.push(AbiParam::new(types::I8));
-
-    let mut truthy_sig = module.make_signature();
-    truthy_sig.params.push(AbiParam::new(ptr_type));
-    truthy_sig.returns.push(AbiParam::new(types::I8));
-
-    let mut call_sig = module.make_signature();
-    call_sig.params.push(AbiParam::new(ptr_type));
-    call_sig.params.push(AbiParam::new(ptr_type));
-    call_sig.params.push(AbiParam::new(ptr_type));
-    call_sig.params.push(AbiParam::new(types::I64));
-    call_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut load_name_sig = module.make_signature();
-    load_name_sig.params.push(AbiParam::new(ptr_type));
-    load_name_sig.params.push(AbiParam::new(ptr_type));
-    load_name_sig.params.push(AbiParam::new(types::I64));
-    load_name_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut store_name_sig = module.make_signature();
-    store_name_sig.params.push(AbiParam::new(ptr_type));
-    store_name_sig.params.push(AbiParam::new(ptr_type));
-    store_name_sig.params.push(AbiParam::new(types::I64));
-    store_name_sig.params.push(AbiParam::new(ptr_type));
-
-    let mut load_attr_sig = module.make_signature();
-    load_attr_sig.params.push(AbiParam::new(ptr_type));
-    load_attr_sig.params.push(AbiParam::new(ptr_type));
-    load_attr_sig.params.push(AbiParam::new(ptr_type));
-    load_attr_sig.params.push(AbiParam::new(types::I64));
-    load_attr_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut store_attr_sig = module.make_signature();
-    store_attr_sig.params.push(AbiParam::new(ptr_type));
-    store_attr_sig.params.push(AbiParam::new(ptr_type));
-    store_attr_sig.params.push(AbiParam::new(ptr_type));
-    store_attr_sig.params.push(AbiParam::new(types::I64));
-    store_attr_sig.params.push(AbiParam::new(ptr_type));
-
-    let mut load_index_sig = module.make_signature();
-    load_index_sig.params.push(AbiParam::new(ptr_type));
-    load_index_sig.params.push(AbiParam::new(ptr_type));
-    load_index_sig.params.push(AbiParam::new(ptr_type));
-    load_index_sig.returns.push(AbiParam::new(ptr_type));
-
-    let mut store_index_value_sig = module.make_signature();
-    store_index_value_sig.params.push(AbiParam::new(ptr_type));
-    store_index_value_sig.params.push(AbiParam::new(ptr_type));
-    store_index_value_sig.params.push(AbiParam::new(ptr_type));
-    store_index_value_sig.params.push(AbiParam::new(ptr_type));
-
-    let mut store_index_name_sig = module.make_signature();
-    store_index_name_sig.params.push(AbiParam::new(ptr_type));
-    store_index_name_sig.params.push(AbiParam::new(ptr_type));
-    store_index_name_sig.params.push(AbiParam::new(types::I64));
-    store_index_name_sig.params.push(AbiParam::new(ptr_type));
-    store_index_name_sig.params.push(AbiParam::new(ptr_type));
-
-    Ok(RuntimeFunctions {
-        make_int: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_INT,
-            Linkage::Import,
-            &make_int_sig,
-        )?,
-        make_bool: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_BOOL,
-            Linkage::Import,
-            &make_bool_sig,
-        )?,
-        make_string: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_STRING,
-            Linkage::Import,
-            &make_string_sig,
-        )?,
-        make_none: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_NONE,
-            Linkage::Import,
-            &make_none_sig,
-        )?,
-        make_function: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_FUNCTION,
-            Linkage::Import,
-            &make_function_sig,
-        )?,
-        make_list: module.declare_function(
-            runtime::SYMBOL_RUNTIME_MAKE_LIST,
-            Linkage::Import,
-            &make_list_sig,
-        )?,
-        define_class: module.declare_function(
-            runtime::SYMBOL_RUNTIME_DEFINE_CLASS,
-            Linkage::Import,
-            &define_class_sig,
-        )?,
-        add: module.declare_function(runtime::SYMBOL_RUNTIME_ADD, Linkage::Import, &binary_sig)?,
-        sub: module.declare_function(runtime::SYMBOL_RUNTIME_SUB, Linkage::Import, &binary_sig)?,
-        less_than: module.declare_function(
-            runtime::SYMBOL_RUNTIME_LESS_THAN,
-            Linkage::Import,
-            &binary_sig,
-        )?,
-        less_than_truthy: module.declare_function(
-            runtime::SYMBOL_RUNTIME_LESS_THAN_TRUTHY,
-            Linkage::Import,
-            &binary_truthy_sig,
-        )?,
-        is_truthy: module.declare_function(
-            runtime::SYMBOL_RUNTIME_IS_TRUTHY,
-            Linkage::Import,
-            &truthy_sig,
-        )?,
-        call: module.declare_function(runtime::SYMBOL_RUNTIME_CALL, Linkage::Import, &call_sig)?,
-        load_name: module.declare_function(
-            runtime::SYMBOL_RUNTIME_LOAD_NAME,
-            Linkage::Import,
-            &load_name_sig,
-        )?,
-        store_name: module.declare_function(
-            runtime::SYMBOL_RUNTIME_STORE_NAME,
-            Linkage::Import,
-            &store_name_sig,
-        )?,
-        load_attr: module.declare_function(
-            runtime::SYMBOL_RUNTIME_LOAD_ATTR,
-            Linkage::Import,
-            &load_attr_sig,
-        )?,
-        store_attr: module.declare_function(
-            runtime::SYMBOL_RUNTIME_STORE_ATTR,
-            Linkage::Import,
-            &store_attr_sig,
-        )?,
-        load_index: module.declare_function(
-            runtime::SYMBOL_RUNTIME_LOAD_INDEX,
-            Linkage::Import,
-            &load_index_sig,
-        )?,
-        store_index_value: module.declare_function(
-            runtime::SYMBOL_RUNTIME_STORE_INDEX_VALUE,
-            Linkage::Import,
-            &store_index_value_sig,
-        )?,
-        store_index_name: module.declare_function(
-            runtime::SYMBOL_RUNTIME_STORE_INDEX_NAME,
-            Linkage::Import,
-            &store_index_name_sig,
-        )?,
-    })
+    let mut by_id = HashMap::new();
+    for spec in runtime::runtime_function_specs() {
+        let signature = runtime_function_signature(module, ptr_type, spec.signature);
+        let func_id = module.declare_function(spec.symbol, Linkage::Import, &signature)?;
+        by_id.insert(spec.id, func_id);
+    }
+    Ok(RuntimeFunctions { by_id })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -367,6 +266,7 @@ fn define_function(
     module: &mut JITModule,
     runtime_funcs: &RuntimeFunctions,
     string_data: &mut StringData,
+    function_name: &str,
     func_id: FuncId,
     param_names: &[String],
     code: &[Instruction],
@@ -382,31 +282,89 @@ fn define_function(
         .map(|(idx, name)| ((*name).clone(), idx as i64))
         .collect();
 
+    // Build this function in an isolated Cranelift compilation context.
     let mut ctx = module.make_context();
     ctx.func.signature = value_function_signature(module, ptr_type);
-    let make_int = module.declare_func_in_func(runtime_funcs.make_int, &mut ctx.func);
-    let make_bool = module.declare_func_in_func(runtime_funcs.make_bool, &mut ctx.func);
-    let make_string = module.declare_func_in_func(runtime_funcs.make_string, &mut ctx.func);
-    let make_none = module.declare_func_in_func(runtime_funcs.make_none, &mut ctx.func);
-    let make_function = module.declare_func_in_func(runtime_funcs.make_function, &mut ctx.func);
-    let make_list = module.declare_func_in_func(runtime_funcs.make_list, &mut ctx.func);
-    let define_class = module.declare_func_in_func(runtime_funcs.define_class, &mut ctx.func);
-    let add = module.declare_func_in_func(runtime_funcs.add, &mut ctx.func);
-    let sub = module.declare_func_in_func(runtime_funcs.sub, &mut ctx.func);
-    let less_than = module.declare_func_in_func(runtime_funcs.less_than, &mut ctx.func);
-    let less_than_truthy =
-        module.declare_func_in_func(runtime_funcs.less_than_truthy, &mut ctx.func);
-    let is_truthy = module.declare_func_in_func(runtime_funcs.is_truthy, &mut ctx.func);
-    let call_value = module.declare_func_in_func(runtime_funcs.call, &mut ctx.func);
-    let load_name = module.declare_func_in_func(runtime_funcs.load_name, &mut ctx.func);
-    let store_name = module.declare_func_in_func(runtime_funcs.store_name, &mut ctx.func);
-    let load_attr = module.declare_func_in_func(runtime_funcs.load_attr, &mut ctx.func);
-    let store_attr = module.declare_func_in_func(runtime_funcs.store_attr, &mut ctx.func);
-    let load_index = module.declare_func_in_func(runtime_funcs.load_index, &mut ctx.func);
-    let store_index_value =
-        module.declare_func_in_func(runtime_funcs.store_index_value, &mut ctx.func);
-    let store_index_name =
-        module.declare_func_in_func(runtime_funcs.store_index_name, &mut ctx.func);
+    let make_int = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeInt)?,
+        &mut ctx.func,
+    );
+    let make_bool = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeBool)?,
+        &mut ctx.func,
+    );
+    let make_string = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeString)?,
+        &mut ctx.func,
+    );
+    let make_none = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeNone)?,
+        &mut ctx.func,
+    );
+    let make_function = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeFunction)?,
+        &mut ctx.func,
+    );
+    let make_list = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::MakeList)?,
+        &mut ctx.func,
+    );
+    let define_class = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::DefineClass)?,
+        &mut ctx.func,
+    );
+    let add = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::Add)?,
+        &mut ctx.func,
+    );
+    let sub = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::Sub)?,
+        &mut ctx.func,
+    );
+    let less_than = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::LessThan)?,
+        &mut ctx.func,
+    );
+    let less_than_truthy = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::LessThanTruthy)?,
+        &mut ctx.func,
+    );
+    let is_truthy = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::IsTruthy)?,
+        &mut ctx.func,
+    );
+    let call_value = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::Call)?,
+        &mut ctx.func,
+    );
+    let load_name = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::LoadName)?,
+        &mut ctx.func,
+    );
+    let store_name = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::StoreName)?,
+        &mut ctx.func,
+    );
+    let load_attr = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::LoadAttr)?,
+        &mut ctx.func,
+    );
+    let store_attr = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::StoreAttr)?,
+        &mut ctx.func,
+    );
+    let load_index = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::LoadIndex)?,
+        &mut ctx.func,
+    );
+    let store_index_value = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexValue)?,
+        &mut ctx.func,
+    );
+    let store_index_name = module.declare_func_in_func(
+        runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
+        &mut ctx.func,
+    );
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -418,6 +376,7 @@ fn define_function(
     let ctx_param = builder.block_params(entry_block)[0];
     let args_param = builder.block_params(entry_block)[1];
 
+    // Reserve stack slots for the VM operand stack, call scratch space, and locals.
     let ptr_align_shift = (ptr_size as u32).trailing_zeros() as u8;
     let stack_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
         cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
@@ -458,11 +417,15 @@ fn define_function(
         )
     };
 
+    // `stack_addr` returns a frame-relative pointer to the start of a stack slot.
+    // These are the base addresses for our VM operand stack, call scratch space,
+    // and scalar temporaries.
     let stack_base = builder.ins().stack_addr(ptr_type, stack_slot, 0);
     let call_args_base = builder.ins().stack_addr(ptr_type, call_args_slot, 0);
     let tmp_addr = builder.ins().stack_addr(ptr_type, tmp_slot, 0);
     let sp_var = Variable::from_u32(0);
     builder.declare_var(sp_var, ptr_type);
+    // `sp_var` stores a logical stack depth (number of values), not a byte offset.
     let zero = builder.ins().iconst(ptr_type, 0);
     builder.def_var(sp_var, zero);
 
@@ -498,6 +461,7 @@ fn define_function(
         }
     }
 
+    // Create one block per bytecode instruction plus a dedicated exit block.
     let mut blocks = Vec::with_capacity(code.len() + 1);
     for _ in 0..=code.len() {
         blocks.push(builder.create_block());
@@ -506,16 +470,21 @@ fn define_function(
 
     builder.ins().jump(blocks[0], &[]);
 
+    // Translate bytecode instructions into Cranelift IR.
     for (idx, instruction) in code.iter().enumerate() {
         let block = blocks[idx];
         builder.switch_to_block(block);
         let mut terminated = false;
 
+        let _load_sp = |builder: &mut FunctionBuilder| builder.use_var(sp_var);
+        // Read current logical stack depth.
         let load_sp = |builder: &mut FunctionBuilder| builder.use_var(sp_var);
+        // Translate a logical stack index to an address in `stack_slot`.
         let stack_addr = |builder: &mut FunctionBuilder, index| {
             let offset = builder.ins().imul_imm(index, ptr_size);
             builder.ins().iadd(stack_base, offset)
         };
+        // Push: store at current SP, then increment SP.
         let push_value = |builder: &mut FunctionBuilder, value| {
             let sp_value = load_sp(builder);
             let addr = stack_addr(builder, sp_value);
@@ -523,6 +492,7 @@ fn define_function(
             let new_sp = builder.ins().iadd_imm(sp_value, 1);
             builder.def_var(sp_var, new_sp);
         };
+        // Pop: decrement SP first, then load the new top value.
         let pop_value = |builder: &mut FunctionBuilder| {
             let sp_value = load_sp(builder);
             let new_sp = builder.ins().iadd_imm(sp_value, -1);
@@ -530,6 +500,7 @@ fn define_function(
             let addr = stack_addr(builder, new_sp);
             builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
         };
+        // Runtime helpers return null on error; branch to shared error block.
         let check_null = |builder: &mut FunctionBuilder, value| {
             let ok_block = builder.create_block();
             let is_null = builder.ins().icmp_imm(IntCC::Equal, value, 0);
@@ -1074,6 +1045,10 @@ fn define_function(
 
     builder.seal_all_blocks();
     builder.finalize();
+    if super::dump_clif_enabled() {
+        eprintln!("; ---- CLIF {function_name} ----");
+        eprintln!("{}", ctx.func.display());
+    }
     module.define_function(func_id, &mut ctx)?;
     module.clear_context(&mut ctx);
 

@@ -10,26 +10,55 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::object::CallContext;
 use crate::runtime::value::Value;
 
-pub(super) const SYMBOL_RUNTIME_MAKE_INT: &str = "runtime_make_int";
-pub(super) const SYMBOL_RUNTIME_MAKE_BOOL: &str = "runtime_make_bool";
-pub(super) const SYMBOL_RUNTIME_MAKE_STRING: &str = "runtime_make_string";
-pub(super) const SYMBOL_RUNTIME_MAKE_NONE: &str = "runtime_make_none";
-pub(super) const SYMBOL_RUNTIME_MAKE_FUNCTION: &str = "runtime_make_function";
-pub(super) const SYMBOL_RUNTIME_MAKE_LIST: &str = "runtime_make_list";
-pub(super) const SYMBOL_RUNTIME_DEFINE_CLASS: &str = "runtime_define_class";
-pub(super) const SYMBOL_RUNTIME_ADD: &str = "runtime_add";
-pub(super) const SYMBOL_RUNTIME_SUB: &str = "runtime_sub";
-pub(super) const SYMBOL_RUNTIME_LESS_THAN: &str = "runtime_less_than";
-pub(super) const SYMBOL_RUNTIME_LESS_THAN_TRUTHY: &str = "runtime_less_than_truthy";
-pub(super) const SYMBOL_RUNTIME_IS_TRUTHY: &str = "runtime_is_truthy";
-pub(super) const SYMBOL_RUNTIME_CALL: &str = "runtime_call";
-pub(super) const SYMBOL_RUNTIME_LOAD_NAME: &str = "runtime_load_name";
-pub(super) const SYMBOL_RUNTIME_STORE_NAME: &str = "runtime_store_name";
-pub(super) const SYMBOL_RUNTIME_LOAD_ATTR: &str = "runtime_load_attr";
-pub(super) const SYMBOL_RUNTIME_STORE_ATTR: &str = "runtime_store_attr";
-pub(super) const SYMBOL_RUNTIME_LOAD_INDEX: &str = "runtime_load_index";
-pub(super) const SYMBOL_RUNTIME_STORE_INDEX_VALUE: &str = "runtime_store_index_value";
-pub(super) const SYMBOL_RUNTIME_STORE_INDEX_NAME: &str = "runtime_store_index_name";
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum RuntimeFunctionId {
+    MakeInt,
+    MakeBool,
+    MakeString,
+    MakeNone,
+    MakeFunction,
+    MakeList,
+    DefineClass,
+    Add,
+    Sub,
+    LessThan,
+    LessThanTruthy,
+    IsTruthy,
+    Call,
+    LoadName,
+    StoreName,
+    LoadAttr,
+    StoreAttr,
+    LoadIndex,
+    StoreIndexValue,
+    StoreIndexName,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum RuntimeFunctionSignature {
+    CtxI64ToValue,
+    CtxI8ToValue,
+    CtxPtrI64ToValue,
+    CtxToValue,
+    CtxPtrPtrI64ToValue,
+    CtxDefineClassToValue,
+    CtxValueValueToValue,
+    CtxValueValueToI8,
+    ValueToI8,
+    CtxPtrI64ValueToVoid,
+    CtxValuePtrI64ToValue,
+    CtxValuePtrI64ValueToVoid,
+    CtxValueValueValueToVoid,
+    CtxPtrI64ValueValueToVoid,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RuntimeFunctionSpec {
+    pub(super) id: RuntimeFunctionId,
+    pub(super) symbol: &'static str,
+    pub(super) function: *const u8,
+    pub(super) signature: RuntimeFunctionSignature,
+}
 
 const MIN_INTERNED_INT: i64 = -4096;
 const MAX_INTERNED_INT: i64 = 16384;
@@ -620,42 +649,135 @@ unsafe extern "C" fn runtime_store_index_name(
     }
 }
 
+pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 20] {
+    [
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeInt,
+            symbol: "runtime_make_int",
+            function: runtime_make_int as *const u8,
+            signature: RuntimeFunctionSignature::CtxI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeBool,
+            symbol: "runtime_make_bool",
+            function: runtime_make_bool as *const u8,
+            signature: RuntimeFunctionSignature::CtxI8ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeString,
+            symbol: "runtime_make_string",
+            function: runtime_make_string as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeNone,
+            symbol: "runtime_make_none",
+            function: runtime_make_none as *const u8,
+            signature: RuntimeFunctionSignature::CtxToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeFunction,
+            symbol: "runtime_make_function",
+            function: runtime_make_function as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeList,
+            symbol: "runtime_make_list",
+            function: runtime_make_list as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::DefineClass,
+            symbol: "runtime_define_class",
+            function: runtime_define_class as *const u8,
+            signature: RuntimeFunctionSignature::CtxDefineClassToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::Add,
+            symbol: "runtime_add",
+            function: runtime_add as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::Sub,
+            symbol: "runtime_sub",
+            function: runtime_sub as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::LessThan,
+            symbol: "runtime_less_than",
+            function: runtime_less_than as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::LessThanTruthy,
+            symbol: "runtime_less_than_truthy",
+            function: runtime_less_than_truthy as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueToI8,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::IsTruthy,
+            symbol: "runtime_is_truthy",
+            function: runtime_is_truthy as *const u8,
+            signature: RuntimeFunctionSignature::ValueToI8,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::Call,
+            symbol: "runtime_call",
+            function: runtime_call as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrPtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::LoadName,
+            symbol: "runtime_load_name",
+            function: runtime_load_name as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::StoreName,
+            symbol: "runtime_store_name",
+            function: runtime_store_name as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ValueToVoid,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::LoadAttr,
+            symbol: "runtime_load_attr",
+            function: runtime_load_attr as *const u8,
+            signature: RuntimeFunctionSignature::CtxValuePtrI64ToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::StoreAttr,
+            symbol: "runtime_store_attr",
+            function: runtime_store_attr as *const u8,
+            signature: RuntimeFunctionSignature::CtxValuePtrI64ValueToVoid,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::LoadIndex,
+            symbol: "runtime_load_index",
+            function: runtime_load_index as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::StoreIndexValue,
+            symbol: "runtime_store_index_value",
+            function: runtime_store_index_value as *const u8,
+            signature: RuntimeFunctionSignature::CtxValueValueValueToVoid,
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::StoreIndexName,
+            symbol: "runtime_store_index_name",
+            function: runtime_store_index_name as *const u8,
+            signature: RuntimeFunctionSignature::CtxPtrI64ValueValueToVoid,
+        },
+    ]
+}
+
 pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
-    builder.symbol(SYMBOL_RUNTIME_MAKE_INT, runtime_make_int as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_MAKE_BOOL, runtime_make_bool as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_MAKE_STRING, runtime_make_string as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_MAKE_NONE, runtime_make_none as *const u8);
-    builder.symbol(
-        SYMBOL_RUNTIME_MAKE_FUNCTION,
-        runtime_make_function as *const u8,
-    );
-    builder.symbol(SYMBOL_RUNTIME_MAKE_LIST, runtime_make_list as *const u8);
-    builder.symbol(
-        SYMBOL_RUNTIME_DEFINE_CLASS,
-        runtime_define_class as *const u8,
-    );
-    builder.symbol(SYMBOL_RUNTIME_ADD, runtime_add as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_SUB, runtime_sub as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_LESS_THAN, runtime_less_than as *const u8);
-    builder.symbol(
-        SYMBOL_RUNTIME_LESS_THAN_TRUTHY,
-        runtime_less_than_truthy as *const u8,
-    );
-    builder.symbol(SYMBOL_RUNTIME_IS_TRUTHY, runtime_is_truthy as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_CALL, runtime_call as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_LOAD_NAME, runtime_load_name as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_STORE_NAME, runtime_store_name as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_LOAD_ATTR, runtime_load_attr as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_STORE_ATTR, runtime_store_attr as *const u8);
-    builder.symbol(SYMBOL_RUNTIME_LOAD_INDEX, runtime_load_index as *const u8);
-    builder.symbol(
-        SYMBOL_RUNTIME_STORE_INDEX_VALUE,
-        runtime_store_index_value as *const u8,
-    );
-    builder.symbol(
-        SYMBOL_RUNTIME_STORE_INDEX_NAME,
-        runtime_store_index_name as *const u8,
-    );
+    for spec in runtime_function_specs() {
+        builder.symbol(spec.symbol, spec.function);
+    }
 }
 
 pub(super) fn run_prepared(
