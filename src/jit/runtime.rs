@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use cranelift_jit::JITBuilder;
+use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
@@ -63,16 +64,16 @@ pub(super) struct CompiledFunctionPointer {
 
 /// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
-    globals: HashMap<String, Value>,
-    call_frames: Vec<HashMap<String, Value>>,
+    globals: FxHashMap<String, Value>,
+    call_frames: Vec<FxHashMap<String, Value>>,
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<Value>>,
     #[allow(clippy::vec_box)]
     interned_values: Vec<Box<Value>>,
-    int_intern: HashMap<i64, usize>,
-    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
-    symbol_cache: HashMap<(usize, i64), String>,
+    int_intern: FxHashMap<i64, usize>,
+    functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
+    symbol_cache: FxHashMap<(usize, i64), Arc<str>>,
     error: Option<String>,
     runtime_error: Option<RuntimeError>,
 }
@@ -84,12 +85,13 @@ enum NameResolution {
     Missing,
 }
 
-fn bind_call_frame(params: &[String], args: &[Value]) -> HashMap<String, Value> {
+#[cfg(test)]
+fn bind_call_frame(params: &[String], args: &[Value]) -> FxHashMap<String, Value> {
     params
         .iter()
         .cloned()
         .zip(args.iter().cloned())
-        .collect::<HashMap<_, _>>()
+        .collect::<FxHashMap<_, _>>()
 }
 
 fn resolve_name(
@@ -110,21 +112,21 @@ fn resolve_name(
 }
 
 impl Runtime {
-    fn new(functions: Arc<HashMap<String, CompiledFunctionPointer>>) -> Self {
+    fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
             Box::new(Value::none_object()),
         ];
         Self {
-            globals: HashMap::new(),
+            globals: FxHashMap::default(),
             call_frames: Vec::new(),
             output: Vec::new(),
             values: Vec::new(),
             interned_values,
-            int_intern: HashMap::new(),
+            int_intern: FxHashMap::default(),
             functions,
-            symbol_cache: HashMap::new(),
+            symbol_cache: FxHashMap::default(),
             error: None,
             runtime_error: None,
         }
@@ -176,6 +178,19 @@ impl Runtime {
         self.alloc_value(value)
     }
 
+    fn alloc_or_intern_value_ref(&mut self, value: &Value) -> *mut Value {
+        if let Some(integer) = value.as_int() {
+            return self.int_ptr(integer);
+        }
+        if let Some(boolean) = value.as_bool() {
+            return self.bool_ptr(boolean);
+        }
+        if value.is_none() {
+            return self.none_ptr();
+        }
+        self.alloc_value(value.clone())
+    }
+
     fn set_error_message(&mut self, message: String) {
         if self.error.is_none() {
             self.error = Some(message);
@@ -189,12 +204,12 @@ impl Runtime {
         self.set_error_message(error.to_string());
     }
 
-    fn decode_symbol(&mut self, ptr: *const u8, len: i64) -> String {
+    fn decode_symbol(&mut self, ptr: *const u8, len: i64) -> Arc<str> {
         let key = (ptr as usize, len);
         if let Some(symbol) = self.symbol_cache.get(&key) {
             return symbol.clone();
         }
-        let symbol = decode_runtime_string(ptr, len);
+        let symbol: Arc<str> = decode_runtime_string(ptr, len).into();
         self.symbol_cache.insert(key, symbol.clone());
         symbol
     }
@@ -208,11 +223,17 @@ impl Runtime {
         self.globals.get(name).cloned()
     }
 
-    fn store_named_value(&mut self, name: String, value: Value) {
+    fn store_named_value(&mut self, name: &str, value: Value) {
         if let Some(frame) = self.call_frames.last_mut() {
-            frame.insert(name, value);
+            if let Some(existing) = frame.get_mut(name) {
+                *existing = value;
+            } else {
+                frame.insert(name.to_string(), value);
+            }
+        } else if let Some(existing) = self.globals.get_mut(name) {
+            *existing = value;
         } else {
-            self.globals.insert(name, value);
+            self.globals.insert(name.to_string(), value);
         }
     }
 }
@@ -250,10 +271,12 @@ impl CallContext for Runtime {
                 })?;
         RuntimeError::expect_function_arity(name, function.arity, args.len())?;
 
-        let frame = bind_call_frame(&function.params, &args);
+        let mut frame =
+            FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
         let mut arg_ptrs = Vec::with_capacity(args.len());
-        for arg in args {
-            arg_ptrs.push(self.alloc_or_intern_value(arg));
+        for (param, arg) in function.params.iter().zip(args.into_iter()) {
+            arg_ptrs.push(self.alloc_or_intern_value_ref(&arg));
+            frame.insert(param.clone(), arg);
         }
 
         self.call_frames.push(frame);
@@ -308,7 +331,7 @@ unsafe extern "C" fn runtime_make_function(
     len: i64,
 ) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
-    let symbol = runtime.decode_symbol(ptr, len);
+    let symbol = runtime.decode_symbol(ptr, len).to_string();
     runtime.alloc_value(Value::function_object(symbol))
 }
 
@@ -366,7 +389,9 @@ unsafe extern "C" fn runtime_define_class(
         return ptr::null_mut();
     }
 
-    let class_name = runtime.decode_symbol(class_name_ptr, class_name_len);
+    let class_name = runtime
+        .decode_symbol(class_name_ptr, class_name_len)
+        .to_string();
     let mut methods = HashMap::with_capacity(count);
     for index in 0..count {
         let method_name_ptr = unsafe { *method_name_ptrs.add(index) };
@@ -379,8 +404,12 @@ unsafe extern "C" fn runtime_define_class(
             return ptr::null_mut();
         }
 
-        let method_name = runtime.decode_symbol(method_name_ptr, method_name_len);
-        let method_symbol = runtime.decode_symbol(method_symbol_ptr, method_symbol_len);
+        let method_name = runtime
+            .decode_symbol(method_name_ptr, method_name_len)
+            .to_string();
+        let method_symbol = runtime
+            .decode_symbol(method_symbol_ptr, method_symbol_len)
+            .to_string();
         methods.insert(method_name, Value::function_object(method_symbol));
     }
     runtime.alloc_value(Value::class_object(class_name, methods))
@@ -505,20 +534,35 @@ unsafe extern "C" fn runtime_call(
 /// Runtime hook for name lookup (current call-frame locals, then globals, then builtins).
 unsafe extern "C" fn runtime_load_name(ctx: *mut Runtime, ptr: *const u8, len: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
-    let name = runtime.decode_symbol(ptr, len);
-    let local_value = runtime
-        .call_frames
-        .last()
-        .and_then(|frame| frame.get(&name))
-        .cloned();
-    let global_value = runtime.globals.get(&name).cloned();
-    match resolve_name(local_value, global_value, BuiltinFunction::from_name(&name)) {
-        NameResolution::Value(value) => runtime.alloc_or_intern_value(value),
+    let (resolution, missing_name) = {
+        let name = runtime.decode_symbol(ptr, len);
+        let local_value = runtime
+            .call_frames
+            .last()
+            .and_then(|frame| frame.get(name.as_ref()))
+            .cloned();
+        let global_value = runtime.globals.get(name.as_ref()).cloned();
+        let resolution = resolve_name(
+            local_value,
+            global_value,
+            BuiltinFunction::from_name(name.as_ref()),
+        );
+        let missing_name = if matches!(resolution, NameResolution::Missing) {
+            Some(name.to_string())
+        } else {
+            None
+        };
+        (resolution, missing_name)
+    };
+    match resolution {
+        NameResolution::Value(value) => runtime.alloc_or_intern_value_ref(&value),
         NameResolution::Builtin(builtin) => {
             runtime.alloc_value(Value::builtin_function_object(builtin))
         }
         NameResolution::Missing => {
-            runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
+            runtime.set_runtime_error(RuntimeError::UndefinedVariable {
+                name: missing_name.expect("missing resolution must include missing name"),
+            });
             ptr::null_mut()
         }
     }
@@ -537,7 +581,7 @@ unsafe extern "C" fn runtime_store_name(
         return;
     }
     let name = runtime.decode_symbol(ptr, len);
-    runtime.store_named_value(name, unsafe { (&*value).clone() });
+    runtime.store_named_value(name.as_ref(), unsafe { (&*value).clone() });
 }
 
 unsafe extern "C" fn runtime_load_attr(
@@ -553,7 +597,7 @@ unsafe extern "C" fn runtime_load_attr(
     }
     let attribute = runtime.decode_symbol(ptr, len);
     let object = unsafe { (&*object).clone() };
-    match object.get_attribute(&attribute) {
+    match object.get_attribute(attribute.as_ref()) {
         Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
@@ -581,7 +625,7 @@ unsafe extern "C" fn runtime_store_attr(
     let attribute = runtime.decode_symbol(ptr, len);
     let object = unsafe { (&*object).clone() };
     let value = unsafe { (&*value).clone() };
-    if let Err(error) = object.set_attribute(&attribute, value) {
+    if let Err(error) = object.set_attribute(attribute.as_ref(), value) {
         runtime.set_runtime_error(error);
     }
 }
@@ -631,8 +675,10 @@ unsafe extern "C" fn runtime_store_index_name(
     }
 
     let name = runtime.decode_symbol(ptr, len);
-    let Some(target) = runtime.load_named_value(&name) else {
-        runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
+    let Some(target) = runtime.load_named_value(name.as_ref()) else {
+        runtime.set_runtime_error(RuntimeError::UndefinedVariable {
+            name: name.to_string(),
+        });
         return;
     };
     let index = unsafe { (&*index).clone() };
@@ -786,7 +832,7 @@ pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
 /// Executes the JIT entry function inside a fresh runtime context.
 pub(super) fn run_prepared(
     entry: EntryFunction,
-    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
+    functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
 ) -> Result<String> {
     let mut runtime = Runtime::new(functions);
     let result = (entry)(&mut runtime as *mut Runtime, ptr::null());

@@ -9,6 +9,7 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
+use rustc_hash::FxHashMap;
 
 use crate::ast::Program;
 use crate::bytecode::{Instruction, compile};
@@ -80,7 +81,7 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let entry = module.get_finalized_function(main_id);
     let entry: EntryFunction = unsafe { std::mem::transmute(entry) };
 
-    let mut functions = HashMap::new();
+    let mut functions = FxHashMap::default();
     for (name, func_id) in &function_ids {
         let entry = module.get_finalized_function(*func_id);
         let entry: EntryFunction = unsafe { std::mem::transmute(entry) };

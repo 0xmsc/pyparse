@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use cranelift_jit::JITModule;
+use rustc_hash::FxHashMap;
 
 use crate::ast::Program;
 use crate::backend::{Backend, PreparedBackend};
@@ -20,7 +20,7 @@ pub struct JIT;
 pub struct PreparedProgram {
     _module: JITModule,
     entry: EntryFunction,
-    functions: Arc<HashMap<String, CompiledFunctionPointer>>,
+    functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
 }
 
 pub struct PreparedJIT {
