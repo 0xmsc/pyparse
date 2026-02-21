@@ -110,6 +110,7 @@ impl InterpreterRuntime {
             BuiltinFunction::Len,
             BuiltinFunction::Range,
             BuiltinFunction::Exception,
+            BuiltinFunction::StopIteration,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -316,10 +317,7 @@ impl InterpreterRuntime {
             }
             Statement::Raise(value) => {
                 let exception = self.eval_expression(value, environment)?;
-                Err(RuntimeError::Raised {
-                    exception: exception.to_output(),
-                }
-                .into())
+                Err(exception.to_raised_runtime_error().into())
             }
             Statement::Return(value) => {
                 let value = if let Some(value) = value {

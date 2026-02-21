@@ -110,7 +110,29 @@ pub(crate) fn call_builtin_with_output(
                         .join(", ")
                 ),
             };
-            Ok(Value::string_object(message))
+            if message.is_empty() {
+                Ok(Value::string_object("Exception".to_string()))
+            } else {
+                Ok(Value::string_object(format!("Exception: {message}")))
+            }
+        }
+        BuiltinFunction::StopIteration => {
+            let message = match args.len() {
+                0 => String::new(),
+                1 => args[0].to_output(),
+                _ => format!(
+                    "({})",
+                    args.iter()
+                        .map(Value::to_output)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            if message.is_empty() {
+                Ok(Value::string_object("StopIteration".to_string()))
+            } else {
+                Ok(Value::string_object(format!("StopIteration: {message}")))
+            }
         }
     }
 }
@@ -122,6 +144,7 @@ pub(crate) fn seed_builtin_globals(globals: &mut HashMap<String, Value>) {
         BuiltinFunction::Len,
         BuiltinFunction::Range,
         BuiltinFunction::Exception,
+        BuiltinFunction::StopIteration,
     ] {
         globals
             .entry(builtin.name().to_string())

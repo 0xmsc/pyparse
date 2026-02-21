@@ -153,6 +153,7 @@ impl<'a> VmRuntime<'a> {
             BuiltinFunction::Len,
             BuiltinFunction::Range,
             BuiltinFunction::Exception,
+            BuiltinFunction::StopIteration,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -405,10 +406,7 @@ impl<'a> VmRuntime<'a> {
             }
             Instruction::Raise => {
                 let exception = self.pop_stack()?;
-                return Err(RuntimeError::Raised {
-                    exception: exception.to_output(),
-                }
-                .into());
+                return Err(exception.to_raised_runtime_error().into());
             }
             Instruction::ResumeUnwind => {
                 let reason = self

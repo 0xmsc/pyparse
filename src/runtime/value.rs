@@ -105,6 +105,16 @@ impl Value {
         }
     }
 
+    pub(crate) fn to_raised_runtime_error(&self) -> RuntimeError {
+        let rendered = self.to_output();
+        if rendered == "StopIteration" || rendered.starts_with("StopIteration: ") {
+            return RuntimeError::StopIteration;
+        }
+        RuntimeError::Raised {
+            exception: rendered,
+        }
+    }
+
     pub(crate) fn is_truthy(&self) -> bool {
         match self {
             Value::Int(value) => return *value != 0,

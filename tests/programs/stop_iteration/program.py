@@ -1,12 +1,3 @@
-total = 0
-for x in [1, 2, 3]:
-    total = total + x
-print(total)
-
-for x in range(3):
-    print(x)
-print(x)
-
 class Counter:
     def __init__(self):
         self.n = 0
@@ -23,3 +14,4 @@ class Counter:
 
 for x in Counter():
     print(x)
+print("done")
