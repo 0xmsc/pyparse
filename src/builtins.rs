@@ -2,6 +2,7 @@
 pub enum BuiltinFunction {
     Print,
     Len,
+    Range,
 }
 
 impl BuiltinFunction {
@@ -9,6 +10,7 @@ impl BuiltinFunction {
         match self {
             Self::Print => "print",
             Self::Len => "len",
+            Self::Range => "range",
         }
     }
 
@@ -16,6 +18,7 @@ impl BuiltinFunction {
         match self {
             Self::Print => 1,
             Self::Len => 2,
+            Self::Range => 3,
         }
     }
 }

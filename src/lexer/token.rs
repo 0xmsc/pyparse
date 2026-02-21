@@ -16,6 +16,8 @@ pub enum TokenKind<'a> {
     If,
     Else,
     While,
+    For,
+    In,
     Def,
     Class,
     Return,

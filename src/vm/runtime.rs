@@ -124,7 +124,11 @@ impl<'a> VmRuntime<'a> {
     /// Initializes a VM runtime with builtin callable registrations.
     fn new(program: &'a CompiledProgram) -> Self {
         let mut call_registry = CallRegistry::new();
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+        for builtin in [
+            BuiltinFunction::Print,
+            BuiltinFunction::Len,
+            BuiltinFunction::Range,
+        ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
         }

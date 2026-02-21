@@ -64,7 +64,7 @@ impl Default for VM {
 #[cfg(test)]
 mod tests {
     use super::{VM, runtime::VmError};
-    use crate::ast::{AssignTarget, Expression, Program, Statement};
+    use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
     use crate::bytecode::{CompiledProgram, Instruction, compile};
     use crate::runtime::error::RuntimeError;
     use indoc::indoc;
@@ -142,6 +142,62 @@ mod tests {
             indoc! {"
                 2
                 1
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
+    fn supports_for_loop_over_list_and_range() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("total".to_string()),
+                    value: Expression::Integer(0),
+                },
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: Expression::List(vec![
+                        Expression::Integer(1),
+                        Expression::Integer(2),
+                        Expression::Integer(3),
+                    ]),
+                    body: vec![Statement::Assign {
+                        target: AssignTarget::Name("total".to_string()),
+                        value: Expression::BinaryOp {
+                            left: Box::new(Expression::Identifier("total".to_string())),
+                            op: BinaryOperator::Add,
+                            right: Box::new(Expression::Identifier("x".to_string())),
+                        },
+                    }],
+                },
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Identifier("total".to_string())],
+                )),
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: call("range", vec![Expression::Integer(3)]),
+                    body: vec![Statement::Expr(call(
+                        "print",
+                        vec![Expression::Identifier("x".to_string())],
+                    ))],
+                },
+                Statement::Expr(call("print", vec![Expression::Identifier("x".to_string())])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                6
+                0
+                1
+                2
+                2
             "}
             .trim_end()
         );

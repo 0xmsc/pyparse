@@ -157,6 +157,40 @@ mod tests {
     }
 
     #[test]
+    fn supports_for_loop_over_list_and_range() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("total".to_string()),
+                    value: int(0),
+                },
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: Expression::List(vec![int(1), int(2), int(3)]),
+                    body: vec![Statement::Assign {
+                        target: AssignTarget::Name("total".to_string()),
+                        value: Expression::BinaryOp {
+                            left: Box::new(identifier("total")),
+                            op: BinaryOperator::Add,
+                            right: Box::new(identifier("x")),
+                        },
+                    }],
+                },
+                print(vec![identifier("total")]),
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: call("range", vec![int(3)]),
+                    body: vec![print(vec![identifier("x")])],
+                },
+                print(vec![identifier("x")]),
+            ],
+        };
+
+        let output = run_program(&program).expect("run should succeed");
+        assert_eq!(output, "6\n0\n1\n2\n2");
+    }
+
+    #[test]
     fn supports_dict_literals_index_assignment_and_len() {
         let program = Program {
             statements: vec![

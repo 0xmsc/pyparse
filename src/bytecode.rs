@@ -74,6 +74,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
     let mut callable_ids = HashMap::new();
     let mut callables = Vec::new();
     let mut main = Vec::new();
+    let mut synthetic_name_id = 0_usize;
 
     for statement in &program.statements {
         match statement {
@@ -97,7 +98,11 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                     methods,
                 });
             }
-            _ => main.extend(compile_statement(statement, CompileScope::TopLevel)?),
+            _ => main.extend(compile_statement(
+                statement,
+                CompileScope::TopLevel,
+                &mut synthetic_name_id,
+            )?),
         }
     }
 
@@ -128,7 +133,8 @@ fn define_callable(
 
 /// Compiles a function body and appends implicit `Return` fallthrough behavior.
 fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
-    let mut code = compile_block(body, CompileScope::FunctionBody)?;
+    let mut synthetic_name_id = 0_usize;
+    let mut code = compile_block(body, CompileScope::FunctionBody, &mut synthetic_name_id)?;
     code.push(Instruction::Return);
 
     Ok(CompiledFunction {
@@ -138,16 +144,24 @@ fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFun
 }
 
 /// Compiles a statement list under the same control-flow scope.
-fn compile_block(statements: &[Statement], scope: CompileScope) -> Result<CompiledBlock> {
+fn compile_block(
+    statements: &[Statement],
+    scope: CompileScope,
+    synthetic_name_id: &mut usize,
+) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     for statement in statements {
-        code.extend(compile_statement(statement, scope)?);
+        code.extend(compile_statement(statement, scope, synthetic_name_id)?);
     }
     Ok(code)
 }
 
 /// Compiles a single statement while enforcing scope-specific validity rules.
-fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<CompiledBlock> {
+fn compile_statement(
+    statement: &Statement,
+    scope: CompileScope,
+    synthetic_name_id: &mut usize,
+) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
         Statement::ClassDef { .. } => {
@@ -179,8 +193,8 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
             else_body,
         } => {
             let condition_code = compile_expression(condition)?;
-            let then_code = compile_block(then_body, scope)?;
-            let else_code = compile_block(else_body, scope)?;
+            let then_code = compile_block(then_body, scope, synthetic_name_id)?;
+            let else_code = compile_block(else_body, scope, synthetic_name_id)?;
             let then_len = then_code.len();
             let else_len = else_code.len();
 
@@ -199,7 +213,7 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
         }
         Statement::While { condition, body } => {
             let condition_code = compile_expression(condition)?;
-            let body_code = compile_block(body, scope)?;
+            let body_code = compile_block(body, scope, synthetic_name_id)?;
             let condition_len = condition_code.len();
             let body_len = body_code.len();
 
@@ -208,6 +222,19 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
             code.extend(body_code);
             let jump_back_offset = -((condition_len + body_len + 2) as isize);
             code.push(Instruction::Jump(jump_back_offset));
+        }
+        Statement::For {
+            target,
+            iterable,
+            body,
+        } => {
+            code.extend(compile_for_loop(
+                target,
+                iterable,
+                body,
+                scope,
+                synthetic_name_id,
+            )?);
         }
         Statement::Return(value) => {
             if scope != CompileScope::FunctionBody {
@@ -234,6 +261,56 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
         }
     }
     Ok(code)
+}
+
+fn compile_for_loop(
+    target: &str,
+    iterable: &Expression,
+    body: &[Statement],
+    scope: CompileScope,
+    synthetic_name_id: &mut usize,
+) -> Result<CompiledBlock> {
+    let iter_name = next_for_temp_name(synthetic_name_id, "iter");
+    let index_name = next_for_temp_name(synthetic_name_id, "index");
+
+    let mut init_code = compile_expression(iterable)?;
+    init_code.push(Instruction::StoreName(iter_name.clone()));
+    init_code.push(Instruction::PushInt(0));
+    init_code.push(Instruction::StoreName(index_name.clone()));
+
+    let condition_code = vec![
+        Instruction::LoadName(index_name.clone()),
+        Instruction::LoadName("len".to_string()),
+        Instruction::LoadName(iter_name.clone()),
+        Instruction::Call { argc: 1 },
+        Instruction::LessThan,
+    ];
+
+    let mut body_code = vec![
+        Instruction::LoadName(iter_name.clone()),
+        Instruction::LoadName(index_name.clone()),
+        Instruction::LoadIndex,
+        Instruction::StoreName(target.to_string()),
+    ];
+    body_code.extend(compile_block(body, scope, synthetic_name_id)?);
+    body_code.push(Instruction::LoadName(index_name.clone()));
+    body_code.push(Instruction::PushInt(1));
+    body_code.push(Instruction::Add);
+    body_code.push(Instruction::StoreName(index_name));
+
+    let mut code = init_code;
+    code.extend(condition_code.iter().cloned());
+    code.push(Instruction::JumpIfFalse((body_code.len() + 1) as isize));
+    code.extend(body_code.iter().cloned());
+    let jump_back_offset = -((condition_code.len() + body_code.len() + 2) as isize);
+    code.push(Instruction::Jump(jump_back_offset));
+    Ok(code)
+}
+
+fn next_for_temp_name(synthetic_name_id: &mut usize, slot: &str) -> String {
+    let name = format!("__for::{slot}::{}", *synthetic_name_id);
+    *synthetic_name_id += 1;
+    name
 }
 
 /// Compiles class methods into callable IDs and returns class method dispatch metadata.
@@ -555,6 +632,51 @@ mod tests {
                 Instruction::BuildDict(2),
                 Instruction::Call { argc: 1 },
                 Instruction::Pop
+            ]
+        );
+    }
+
+    #[test]
+    fn compiles_for_loop_over_iterable() {
+        let program = Program {
+            statements: vec![Statement::For {
+                target: "x".to_string(),
+                iterable: Expression::Identifier("values".to_string()),
+                body: vec![Statement::Expr(call(
+                    "print",
+                    vec![Expression::Identifier("x".to_string())],
+                ))],
+            }],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert!(compiled.callables.is_empty());
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("values".to_string()),
+                Instruction::StoreName("__for::iter::0".to_string()),
+                Instruction::PushInt(0),
+                Instruction::StoreName("__for::index::1".to_string()),
+                Instruction::LoadName("__for::index::1".to_string()),
+                Instruction::LoadName("len".to_string()),
+                Instruction::LoadName("__for::iter::0".to_string()),
+                Instruction::Call { argc: 1 },
+                Instruction::LessThan,
+                Instruction::JumpIfFalse(13),
+                Instruction::LoadName("__for::iter::0".to_string()),
+                Instruction::LoadName("__for::index::1".to_string()),
+                Instruction::LoadIndex,
+                Instruction::StoreName("x".to_string()),
+                Instruction::LoadName("print".to_string()),
+                Instruction::LoadName("x".to_string()),
+                Instruction::Call { argc: 1 },
+                Instruction::Pop,
+                Instruction::LoadName("__for::index::1".to_string()),
+                Instruction::PushInt(1),
+                Instruction::Add,
+                Instruction::StoreName("__for::index::1".to_string()),
+                Instruction::Jump(-19),
             ]
         );
     }

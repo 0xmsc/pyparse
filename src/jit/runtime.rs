@@ -227,7 +227,11 @@ impl Runtime {
             error: None,
             runtime_error: None,
         };
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+        for builtin in [
+            BuiltinFunction::Print,
+            BuiltinFunction::Len,
+            BuiltinFunction::Range,
+        ] {
             runtime
                 .call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -238,7 +242,11 @@ impl Runtime {
 
     /// Inserts builtin functions into global scope as ordinary `Value`s.
     fn seed_builtin_globals(&mut self) {
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+        for builtin in [
+            BuiltinFunction::Print,
+            BuiltinFunction::Len,
+            BuiltinFunction::Range,
+        ] {
             let symbol = self.intern_symbol_name(builtin.name());
             self.globals
                 .entry(symbol)

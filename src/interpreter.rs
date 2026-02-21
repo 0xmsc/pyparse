@@ -191,6 +191,41 @@ mod tests {
     }
 
     #[test]
+    fn executes_for_loop_over_list_and_range() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("total".to_string()),
+                    value: int(0),
+                },
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: Expression::List(vec![int(1), int(2), int(3)]),
+                    body: vec![Statement::Assign {
+                        target: AssignTarget::Name("total".to_string()),
+                        value: Expression::BinaryOp {
+                            left: Box::new(identifier("total")),
+                            op: BinaryOperator::Add,
+                            right: Box::new(identifier("x")),
+                        },
+                    }],
+                },
+                print(vec![identifier("total")]),
+                Statement::For {
+                    target: "x".to_string(),
+                    iterable: call("range", vec![int(3)]),
+                    body: vec![print(vec![identifier("x")])],
+                },
+                print(vec![identifier("x")]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "6\n0\n1\n2\n2");
+    }
+
+    #[test]
     fn returns_from_function_without_executing_remaining_body() {
         let program = Program {
             statements: vec![

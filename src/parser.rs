@@ -61,6 +61,7 @@ impl<'a> Parser<'a> {
             TokenKind::Def => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
+            TokenKind::For => self.parse_for(),
             TokenKind::Return => self.parse_return(),
             TokenKind::Pass => self.parse_pass(),
             TokenKind::Identifier(_) => self.parse_identifier_led_statement(),
@@ -193,6 +194,27 @@ impl<'a> Parser<'a> {
         let body = self.parse_indented_block()?;
 
         Ok(Statement::While { condition, body })
+    }
+
+    /// Parse a `for` loop statement.
+    /// Example:
+    /// ```text
+    /// for x in values:
+    ///     print(x)
+    /// ```
+    fn parse_for(&mut self) -> ParseResult<Statement> {
+        self.expect_token(TokenKind::For, "for")?;
+        let target = self.expect_identifier()?;
+        self.expect_token(TokenKind::In, "in")?;
+        let iterable = self.parse_expression()?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
+        let body = self.parse_indented_block()?;
+        Ok(Statement::For {
+            target,
+            iterable,
+            body,
+        })
     }
 
     /// Parse a `return` statement.
@@ -710,6 +732,41 @@ mod tests {
         };
 
         assert_eq!(program, expected);
+    }
+
+    #[test]
+    fn parses_for_loop() {
+        let tokens = vec![
+            tok(TokenKind::For),
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::In),
+            tok(TokenKind::Identifier("values")),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::Identifier("x")),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::For {
+                    target: "x".to_string(),
+                    iterable: Expression::Identifier("values".to_string()),
+                    body: vec![Statement::Expr(Expression::Call {
+                        callee: Box::new(Expression::Identifier("print".to_string())),
+                        args: vec![Expression::Identifier("x".to_string())],
+                    })],
+                }],
+            }
+        );
     }
 
     #[test]

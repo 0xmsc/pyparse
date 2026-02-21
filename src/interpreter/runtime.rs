@@ -105,7 +105,11 @@ impl CallContext for InterpreterCallContext<'_, '_> {
 impl InterpreterRuntime {
     pub(super) fn new() -> Self {
         let mut call_registry = CallRegistry::new();
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+        for builtin in [
+            BuiltinFunction::Print,
+            BuiltinFunction::Len,
+            BuiltinFunction::Range,
+        ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
         }
@@ -242,6 +246,46 @@ impl InterpreterRuntime {
                     if let ExecResult::Return(value) = self.exec_block(body, environment)? {
                         return Ok(ExecResult::Return(value));
                     }
+                }
+                Ok(ExecResult::Continue)
+            }
+            Statement::For {
+                target,
+                iterable,
+                body,
+            } => {
+                let iterable_value = self.eval_expression(iterable, environment)?;
+                let mut index = 0_i64;
+                loop {
+                    let length_value = iterable_value.len().map_err(InterpreterError::from)?;
+                    let Some(length) = length_value.as_int() else {
+                        return Err(RuntimeError::InvalidArgumentType {
+                            operation: "__len__".to_string(),
+                            argument: "return".to_string(),
+                            expected: "int".to_string(),
+                            got: length_value.type_name().to_string(),
+                        }
+                        .into());
+                    };
+                    if index >= length {
+                        break;
+                    }
+
+                    let item = {
+                        let mut context = InterpreterCallContext {
+                            runtime: self,
+                            environment,
+                        };
+                        iterable_value
+                            .get_item_with_context(&mut context, Value::int_object(index))
+                            .map_err(InterpreterError::from)?
+                    };
+                    environment.store(target.clone(), item);
+
+                    if let ExecResult::Return(value) = self.exec_block(body, environment)? {
+                        return Ok(ExecResult::Return(value));
+                    }
+                    index += 1;
                 }
                 Ok(ExecResult::Continue)
             }

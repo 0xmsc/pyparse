@@ -79,12 +79,35 @@ pub(crate) fn call_builtin_with_output(
             RuntimeError::expect_function_arity("len", 1, args.len())?;
             args[0].len()
         }
+        BuiltinFunction::Range => {
+            RuntimeError::expect_function_arity("range", 1, args.len())?;
+            let stop = args[0]
+                .as_int()
+                .ok_or_else(|| RuntimeError::InvalidArgumentType {
+                    operation: "range".to_string(),
+                    argument: "stop".to_string(),
+                    expected: "int".to_string(),
+                    got: args[0].type_name().to_string(),
+                })?;
+            if stop <= 0 {
+                return Ok(Value::list_object(Vec::new()));
+            }
+            let mut values = Vec::with_capacity(stop as usize);
+            for value in 0..stop {
+                values.push(Value::int_object(value));
+            }
+            Ok(Value::list_object(values))
+        }
     }
 }
 
 /// Ensures builtin callables are present in a globals table as ordinary values.
 pub(crate) fn seed_builtin_globals(globals: &mut HashMap<String, Value>) {
-    for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+    for builtin in [
+        BuiltinFunction::Print,
+        BuiltinFunction::Len,
+        BuiltinFunction::Range,
+    ] {
         globals
             .entry(builtin.name().to_string())
             .or_insert_with(|| Value::builtin_function_object(builtin));

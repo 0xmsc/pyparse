@@ -215,6 +215,8 @@ impl<'a> Lexer<'a> {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "while" => TokenKind::While,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
             "def" => TokenKind::Def,
             "class" => TokenKind::Class,
             "return" => TokenKind::Return,
@@ -536,6 +538,36 @@ mod tests {
             TokenKind::Identifier("b"),
             TokenKind::RParen,
             TokenKind::Newline,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
+    }
+
+    #[test]
+    fn tokenizes_for_in_keywords() {
+        let input = indoc! {"
+            for x in values:
+                print(x)
+        "};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        let expected_kinds = vec![
+            TokenKind::For,
+            TokenKind::Identifier("x"),
+            TokenKind::In,
+            TokenKind::Identifier("values"),
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Identifier("print"),
+            TokenKind::LParen,
+            TokenKind::Identifier("x"),
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::Dedent,
             TokenKind::EOF,
         ];
         assert_eq!(actual_kinds, expected_kinds);
