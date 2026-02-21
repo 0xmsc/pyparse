@@ -91,7 +91,6 @@ pub(super) struct Runtime {
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
     symbol_names: Vec<String>,
-    builtin_cache: FxHashMap<u32, Option<BuiltinFunction>>,
     error: Option<String>,
     runtime_error: Option<RuntimeError>,
 }
@@ -107,7 +106,6 @@ enum RuntimeValueSnapshot {
 #[derive(Debug, Clone)]
 enum NameResolution {
     Value(Value),
-    Builtin(BuiltinFunction),
     Missing,
 }
 
@@ -121,19 +119,12 @@ fn bind_call_frame(params: &[String], args: &[Value]) -> FxHashMap<String, Value
 }
 
 #[cfg(test)]
-fn resolve_name(
-    local_value: Option<Value>,
-    global_value: Option<Value>,
-    builtin: Option<BuiltinFunction>,
-) -> NameResolution {
+fn resolve_name(local_value: Option<Value>, global_value: Option<Value>) -> NameResolution {
     if let Some(value) = local_value {
         return NameResolution::Value(value);
     }
     if let Some(value) = global_value {
         return NameResolution::Value(value);
-    }
-    if let Some(builtin) = builtin {
-        return NameResolution::Builtin(builtin);
     }
     NameResolution::Missing
 }
@@ -156,7 +147,7 @@ impl Runtime {
             Box::new(Value::bool_object(true)),
             Box::new(Value::none_object()),
         ];
-        Self {
+        let mut runtime = Self {
             globals: FxHashMap::default(),
             call_frames: Vec::new(),
             output: Vec::new(),
@@ -169,9 +160,19 @@ impl Runtime {
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
             symbol_names: Vec::new(),
-            builtin_cache: FxHashMap::default(),
             error: None,
             runtime_error: None,
+        };
+        runtime.seed_builtin_globals();
+        runtime
+    }
+
+    fn seed_builtin_globals(&mut self) {
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            let symbol = self.intern_symbol_name(builtin.name());
+            self.globals
+                .entry(symbol)
+                .or_insert_with(|| Value::builtin_function_object(builtin));
         }
     }
 
@@ -292,15 +293,6 @@ impl Runtime {
             .get(symbol as usize)
             .expect("symbol id must exist")
             .as_str()
-    }
-
-    fn builtin_for_symbol(&mut self, symbol: u32) -> Option<BuiltinFunction> {
-        if let Some(cached) = self.builtin_cache.get(&symbol) {
-            return *cached;
-        }
-        let builtin = BuiltinFunction::from_name(self.symbol_name(symbol));
-        self.builtin_cache.insert(symbol, builtin);
-        builtin
     }
 
     fn load_named_value(&self, symbol: u32) -> Option<Value> {
@@ -644,26 +636,16 @@ unsafe extern "C" fn runtime_call(
     }
 }
 
-/// Runtime hook for name lookup (current call-frame locals, then globals, then builtins).
+/// Runtime hook for name lookup (current call-frame locals, then globals).
 unsafe extern "C" fn runtime_load_name(ctx: *mut Runtime, ptr: *const u8, len: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let symbol = runtime.intern_symbol_ptr(ptr, len);
 
-    let local_value = runtime
-        .call_frames
-        .last()
-        .and_then(|frame| frame.get(&symbol))
-        .map(snapshot_value);
-    if let Some(local_value) = local_value {
-        return runtime.alloc_snapshot(local_value);
-    }
-
-    if let Some(global_value) = runtime.globals.get(&symbol).map(snapshot_value) {
-        return runtime.alloc_snapshot(global_value);
-    }
-
-    if let Some(builtin) = runtime.builtin_for_symbol(symbol) {
-        return runtime.alloc_value(Value::builtin_function_object(builtin));
+    if let Some(value) = runtime
+        .load_named_value(symbol)
+        .map(|value| snapshot_value(&value))
+    {
+        return runtime.alloc_snapshot(value);
     }
 
     runtime.set_runtime_error(RuntimeError::UndefinedVariable {
@@ -953,7 +935,6 @@ pub(super) fn run_prepared(
 #[cfg(test)]
 mod tests {
     use super::{NameResolution, bind_call_frame, resolve_name};
-    use crate::builtins::BuiltinFunction;
     use crate::runtime::value::Value;
 
     #[test]
@@ -966,12 +947,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_name_prefers_local_over_global_and_builtin() {
-        let resolved = resolve_name(
-            Some(Value::int_object(1)),
-            Some(Value::int_object(2)),
-            Some(BuiltinFunction::Print),
-        );
+    fn resolve_name_prefers_local_over_global() {
+        let resolved = resolve_name(Some(Value::int_object(1)), Some(Value::int_object(2)));
         assert!(matches!(
             resolved,
             NameResolution::Value(value) if value.as_int() == Some(1)
@@ -979,29 +956,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_name_falls_back_to_global_then_builtin() {
-        let global = resolve_name(
-            None,
-            Some(Value::int_object(2)),
-            Some(BuiltinFunction::Print),
-        );
+    fn resolve_name_falls_back_to_global() {
+        let global = resolve_name(None, Some(Value::int_object(2)));
         assert!(matches!(
             global,
             NameResolution::Value(value) if value.as_int() == Some(2)
-        ));
-
-        let builtin = resolve_name(None, None, Some(BuiltinFunction::Len));
-        assert!(matches!(
-            builtin,
-            NameResolution::Builtin(BuiltinFunction::Len)
         ));
     }
 
     #[test]
     fn resolve_name_reports_missing() {
-        assert!(matches!(
-            resolve_name(None, None, None),
-            NameResolution::Missing
-        ));
+        assert!(matches!(resolve_name(None, None), NameResolution::Missing));
     }
 }

@@ -5,6 +5,13 @@ pub enum BuiltinFunction {
 }
 
 impl BuiltinFunction {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Print => "print",
+            Self::Len => "len",
+        }
+    }
+
     pub fn callable_id(self) -> u32 {
         match self {
             Self::Print => 1,

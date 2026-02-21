@@ -81,3 +81,12 @@ pub(crate) fn call_builtin_with_output(
         }
     }
 }
+
+/// Ensures builtin callables are present in a globals table as ordinary values.
+pub(crate) fn seed_builtin_globals(globals: &mut HashMap<String, Value>) {
+    for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+        globals
+            .entry(builtin.name().to_string())
+            .or_insert_with(|| Value::builtin_function_object(builtin));
+    }
+}

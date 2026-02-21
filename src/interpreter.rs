@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 use crate::runtime::error::RuntimeError;
-use crate::runtime::execution::Environment;
+use crate::runtime::execution::{Environment, seed_builtin_globals};
 
 mod error;
 mod runtime;
@@ -41,6 +41,7 @@ impl PreparedInterpreter {
         // run_once -> exec_block (top-level statements) -> exec_statement
         // -> eval_expression -> eval_call -> exec_block (function body).
         let mut globals = HashMap::new();
+        seed_builtin_globals(&mut globals);
         let mut environment = Environment::top_level(&mut globals);
         let mut runtime = InterpreterRuntime::new(&self.functions);
         match runtime.exec_block(&self.main_statements, &mut environment)? {

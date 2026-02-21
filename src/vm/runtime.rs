@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
-use crate::runtime::execution::{Environment, call_builtin_with_output};
+use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
 use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 use thiserror::Error;
@@ -38,6 +38,7 @@ pub(super) fn run_compiled_program(
     program: &CompiledProgram,
     globals: &mut HashMap<String, Value>,
 ) -> VmResult<String> {
+    seed_builtin_globals(globals);
     let mut runtime = VmRuntime::new(program);
     let mut environment = Environment::top_level(globals);
     runtime.execute_code(&program.main, &mut environment)?;
@@ -177,8 +178,6 @@ impl<'a> VmRuntime<'a> {
                 Instruction::LoadName(name) => {
                     let value = if let Some(value) = environment.load_cloned(&name) {
                         value
-                    } else if let Some(builtin) = BuiltinFunction::from_name(&name) {
-                        Value::builtin_function_object(builtin)
                     } else {
                         return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
                     };

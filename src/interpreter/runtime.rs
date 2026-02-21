@@ -277,9 +277,6 @@ impl<'a> InterpreterRuntime<'a> {
                 if let Some(value) = environment.load_cloned(name) {
                     return Ok(value);
                 }
-                if let Some(builtin) = BuiltinFunction::from_name(name) {
-                    return Ok(Value::builtin_function_object(builtin));
-                }
                 Err(RuntimeError::UndefinedVariable {
                     name: name.to_string(),
                 }
