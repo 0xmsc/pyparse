@@ -10,6 +10,12 @@ use super::{Function, InterpreterError, Value};
 
 pub(super) const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
+#[derive(Clone)]
+pub(super) struct RegisteredFunction {
+    name: String,
+    function: Function,
+}
+
 /// Control-flow marker for statement execution.
 pub(super) enum ExecResult {
     Continue,
@@ -20,7 +26,7 @@ pub(super) enum ExecResult {
 pub(super) struct InterpreterRuntime<'a> {
     pub(super) functions: &'a HashMap<String, Function>,
     pub(super) next_callable_id: u32,
-    pub(super) function_symbols_by_id: HashMap<u32, String>,
+    pub(super) callable_functions: HashMap<u32, RegisteredFunction>,
     pub(super) output: Vec<String>,
 }
 
@@ -41,21 +47,16 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
             return call_builtin_with_output(builtin, args, &mut self.runtime.output);
         }
 
-        let function_name = self
+        let callable_function = self
             .runtime
-            .function_symbols_by_id
+            .callable_functions
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
-            })?;
-        let function = self
-            .runtime
-            .functions
-            .get(function_name)
-            .cloned()
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: function_name.clone(),
-            })?;
+            })?
+            .clone();
+        let function_name = callable_function.name;
+        let function = callable_function.function;
         RuntimeError::expect_function_arity(
             function_name.as_str(),
             function.params.len(),
@@ -78,15 +79,27 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
 }
 
 impl<'a> InterpreterRuntime<'a> {
-    fn register_callable_symbol(&mut self, symbol: &str) -> CallableId {
+    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
+        let function =
+            self.functions
+                .get(symbol)
+                .cloned()
+                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                    name: symbol.to_string(),
+                })?;
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.function_symbols_by_id
-            .insert(callable_id.0, symbol.to_string());
-        callable_id
+        self.callable_functions.insert(
+            callable_id.0,
+            RegisteredFunction {
+                name: symbol.to_string(),
+                function,
+            },
+        );
+        Ok(callable_id)
     }
 
     pub(super) fn exec_block(
@@ -114,7 +127,7 @@ impl<'a> InterpreterRuntime<'a> {
                 if !environment.is_top_level() {
                     return Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into());
                 }
-                let callable_id = self.register_callable_symbol(name);
+                let callable_id = self.register_function(name)?;
                 environment.store(
                     name.to_string(),
                     Value::function_object(name.to_string(), callable_id),
@@ -129,7 +142,7 @@ impl<'a> InterpreterRuntime<'a> {
                             name: method_name, ..
                         } => {
                             let method_symbol = class_method_symbol(name, method_name);
-                            let callable_id = self.register_callable_symbol(&method_symbol);
+                            let callable_id = self.register_function(&method_symbol)?;
                             methods.insert(
                                 method_name.clone(),
                                 Value::function_object(method_symbol, callable_id),

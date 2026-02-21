@@ -45,7 +45,7 @@ impl PreparedInterpreter {
         let mut runtime = InterpreterRuntime {
             functions: &self.functions,
             next_callable_id: runtime::FIRST_USER_CALLABLE_ID,
-            function_symbols_by_id: HashMap::new(),
+            callable_functions: HashMap::new(),
             output: Vec::new(),
         };
         match runtime.exec_block(&self.main_statements, &mut environment)? {

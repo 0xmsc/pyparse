@@ -11,6 +11,12 @@ use thiserror::Error;
 pub(super) type VmResult<T> = std::result::Result<T, VmError>;
 const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
+#[derive(Clone)]
+struct RegisteredFunction {
+    name: String,
+    function: crate::bytecode::CompiledFunction,
+}
+
 /// VM execution errors produced while running compiled bytecode.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub(super) enum VmError {
@@ -37,7 +43,7 @@ pub(super) fn run_compiled_program(
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
     next_callable_id: u32,
-    function_symbols_by_id: HashMap<u32, String>,
+    callable_functions: HashMap<u32, RegisteredFunction>,
     output: Vec<String>,
     stack: Vec<Value>,
 }
@@ -59,22 +65,16 @@ impl CallContext for VmCallContext<'_, '_, '_> {
             return call_builtin_with_output(builtin, args, &mut self.runtime.output);
         }
 
-        let function_name = self
+        let callable_function = self
             .runtime
-            .function_symbols_by_id
+            .callable_functions
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
-            })?;
-        let function = self
-            .runtime
-            .program
-            .functions
-            .get(function_name)
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: function_name.clone(),
             })?
             .clone();
+        let function_name = callable_function.name;
+        let function = callable_function.function;
         RuntimeError::expect_function_arity(
             function_name.as_str(),
             function.params.len(),
@@ -99,21 +99,31 @@ impl<'a> VmRuntime<'a> {
         Self {
             program,
             next_callable_id: FIRST_USER_CALLABLE_ID,
-            function_symbols_by_id: HashMap::new(),
+            callable_functions: HashMap::new(),
             output: Vec::new(),
             stack: Vec::new(),
         }
     }
 
-    fn register_callable_symbol(&mut self, symbol: &str) -> CallableId {
+    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
+        let function = self.program.functions.get(symbol).cloned().ok_or_else(|| {
+            RuntimeError::UndefinedFunction {
+                name: symbol.to_string(),
+            }
+        })?;
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.function_symbols_by_id
-            .insert(callable_id.0, symbol.to_string());
-        callable_id
+        self.callable_functions.insert(
+            callable_id.0,
+            RegisteredFunction {
+                name: symbol.to_string(),
+                function,
+            },
+        );
+        Ok(callable_id)
     }
 
     fn output_string(self) -> String {
@@ -157,10 +167,7 @@ impl<'a> VmRuntime<'a> {
                     self.stack.push(value);
                 }
                 Instruction::DefineFunction { name, symbol } => {
-                    if !self.program.functions.contains_key(&symbol) {
-                        return Err(RuntimeError::UndefinedFunction { name: symbol }.into());
-                    }
-                    let callable_id = self.register_callable_symbol(&symbol);
+                    let callable_id = self.register_function(&symbol)?;
                     environment.store(name, Value::function_object(symbol, callable_id));
                 }
                 Instruction::StoreName(name) => {
@@ -170,7 +177,7 @@ impl<'a> VmRuntime<'a> {
                 Instruction::DefineClass { name, methods } => {
                     let mut class_methods = HashMap::with_capacity(methods.len());
                     for (method_name, symbol) in methods {
-                        let callable_id = self.register_callable_symbol(&symbol);
+                        let callable_id = self.register_function(&symbol)?;
                         class_methods
                             .insert(method_name, Value::function_object(symbol, callable_id));
                     }

@@ -63,6 +63,12 @@ pub(super) struct CompiledFunctionPointer {
     pub(super) params: Vec<String>,
 }
 
+#[derive(Clone)]
+struct RegisteredFunction {
+    name: String,
+    function: CompiledFunctionPointer,
+}
+
 /// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
     globals: FxHashMap<u32, Value>,
@@ -75,7 +81,7 @@ pub(super) struct Runtime {
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
     next_callable_id: u32,
-    function_symbols_by_id: FxHashMap<u32, String>,
+    callable_functions: FxHashMap<u32, RegisteredFunction>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
     symbol_names: Vec<String>,
@@ -142,7 +148,7 @@ impl Runtime {
             int_intern: FxHashMap::default(),
             functions,
             next_callable_id: FIRST_USER_CALLABLE_ID,
-            function_symbols_by_id: FxHashMap::default(),
+            callable_functions: FxHashMap::default(),
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
             symbol_names: Vec::new(),
@@ -152,15 +158,27 @@ impl Runtime {
         }
     }
 
-    fn register_callable_symbol(&mut self, symbol: &str) -> CallableId {
+    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
+        let function =
+            self.functions
+                .get(symbol)
+                .cloned()
+                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                    name: symbol.to_string(),
+                })?;
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.function_symbols_by_id
-            .insert(callable_id.0, symbol.to_string());
-        callable_id
+        self.callable_functions.insert(
+            callable_id.0,
+            RegisteredFunction {
+                name: symbol.to_string(),
+                function,
+            },
+        );
+        Ok(callable_id)
     }
 
     fn alloc_value(&mut self, value: Value) -> *mut Value {
@@ -313,18 +331,16 @@ impl CallContext for Runtime {
             };
         }
 
-        let function_name = self
-            .function_symbols_by_id
+        let callable_function = self
+            .callable_functions
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
-            })?;
-        let function = self.functions.get(function_name).cloned().ok_or_else(|| {
-            RuntimeError::UndefinedFunction {
-                name: function_name.to_string(),
-            }
-        })?;
-        RuntimeError::expect_function_arity(function_name, function.arity, args.len())?;
+            })?
+            .clone();
+        let function_name = callable_function.name;
+        let function = callable_function.function;
+        RuntimeError::expect_function_arity(function_name.as_str(), function.arity, args.len())?;
 
         let mut arg_values = args;
         let mut frame =
@@ -406,7 +422,13 @@ unsafe extern "C" fn runtime_make_function(
     let runtime = unsafe { &mut *ctx };
     let symbol_id = runtime.intern_symbol_ptr(ptr, len);
     let symbol = runtime.symbol_name(symbol_id).to_string();
-    let callable_id = runtime.register_callable_symbol(&symbol);
+    let callable_id = match runtime.register_function(&symbol) {
+        Ok(callable_id) => callable_id,
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            return ptr::null_mut();
+        }
+    };
     runtime.alloc_value(Value::function_object(symbol, callable_id))
 }
 
@@ -482,7 +504,13 @@ unsafe extern "C" fn runtime_define_class(
         let method_symbol_symbol = runtime.intern_symbol_ptr(method_symbol_ptr, method_symbol_len);
         let method_name = runtime.symbol_name(method_name_symbol).to_string();
         let method_symbol = runtime.symbol_name(method_symbol_symbol).to_string();
-        let callable_id = runtime.register_callable_symbol(&method_symbol);
+        let callable_id = match runtime.register_function(&method_symbol) {
+            Ok(callable_id) => callable_id,
+            Err(error) => {
+                runtime.set_runtime_error(error);
+                return ptr::null_mut();
+            }
+        };
         methods.insert(
             method_name,
             Value::function_object(method_symbol, callable_id),
