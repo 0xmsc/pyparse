@@ -299,6 +299,26 @@ impl Value {
         Ok(())
     }
 
+    pub(crate) fn iter_with_context(
+        &self,
+        context: &mut dyn CallContext,
+    ) -> Result<Value, RuntimeError> {
+        let callee = self
+            .get_attribute("__iter__")
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, "iter"))?;
+        self.call_bound_method(callee, context, Vec::new(), "__iter__")
+    }
+
+    pub(crate) fn next_with_context(
+        &self,
+        context: &mut dyn CallContext,
+    ) -> Result<Value, RuntimeError> {
+        let callee = self
+            .get_attribute("__next__")
+            .map_err(|error| map_unknown_attribute_to_unsupported(error, "__next__"))?;
+        self.call_bound_method(callee, context, Vec::new(), "__next__")
+    }
+
     pub(crate) fn len(&self) -> Result<Value, RuntimeError> {
         let callee = self
             .get_attribute("__len__")

@@ -295,6 +295,36 @@ impl<'a> VmRuntime<'a> {
                     };
                     target.set_item_with_context(&mut context, index_value, value)?;
                 }
+                Instruction::GetIter => {
+                    let iterable = self.pop_stack()?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let iterator = iterable.iter_with_context(&mut context)?;
+                    self.stack.push(iterator);
+                }
+                Instruction::ForIter(target) => {
+                    let iterator = self.pop_stack()?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    match iterator.next_with_context(&mut context) {
+                        Ok(value) => {
+                            self.stack.push(iterator);
+                            self.stack.push(value);
+                        }
+                        Err(RuntimeError::StopIteration) => {
+                            let next_ip = (ip as isize) + target;
+                            if next_ip < 0 || (next_ip as usize) > code.len() {
+                                return Err(VmError::InvalidJumpTarget);
+                            }
+                            ip = next_ip as usize;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
                 Instruction::Call { argc } => {
                     let mut args = Vec::with_capacity(argc);
                     for _ in 0..argc {

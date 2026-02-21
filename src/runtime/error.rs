@@ -47,6 +47,8 @@ pub(crate) enum RuntimeError {
     },
     #[error("Object of type {type_name} is not callable")]
     ObjectNotCallable { type_name: String },
+    #[error("StopIteration")]
+    StopIteration,
     #[error("Nested function definitions are not supported")]
     NestedFunctionDefinitionsUnsupported,
     #[error("Return outside of function")]

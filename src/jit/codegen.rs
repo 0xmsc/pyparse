@@ -218,6 +218,8 @@ struct RuntimeCalls {
     store_attr: FuncRef,
     load_index: FuncRef,
     store_index_name: FuncRef,
+    get_iter: FuncRef,
+    next_iter: FuncRef,
 }
 
 impl RuntimeCalls {
@@ -295,6 +297,14 @@ impl RuntimeCalls {
             ),
             store_index_name: module.declare_func_in_func(
                 runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
+                func,
+            ),
+            get_iter: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::GetIter)?,
+                func,
+            ),
+            next_iter: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::NextIter)?,
                 func,
             ),
         })
@@ -963,6 +973,53 @@ fn emit_instruction(
             emit_store_index(builder, module, string_data, lowering, name)?;
             Ok(false)
         }
+        Instruction::GetIter => {
+            let iterable = lowering.pop_value(builder);
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
+                lowering.runtime.get_iter,
+                &[lowering.ctx_param, iterable],
+            );
+            Ok(false)
+        }
+        Instruction::ForIter(target) => {
+            let target_index = lowering.resolve_target(idx, *target)?;
+            let iterator = lowering.pop_value(builder);
+
+            let stop_slot = create_explicit_stack_slot(builder, 1, 0);
+            let stop_ptr = builder.ins().stack_addr(lowering.ptr_type, stop_slot, 0);
+            let call = builder.ins().call(
+                lowering.runtime.next_iter,
+                &[lowering.ctx_param, iterator, stop_ptr],
+            );
+            let next_value = builder.inst_results(call)[0];
+
+            let is_null = builder.ins().icmp_imm(IntCC::Equal, next_value, 0);
+            let null_block = builder.create_block();
+            let success_block = builder.create_block();
+            builder
+                .ins()
+                .brif(is_null, null_block, &[], success_block, &[]);
+
+            builder.switch_to_block(success_block);
+            lowering.push_value(builder, iterator);
+            lowering.push_value(builder, next_value);
+            builder.ins().jump(lowering.block(idx + 1), &[]);
+
+            builder.switch_to_block(null_block);
+            let stop = builder.ins().load(types::I8, MemFlags::new(), stop_ptr, 0);
+            let is_stop = builder.ins().icmp_imm(IntCC::NotEqual, stop, 0);
+            builder.ins().brif(
+                is_stop,
+                lowering.block(target_index),
+                &[],
+                lowering.error_block,
+                &[],
+            );
+
+            Ok(true)
+        }
         Instruction::LoadAttr(attribute) => {
             let object = lowering.pop_value(builder);
             let (attribute_ptr, attribute_len_val) = declare_string_literal(
@@ -1080,15 +1137,40 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
     while let Some(ip) = worklist.pop_front() {
         let depth = depths[ip].unwrap_or(0);
         let instruction = &code[ip];
-        let next_depth = depth + stack_effect(instruction);
-        if next_depth < 0 {
-            bail!("Bytecode stack underflow at {ip}");
-        }
-        max_depth = max_depth.max(next_depth as usize);
 
         match instruction {
+            Instruction::ForIter(target) => {
+                if depth < 1 {
+                    bail!("Bytecode stack underflow at {ip}");
+                }
+
+                let target_index = resolve_relative_target(ip, *target, code.len())?;
+                let jump_depth = depth - 1;
+                let continue_depth = depth + 1;
+                max_depth = max_depth.max(continue_depth as usize);
+
+                propagate_depth(
+                    &mut depths,
+                    &mut worklist,
+                    target_index,
+                    jump_depth,
+                    code.len(),
+                )?;
+                propagate_depth(
+                    &mut depths,
+                    &mut worklist,
+                    ip + 1,
+                    continue_depth,
+                    code.len(),
+                )?;
+            }
             Instruction::Return | Instruction::ReturnValue => {}
             Instruction::Jump(target) => {
+                let next_depth = depth + stack_effect(instruction);
+                if next_depth < 0 {
+                    bail!("Bytecode stack underflow at {ip}");
+                }
+                max_depth = max_depth.max(next_depth as usize);
                 let target_index = resolve_relative_target(ip, *target, code.len())?;
                 propagate_depth(
                     &mut depths,
@@ -1099,6 +1181,11 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
                 )?;
             }
             Instruction::JumpIfFalse(target) => {
+                let next_depth = depth + stack_effect(instruction);
+                if next_depth < 0 {
+                    bail!("Bytecode stack underflow at {ip}");
+                }
+                max_depth = max_depth.max(next_depth as usize);
                 let target_index = resolve_relative_target(ip, *target, code.len())?;
                 propagate_depth(
                     &mut depths,
@@ -1110,6 +1197,11 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
                 propagate_depth(&mut depths, &mut worklist, ip + 1, next_depth, code.len())?;
             }
             _ => {
+                let next_depth = depth + stack_effect(instruction);
+                if next_depth < 0 {
+                    bail!("Bytecode stack underflow at {ip}");
+                }
+                max_depth = max_depth.max(next_depth as usize);
                 propagate_depth(&mut depths, &mut worklist, ip + 1, next_depth, code.len())?;
             }
         }
@@ -1162,7 +1254,9 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         Instruction::BuildList(count) => 1 - (*count as i32),
         Instruction::BuildDict(count) => 1 - ((*count as i32) * 2),
         Instruction::Call { argc } => -(*argc as i32),
+        Instruction::GetIter => 0,
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
+        Instruction::ForIter(_) => 0,
         Instruction::LoadIndex => -1,
         Instruction::StoreIndex(_) => -2,
         Instruction::StoreAttr(_) => -2,

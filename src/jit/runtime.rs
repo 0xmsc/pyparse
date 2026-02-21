@@ -39,6 +39,8 @@ pub(super) enum RuntimeFunctionId {
     StoreAttr,
     LoadIndex,
     StoreIndexName,
+    GetIter,
+    NextIter,
 }
 
 /// One exported runtime hook with its ABI shape for Cranelift import wiring.
@@ -719,6 +721,57 @@ unsafe extern "C" fn runtime_call(
     }
 }
 
+unsafe extern "C" fn runtime_get_iter(ctx: *mut Runtime, iterable: *mut Value) -> *mut Value {
+    let runtime = unsafe { &mut *ctx };
+    if iterable.is_null() {
+        runtime.set_error_message("Cannot iterate null value".to_string());
+        return ptr::null_mut();
+    }
+
+    let iterable_value = unsafe { (&*iterable).clone() };
+    match iterable_value.iter_with_context(runtime) {
+        Ok(iterator) => runtime.alloc_or_intern_value(iterator),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
+        }
+    }
+}
+
+unsafe extern "C" fn runtime_next_iter(
+    ctx: *mut Runtime,
+    iterator: *mut Value,
+    stop_iteration_out: *mut u8,
+) -> *mut Value {
+    let runtime = unsafe { &mut *ctx };
+    if stop_iteration_out.is_null() {
+        runtime.set_error_message("StopIteration out-pointer cannot be null".to_string());
+        return ptr::null_mut();
+    }
+    unsafe {
+        *stop_iteration_out = 0;
+    }
+    if iterator.is_null() {
+        runtime.set_error_message("Iterator value cannot be null".to_string());
+        return ptr::null_mut();
+    }
+
+    let iterator_value = unsafe { (&*iterator).clone() };
+    match iterator_value.next_with_context(runtime) {
+        Ok(value) => runtime.alloc_or_intern_value(value),
+        Err(RuntimeError::StopIteration) => {
+            unsafe {
+                *stop_iteration_out = 1;
+            }
+            ptr::null_mut()
+        }
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Runtime hook for name lookup (current call-frame locals, then globals).
 unsafe extern "C" fn runtime_load_name(ctx: *mut Runtime, ptr: *const u8, len: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
@@ -859,7 +912,7 @@ unsafe extern "C" fn runtime_store_index_name(
 }
 
 /// Returns the runtime hook table imported by JIT codegen.
-pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 19] {
+pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 21] {
     use RuntimeAbiType::{I8, I64, Ptr};
 
     [
@@ -952,6 +1005,20 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 19] {
             symbol: "runtime_call",
             function: runtime_call as *const u8,
             param_types: &[Ptr, Ptr, Ptr, I64],
+            return_types: &[Ptr],
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::GetIter,
+            symbol: "runtime_get_iter",
+            function: runtime_get_iter as *const u8,
+            param_types: &[Ptr, Ptr],
+            return_types: &[Ptr],
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::NextIter,
+            symbol: "runtime_next_iter",
+            function: runtime_next_iter as *const u8,
+            param_types: &[Ptr, Ptr, Ptr],
             return_types: &[Ptr],
         },
         RuntimeFunctionSpec {

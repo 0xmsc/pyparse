@@ -255,37 +255,34 @@ impl InterpreterRuntime {
                 body,
             } => {
                 let iterable_value = self.eval_expression(iterable, environment)?;
-                let mut index = 0_i64;
-                loop {
-                    let length_value = iterable_value.len().map_err(InterpreterError::from)?;
-                    let Some(length) = length_value.as_int() else {
-                        return Err(RuntimeError::InvalidArgumentType {
-                            operation: "__len__".to_string(),
-                            argument: "return".to_string(),
-                            expected: "int".to_string(),
-                            got: length_value.type_name().to_string(),
-                        }
-                        .into());
+                let iterator = {
+                    let mut context = InterpreterCallContext {
+                        runtime: self,
+                        environment,
                     };
-                    if index >= length {
-                        break;
-                    }
+                    iterable_value
+                        .iter_with_context(&mut context)
+                        .map_err(InterpreterError::from)?
+                };
 
-                    let item = {
+                loop {
+                    let next_item = {
                         let mut context = InterpreterCallContext {
                             runtime: self,
                             environment,
                         };
-                        iterable_value
-                            .get_item_with_context(&mut context, Value::int_object(index))
-                            .map_err(InterpreterError::from)?
+                        iterator.next_with_context(&mut context)
+                    };
+                    let item = match next_item {
+                        Ok(item) => item,
+                        Err(RuntimeError::StopIteration) => break,
+                        Err(error) => return Err(error.into()),
                     };
                     environment.store(target.clone(), item);
 
                     if let ExecResult::Return(value) = self.exec_block(body, environment)? {
                         return Ok(ExecResult::Return(value));
                     }
-                    index += 1;
                 }
                 Ok(ExecResult::Continue)
             }

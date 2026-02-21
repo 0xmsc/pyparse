@@ -3,10 +3,18 @@ use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
 use std::any::Any;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ListObject {
     values: Vec<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct ListIteratorObject {
+    list: ObjectRef,
+    index: usize,
 }
 
 impl ListObject {
@@ -71,6 +79,16 @@ impl RuntimeObject for ListObject {
 
     fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         match attribute {
+            "__iter__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__iter__", 0, args.len())?;
+                    let iterator = ListIteratorObject::new(receiver.clone());
+                    Ok(Value::from_object_ref(Rc::new(RefCell::new(Box::new(
+                        iterator,
+                    )))))
+                }))
+            }
             "append" => {
                 let receiver = receiver.clone();
                 Ok(bound_method(move |_context, mut args| {
@@ -165,6 +183,61 @@ impl ListObject {
     }
 }
 
+impl ListIteratorObject {
+    fn new(list: ObjectRef) -> Self {
+        Self { list, index: 0 }
+    }
+
+    fn next_value(&mut self) -> Result<Value, RuntimeError> {
+        let result = with_list(&self.list, |list| list.__getitem__(self.index as i64));
+        match result {
+            Ok(value) => {
+                self.index += 1;
+                Ok(value)
+            }
+            Err(RuntimeError::IndexOutOfBounds { .. }) => Err(RuntimeError::StopIteration),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl RuntimeObject for ListIteratorObject {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn type_name(&self) -> &'static str {
+        "list_iterator"
+    }
+
+    fn get_attribute(&self, receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
+        match attribute {
+            "__iter__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__iter__", 0, args.len())?;
+                    Ok(Value::from_object_ref(receiver.clone()))
+                }))
+            }
+            "__next__" => {
+                let receiver = receiver.clone();
+                Ok(bound_method(move |_context, args| {
+                    RuntimeError::expect_method_arity("__next__", 0, args.len())?;
+                    with_list_iterator_mut(&receiver, |iterator| iterator.next_value())
+                }))
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: self.type_name().to_string(),
+            }),
+        }
+    }
+}
+
 fn with_list<R>(receiver: &ObjectRef, f: impl FnOnce(&ListObject) -> R) -> R {
     let object = receiver.borrow();
     let list = object
@@ -181,6 +254,18 @@ fn with_list_mut<R>(receiver: &ObjectRef, f: impl FnOnce(&mut ListObject) -> R) 
         .downcast_mut::<ListObject>()
         .expect("list get_attribute receiver must be ListObject");
     f(list)
+}
+
+fn with_list_iterator_mut<R>(
+    receiver: &ObjectRef,
+    f: impl FnOnce(&mut ListIteratorObject) -> R,
+) -> R {
+    let mut object = receiver.borrow_mut();
+    let iterator = object
+        .as_any_mut()
+        .downcast_mut::<ListIteratorObject>()
+        .expect("list iterator receiver must be ListIteratorObject");
+    f(iterator)
 }
 
 #[cfg(test)]
