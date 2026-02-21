@@ -9,16 +9,16 @@ use crate::runtime::list::ListObject;
 use crate::runtime::object::{
     BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
 };
-use crate::runtime::string::{self, StringObject};
+use crate::runtime::string::{self as runtime_string, StringObject};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 mod r#bool;
 mod int;
 mod none;
+mod r#str;
 
 /// Boxed runtime value shared across interpreter, VM, and JIT paths.
 #[derive(Clone)]
@@ -68,6 +68,10 @@ impl Value {
     }
 
     pub(crate) fn to_output(&self) -> String {
+        if let Some(rendered) = r#str::try_to_output(self) {
+            return rendered;
+        }
+
         match self {
             Value::Int(value) => value.to_string(),
             Value::Bool(value) => {
@@ -80,11 +84,13 @@ impl Value {
             Value::None => "None".to_string(),
             Value::Object(_) => {
                 if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
-                    return string::downcast_string(&str_value).expect("__str__ must return str");
+                    return runtime_string::downcast_string(&str_value)
+                        .expect("__str__ must return str");
                 }
 
                 if let Some(repr_value) = self.try_call_magic_method("__repr__", "__repr__") {
-                    return string::downcast_string(&repr_value).expect("__repr__ must return str");
+                    return runtime_string::downcast_string(&repr_value)
+                        .expect("__repr__ must return str");
                 }
 
                 panic!("missing __str__ and __repr__ for {}", self.type_name());
@@ -116,13 +122,13 @@ impl Value {
     }
 
     fn try_builtin_truthiness(&self) -> Option<bool> {
+        if let Some(is_truthy) = r#str::try_truthiness(self) {
+            return Some(is_truthy);
+        }
         let Value::Object(object_ref) = self else {
             return None;
         };
         let object = object_ref.borrow();
-        if let Some(string) = object.as_any().downcast_ref::<StringObject>() {
-            return Some(!string.value().is_empty());
-        }
         if let Some(list) = object.as_any().downcast_ref::<ListObject>() {
             return Some(list.__len__() != 0);
         }
@@ -216,8 +222,8 @@ impl Value {
         if let Some(number) = numeric_key_value(self) {
             return Ok(number);
         }
-        if let Some(string) = string::downcast_string(self) {
-            return Ok(hash_string(&string));
+        if let Some(hash) = r#str::try_hash_key(self) {
+            return Ok(hash);
         }
         if self.is_none() {
             return Ok(0x9e37_79b9_i64);
@@ -259,10 +265,8 @@ impl Value {
         if let (Some(left), Some(right)) = (numeric_key_value(self), numeric_key_value(rhs)) {
             return Ok(left == right);
         }
-        if let (Some(left), Some(right)) =
-            (string::downcast_string(self), string::downcast_string(rhs))
-        {
-            return Ok(left == right);
+        if let Some(equal) = r#str::try_key_equals(self, rhs) {
+            return Ok(equal);
         }
         if self.is_none() || rhs.is_none() {
             return Ok(self.is_none() && rhs.is_none());
@@ -536,12 +540,6 @@ fn try_call_eq_method(
     };
     let result = lhs.call_bound_method(callee, context, vec![rhs.clone()], "__eq__")?;
     Ok(Some(expect_bool_return("__eq__", &result)?))
-}
-
-fn hash_string(value: &str) -> i64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish() as i64
 }
 
 fn call_hash_callee(
