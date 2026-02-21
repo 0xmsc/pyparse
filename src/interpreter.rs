@@ -1,5 +1,4 @@
-use anyhow::{Result, bail};
-use std::collections::HashMap;
+use anyhow::Result;
 
 use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
@@ -12,13 +11,6 @@ mod value;
 
 use error::InterpreterError;
 use runtime::{ExecResult, InterpreterRuntime};
-use value::Value;
-
-#[derive(Debug, Clone)]
-struct Function {
-    params: Vec<String>,
-    body: Vec<Statement>,
-}
 
 /// AST-walking backend that executes programs directly without compilation.
 pub struct Interpreter;
@@ -31,8 +23,7 @@ impl Interpreter {
 
 /// Prepared executable program for the tree-walking interpreter.
 pub struct PreparedInterpreter {
-    functions: HashMap<String, Function>,
-    main_statements: Vec<Statement>,
+    statements: Vec<Statement>,
 }
 
 impl PreparedInterpreter {
@@ -40,11 +31,11 @@ impl PreparedInterpreter {
         // Execution pipeline:
         // run_once -> exec_block (top-level statements) -> exec_statement
         // -> eval_expression -> eval_call -> exec_block (function body).
-        let mut globals = HashMap::new();
+        let mut globals = std::collections::HashMap::new();
         seed_builtin_globals(&mut globals);
         let mut environment = Environment::top_level(&mut globals);
-        let mut runtime = InterpreterRuntime::new(&self.functions);
-        match runtime.exec_block(&self.main_statements, &mut environment)? {
+        let mut runtime = InterpreterRuntime::new();
+        match runtime.exec_block(&self.statements, &mut environment)? {
             ExecResult::Continue => {}
             ExecResult::Return(_) => return Err(RuntimeError::ReturnOutsideFunction.into()),
         }
@@ -70,64 +61,10 @@ impl Backend for Interpreter {
     }
 
     fn prepare(&self, program: &Program) -> Result<Box<dyn PreparedBackend>> {
-        let mut functions = HashMap::new();
-        let mut main_statements = Vec::new();
-
-        for statement in &program.statements {
-            match statement {
-                Statement::FunctionDef { name, params, body } => {
-                    if functions.contains_key(name) {
-                        bail!("Duplicate function definition '{name}'");
-                    }
-                    functions.insert(
-                        name.clone(),
-                        Function {
-                            params: params.clone(),
-                            body: body.clone(),
-                        },
-                    );
-                    main_statements.push(statement.clone());
-                }
-                Statement::ClassDef { name, body } => {
-                    for class_statement in body {
-                        match class_statement {
-                            Statement::FunctionDef {
-                                name: method_name,
-                                params,
-                                body,
-                            } => {
-                                let symbol = class_method_symbol(name, method_name);
-                                functions.insert(
-                                    symbol,
-                                    Function {
-                                        params: params.clone(),
-                                        body: body.clone(),
-                                    },
-                                );
-                            }
-                            Statement::Pass => {}
-                            _ => {
-                                bail!(
-                                    "Unsupported class body statement in class '{name}': only method definitions and pass are allowed"
-                                );
-                            }
-                        }
-                    }
-                    main_statements.push(statement.clone());
-                }
-                _ => main_statements.push(statement.clone()),
-            }
-        }
-
         Ok(Box::new(PreparedInterpreter {
-            functions,
-            main_statements,
+            statements: program.statements.clone(),
         }))
     }
-}
-
-fn class_method_symbol(class_name: &str, method_name: &str) -> String {
-    format!("__class_method::{class_name}::{method_name}")
 }
 
 #[cfg(test)]

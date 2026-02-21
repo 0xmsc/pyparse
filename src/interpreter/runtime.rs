@@ -6,12 +6,13 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::{CallContext, CallableId};
 
-use super::{Function, InterpreterError, Value};
+use super::{InterpreterError, value::Value};
 
 #[derive(Clone)]
 struct RegisteredFunction {
     name: String,
-    function: Function,
+    params: Vec<String>,
+    body: Vec<Statement>,
 }
 
 #[derive(Clone)]
@@ -27,20 +28,19 @@ pub(super) enum ExecResult {
 }
 
 /// Runtime executor for interpreted statements and expressions.
-pub(super) struct InterpreterRuntime<'a> {
-    functions: &'a HashMap<String, Function>,
+pub(super) struct InterpreterRuntime {
     next_callable_id: u32,
     callables_by_id: HashMap<u32, RegisteredCallable>,
     pub(super) output: Vec<String>,
 }
 
 /// Call adapter passed into `Value` operations while running in interpreter mode.
-struct InterpreterCallContext<'runtime, 'functions, 'env> {
-    runtime: &'runtime mut InterpreterRuntime<'functions>,
+struct InterpreterCallContext<'runtime, 'env> {
+    runtime: &'runtime mut InterpreterRuntime,
     environment: &'runtime mut Environment<'env>,
 }
 
-impl CallContext for InterpreterCallContext<'_, '_, '_> {
+impl CallContext for InterpreterCallContext<'_, '_> {
     fn call_callable(
         &mut self,
         callable_id: &CallableId,
@@ -61,21 +61,19 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
             }
             RegisteredCallable::Function(callable_function) => callable_function,
         };
-        let function_name = callable_function.name;
-        let function = callable_function.function;
         RuntimeError::expect_function_arity(
-            function_name.as_str(),
-            function.params.len(),
+            callable_function.name.as_str(),
+            callable_function.params.len(),
             args.len(),
         )?;
         let mut local_scope = HashMap::new();
-        for (param, value) in function.params.iter().zip(args) {
+        for (param, value) in callable_function.params.iter().zip(args) {
             local_scope.insert(param.clone(), value);
         }
         let mut local_environment = self.environment.child_with_locals(&mut local_scope);
         match self
             .runtime
-            .exec_block(&function.body, &mut local_environment)
+            .exec_block(&callable_function.body, &mut local_environment)
             .map_err(runtime_error_from_interpreter)?
         {
             ExecResult::Continue => Ok(Value::none_object()),
@@ -84,8 +82,8 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
     }
 }
 
-impl<'a> InterpreterRuntime<'a> {
-    pub(super) fn new(functions: &'a HashMap<String, Function>) -> Self {
+impl InterpreterRuntime {
+    pub(super) fn new() -> Self {
         let mut callables_by_id = HashMap::new();
         for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
             callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
@@ -98,21 +96,18 @@ impl<'a> InterpreterRuntime<'a> {
             .checked_add(1)
             .expect("callable id overflow");
         Self {
-            functions,
             next_callable_id,
             callables_by_id,
             output: Vec::new(),
         }
     }
 
-    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
-        let function =
-            self.functions
-                .get(symbol)
-                .cloned()
-                .ok_or_else(|| RuntimeError::UndefinedFunction {
-                    name: symbol.to_string(),
-                })?;
+    fn register_function(
+        &mut self,
+        name: String,
+        params: Vec<String>,
+        body: Vec<Statement>,
+    ) -> CallableId {
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
@@ -120,12 +115,9 @@ impl<'a> InterpreterRuntime<'a> {
             .expect("callable id overflow");
         self.callables_by_id.insert(
             callable_id.0,
-            RegisteredCallable::Function(RegisteredFunction {
-                name: symbol.to_string(),
-                function,
-            }),
+            RegisteredCallable::Function(RegisteredFunction { name, params, body }),
         );
-        Ok(callable_id)
+        callable_id
     }
 
     pub(super) fn exec_block(
@@ -149,11 +141,12 @@ impl<'a> InterpreterRuntime<'a> {
         environment: &mut Environment<'_>,
     ) -> std::result::Result<ExecResult, InterpreterError> {
         match statement {
-            Statement::FunctionDef { name, .. } => {
+            Statement::FunctionDef { name, params, body } => {
                 if !environment.is_top_level() {
                     return Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into());
                 }
-                let callable_id = self.register_function(name)?;
+                let callable_id =
+                    self.register_function(name.to_string(), params.clone(), body.clone());
                 environment.store(
                     name.to_string(),
                     Value::function_object(name.to_string(), callable_id),
@@ -165,10 +158,16 @@ impl<'a> InterpreterRuntime<'a> {
                 for class_statement in body {
                     match class_statement {
                         Statement::FunctionDef {
-                            name: method_name, ..
+                            name: method_name,
+                            params,
+                            body,
                         } => {
                             let method_symbol = class_method_symbol(name, method_name);
-                            let callable_id = self.register_function(&method_symbol)?;
+                            let callable_id = self.register_function(
+                                method_symbol.clone(),
+                                params.clone(),
+                                body.clone(),
+                            );
                             methods.insert(
                                 method_name.clone(),
                                 Value::function_object(method_symbol, callable_id),
