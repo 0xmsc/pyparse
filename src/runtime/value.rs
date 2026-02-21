@@ -17,7 +17,7 @@ mod int;
 mod none;
 mod r#str;
 
-/// Boxed runtime value shared across interpreter, VM, and JIT paths.
+/// Boxed runtime value shared across interpreter and VM paths.
 #[derive(Clone)]
 pub(crate) enum Value {
     Int(i64),

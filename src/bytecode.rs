@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
-/// Stack-machine instruction set consumed by the VM and JIT backends.
+/// Stack-machine instruction set consumed by the VM backend.
 ///
 /// Instructions follow a Python-like operand-stack model where expression
 /// evaluation pushes values and operators/calls consume them.
@@ -71,7 +71,7 @@ pub struct CompiledProgram {
     pub main: CompiledBlock,
 }
 
-/// Compiles AST into bytecode plus callable metadata consumed by VM and JIT backends.
+/// Compiles AST into bytecode plus callable metadata consumed by the VM backend.
 pub fn compile(program: &Program) -> Result<CompiledProgram> {
     let mut callable_ids = HashMap::new();
     let mut callables = Vec::new();

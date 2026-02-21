@@ -3,7 +3,6 @@ use anyhow::Result;
 use crate::ast::Program;
 
 pub use crate::interpreter;
-pub use crate::jit;
 pub use crate::vm;
 
 /// Executable artifact produced by a backend `prepare` step.
@@ -31,6 +30,5 @@ pub fn backends() -> Vec<Box<dyn Backend>> {
     vec![
         Box::new(crate::interpreter::Interpreter::new()),
         Box::new(crate::vm::VM::new()),
-        Box::new(crate::jit::JIT::new()),
     ]
 }

@@ -4,7 +4,6 @@ use std::path::Path;
 
 use pyparse::backend::Backend;
 use pyparse::backend::interpreter::Interpreter;
-use pyparse::backend::jit::JIT;
 use pyparse::backend::vm::VM;
 use pyparse::{lexer, parser};
 use test_support::{
@@ -12,7 +11,7 @@ use test_support::{
     run_python_startup, validate_unsupported_backends,
 };
 
-const KNOWN_BACKENDS: [&str; 6] = ["interpreter", "vm", "jit", "cpython", "pypy", "micropython"];
+const KNOWN_BACKENDS: [&str; 5] = ["interpreter", "vm", "cpython", "pypy", "micropython"];
 
 fn parity_required(env_var: &str) -> bool {
     std::env::var(env_var)
@@ -282,11 +281,6 @@ fn runs_programs_interpreter_backend() -> Result<()> {
 #[test]
 fn runs_programs_vm_backend() -> Result<()> {
     run_programs_for_backend(&VM::new())
-}
-
-#[test]
-fn runs_programs_jit_backend() -> Result<()> {
-    run_programs_for_backend(&JIT::new())
 }
 
 #[test]
