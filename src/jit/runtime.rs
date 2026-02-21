@@ -22,7 +22,6 @@ pub(super) enum RuntimeFunctionId {
     Add,
     Sub,
     LessThan,
-    LessThanTruthy,
     IsTruthy,
     Call,
     LoadName,
@@ -30,7 +29,6 @@ pub(super) enum RuntimeFunctionId {
     LoadAttr,
     StoreAttr,
     LoadIndex,
-    StoreIndexValue,
     StoreIndexName,
 }
 
@@ -43,12 +41,10 @@ pub(super) enum RuntimeFunctionSignature {
     CtxPtrPtrI64ToValue,
     CtxDefineClassToValue,
     CtxValueValueToValue,
-    CtxValueValueToI8,
     ValueToI8,
     CtxPtrI64ValueToVoid,
     CtxValuePtrI64ToValue,
     CtxValuePtrI64ValueToVoid,
-    CtxValueValueValueToVoid,
     CtxPtrI64ValueValueToVoid,
 }
 
@@ -67,14 +63,16 @@ pub(super) type RuntimeValue = Value;
 pub(super) type EntryFunction =
     extern "C" fn(*mut Runtime, *const *mut RuntimeValue) -> *mut RuntimeValue;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct CompiledFunctionPointer {
     pub(super) entry: EntryFunction,
     pub(super) arity: usize,
+    pub(super) params: Vec<String>,
 }
 
 pub(super) struct Runtime {
     globals: HashMap<String, RuntimeValue>,
+    call_frames: Vec<HashMap<String, RuntimeValue>>,
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<RuntimeValue>>,
@@ -96,6 +94,7 @@ impl Runtime {
         ];
         Self {
             globals: HashMap::new(),
+            call_frames: Vec::new(),
             output: Vec::new(),
             values: Vec::new(),
             interned_values,
@@ -175,6 +174,23 @@ impl Runtime {
         self.symbol_cache.insert(key, symbol.clone());
         symbol
     }
+
+    fn load_named_value(&self, name: &str) -> Option<RuntimeValue> {
+        if let Some(frame) = self.call_frames.last()
+            && let Some(value) = frame.get(name)
+        {
+            return Some(value.clone());
+        }
+        self.globals.get(name).cloned()
+    }
+
+    fn store_named_value(&mut self, name: String, value: RuntimeValue) {
+        if let Some(frame) = self.call_frames.last_mut() {
+            frame.insert(name, value);
+        } else {
+            self.globals.insert(name, value);
+        }
+    }
 }
 
 impl CallContext for Runtime {
@@ -204,19 +220,23 @@ impl CallContext for Runtime {
         let function =
             self.functions
                 .get(name)
-                .copied()
+                .cloned()
                 .ok_or_else(|| RuntimeError::UndefinedFunction {
                     name: name.to_string(),
                 })?;
         RuntimeError::expect_function_arity(name, function.arity, args.len())?;
 
+        let mut frame = HashMap::with_capacity(function.arity);
         let mut arg_ptrs = Vec::with_capacity(args.len());
-        for arg in args {
-            arg_ptrs.push(self.alloc_value(arg));
+        for (param, arg) in function.params.iter().zip(args) {
+            frame.insert(param.clone(), arg.clone());
+            arg_ptrs.push(self.alloc_or_intern_value(arg));
         }
 
+        self.call_frames.push(frame);
         let runtime_ptr = self as *mut Runtime;
         let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
+        self.call_frames.pop();
         if result.is_null() {
             if let Some(error) = self.runtime_error.clone() {
                 return Err(error);
@@ -409,35 +429,6 @@ unsafe extern "C" fn runtime_less_than(
     }
 }
 
-unsafe extern "C" fn runtime_less_than_truthy(
-    ctx: *mut Runtime,
-    left: *mut RuntimeValue,
-    right: *mut RuntimeValue,
-) -> u8 {
-    let runtime = unsafe { &mut *ctx };
-    let left = unsafe { &*left };
-    let right = unsafe { &*right };
-    if let (Some(left_int), Some(right_int)) = (left.as_int(), right.as_int()) {
-        return if left_int < right_int { 1 } else { 0 };
-    }
-
-    let left = left.clone();
-    let right = right.clone();
-    match left.less_than(runtime, right) {
-        Ok(value) => {
-            if value.is_truthy() {
-                1
-            } else {
-                0
-            }
-        }
-        Err(error) => {
-            runtime.set_runtime_error(error);
-            2
-        }
-    }
-}
-
 unsafe extern "C" fn runtime_is_truthy(value: *mut RuntimeValue) -> u8 {
     if value.is_null() {
         return 0;
@@ -488,6 +479,7 @@ unsafe extern "C" fn runtime_call(
     }
 }
 
+/// Runtime hook for name lookup (current call-frame locals, then globals, then builtins).
 unsafe extern "C" fn runtime_load_name(
     ctx: *mut Runtime,
     ptr: *const u8,
@@ -495,7 +487,7 @@ unsafe extern "C" fn runtime_load_name(
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
     let name = runtime.decode_symbol(ptr, len);
-    if let Some(value) = runtime.globals.get(&name).cloned() {
+    if let Some(value) = runtime.load_named_value(&name) {
         return runtime.alloc_or_intern_value(value);
     }
     if let Some(builtin) = BuiltinFunction::from_name(&name) {
@@ -505,6 +497,7 @@ unsafe extern "C" fn runtime_load_name(
     ptr::null_mut()
 }
 
+/// Runtime hook for name assignment (current call-frame locals or globals).
 unsafe extern "C" fn runtime_store_name(
     ctx: *mut Runtime,
     ptr: *const u8,
@@ -517,7 +510,7 @@ unsafe extern "C" fn runtime_store_name(
         return;
     }
     let name = runtime.decode_symbol(ptr, len);
-    runtime.globals.insert(name, unsafe { (&*value).clone() });
+    runtime.store_named_value(name, unsafe { (&*value).clone() });
 }
 
 unsafe extern "C" fn runtime_load_attr(
@@ -592,34 +585,7 @@ unsafe extern "C" fn runtime_load_index(
     }
 }
 
-unsafe extern "C" fn runtime_store_index_value(
-    ctx: *mut Runtime,
-    target: *mut RuntimeValue,
-    index: *mut RuntimeValue,
-    value: *mut RuntimeValue,
-) {
-    let runtime = unsafe { &mut *ctx };
-    if target.is_null() {
-        runtime.set_error_message("Cannot assign index on null value".to_string());
-        return;
-    }
-    if index.is_null() {
-        runtime.set_error_message("Cannot assign null index".to_string());
-        return;
-    }
-    if value.is_null() {
-        runtime.set_error_message("Cannot assign null value to index".to_string());
-        return;
-    }
-
-    let target = unsafe { (&*target).clone() };
-    let index = unsafe { (&*index).clone() };
-    let value = unsafe { (&*value).clone() };
-    if let Err(error) = target.set_item_with_context(runtime, index, value) {
-        runtime.set_runtime_error(error);
-    }
-}
-
+/// Runtime hook for `name[index] = value` assignment with runtime name resolution.
 unsafe extern "C" fn runtime_store_index_name(
     ctx: *mut Runtime,
     ptr: *const u8,
@@ -638,7 +604,7 @@ unsafe extern "C" fn runtime_store_index_name(
     }
 
     let name = runtime.decode_symbol(ptr, len);
-    let Some(target) = runtime.globals.get(&name).cloned() else {
+    let Some(target) = runtime.load_named_value(&name) else {
         runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
         return;
     };
@@ -649,7 +615,8 @@ unsafe extern "C" fn runtime_store_index_name(
     }
 }
 
-pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 20] {
+/// Returns the runtime hook table imported by JIT codegen.
+pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
     [
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeInt,
@@ -712,12 +679,6 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 20] {
             signature: RuntimeFunctionSignature::CtxValueValueToValue,
         },
         RuntimeFunctionSpec {
-            id: RuntimeFunctionId::LessThanTruthy,
-            symbol: "runtime_less_than_truthy",
-            function: runtime_less_than_truthy as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueToI8,
-        },
-        RuntimeFunctionSpec {
             id: RuntimeFunctionId::IsTruthy,
             symbol: "runtime_is_truthy",
             function: runtime_is_truthy as *const u8,
@@ -760,12 +721,6 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 20] {
             signature: RuntimeFunctionSignature::CtxValueValueToValue,
         },
         RuntimeFunctionSpec {
-            id: RuntimeFunctionId::StoreIndexValue,
-            symbol: "runtime_store_index_value",
-            function: runtime_store_index_value as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueValueToVoid,
-        },
-        RuntimeFunctionSpec {
             id: RuntimeFunctionId::StoreIndexName,
             symbol: "runtime_store_index_name",
             function: runtime_store_index_name as *const u8,
@@ -774,12 +729,14 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 20] {
     ]
 }
 
+/// Registers runtime hook symbols with Cranelift's JIT linker.
 pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
     for spec in runtime_function_specs() {
         builder.symbol(spec.symbol, spec.function);
     }
 }
 
+/// Executes the JIT entry function inside a fresh runtime context.
 pub(super) fn run_prepared(
     entry: EntryFunction,
     functions: Arc<HashMap<String, CompiledFunctionPointer>>,

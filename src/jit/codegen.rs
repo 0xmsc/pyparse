@@ -1,10 +1,10 @@
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
-    AbiParam, Block, FuncRef, InstBuilder, MemFlags, Signature, StackSlot, Type, Value, types,
+    AbiParam, Block, FuncRef, InstBuilder, MemFlags, Signature, Type, Value, types,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -16,6 +16,13 @@ use crate::bytecode::{Instruction, compile};
 use super::PreparedProgram;
 use super::runtime::{self, CompiledFunctionPointer, EntryFunction};
 
+/// Compiles the bytecode form of `program` into executable functions in a JIT module.
+///
+/// Emission pattern:
+/// 1. Compile AST to VM-style bytecode.
+/// 2. Declare all function symbols.
+/// 3. Lower each function body via `define_function`.
+/// 4. Finalize machine code and capture entry pointers.
 pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let compiled = compile(program)?;
     let mut function_names: Vec<&String> = compiled.functions.keys().collect();
@@ -31,19 +38,15 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
 
     // Declare all function symbols up front so later lowering can reference them.
     let mut function_ids = HashMap::new();
-    let mut function_arities = HashMap::new();
     // Lower each user-defined function into Cranelift IR, one function at a time.
     for name in &function_names {
-        let arity = compiled
+        compiled
             .functions
             .get(*name)
-            .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?
-            .params
-            .len();
+            .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?;
         let func_sig = value_function_signature(&mut module, ptr_type);
         let func_id = module.declare_function(&function_symbol(name), Linkage::Local, &func_sig)?;
         function_ids.insert((*name).clone(), func_id);
-        function_arities.insert((*name).clone(), arity);
     }
     let main_sig = value_function_signature(&mut module, ptr_type);
     let main_id = module.declare_function("run_main", Linkage::Local, &main_sig)?;
@@ -53,19 +56,13 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
             .functions
             .get(*name)
             .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?;
-        let mut locals = collect_store_names(&function.code);
-        for param in &function.params {
-            locals.insert(param.clone());
-        }
         define_function(
             &mut module,
             &runtime_funcs,
             &mut string_data,
             name,
             function_ids.get(*name).copied().unwrap(),
-            &function.params,
             &function.code,
-            &locals,
         )?;
     }
 
@@ -75,9 +72,7 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
         &mut string_data,
         "run_main",
         main_id,
-        &[],
         &compiled.main,
-        &BTreeSet::new(),
     )?;
 
     // Finalize all emitted function bodies into executable machine code.
@@ -89,11 +84,18 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     for (name, func_id) in &function_ids {
         let entry = module.get_finalized_function(*func_id);
         let entry: EntryFunction = unsafe { std::mem::transmute(entry) };
-        let arity = function_arities
+        let function = compiled
+            .functions
             .get(name)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("Missing arity for function '{name}'"))?;
-        functions.insert(name.clone(), CompiledFunctionPointer { entry, arity });
+            .ok_or_else(|| anyhow::anyhow!("Missing function metadata for '{name}'"))?;
+        functions.insert(
+            name.clone(),
+            CompiledFunctionPointer {
+                entry,
+                arity: function.params.len(),
+                params: function.params.clone(),
+            },
+        );
     }
 
     Ok(PreparedProgram {
@@ -141,6 +143,7 @@ impl StringData {
     }
 }
 
+/// Signature for compiled JIT functions: `(Runtime*, args_ptr) -> Value*`.
 fn value_function_signature(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
@@ -152,6 +155,7 @@ fn value_function_signature(
     sig
 }
 
+/// Maps each runtime helper ABI shape to a Cranelift call signature.
 fn runtime_function_signature(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
@@ -203,12 +207,6 @@ fn runtime_function_signature(
             sig.params.push(AbiParam::new(ptr_type));
             sig.returns.push(AbiParam::new(ptr_type));
         }
-        runtime::RuntimeFunctionSignature::CtxValueValueToI8 => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.returns.push(AbiParam::new(types::I8));
-        }
         runtime::RuntimeFunctionSignature::ValueToI8 => {
             sig.params.push(AbiParam::new(ptr_type));
             sig.returns.push(AbiParam::new(types::I8));
@@ -233,12 +231,6 @@ fn runtime_function_signature(
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(ptr_type));
         }
-        runtime::RuntimeFunctionSignature::CtxValueValueValueToVoid => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-        }
         runtime::RuntimeFunctionSignature::CtxPtrI64ValueValueToVoid => {
             sig.params.push(AbiParam::new(ptr_type));
             sig.params.push(AbiParam::new(ptr_type));
@@ -250,6 +242,7 @@ fn runtime_function_signature(
     sig
 }
 
+/// Declares and imports all runtime helper symbols needed by JIT-generated code.
 fn declare_runtime_functions(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
@@ -275,7 +268,6 @@ struct RuntimeCalls {
     add: FuncRef,
     sub: FuncRef,
     less_than: FuncRef,
-    less_than_truthy: FuncRef,
     is_truthy: FuncRef,
     call_value: FuncRef,
     load_name: FuncRef,
@@ -283,7 +275,6 @@ struct RuntimeCalls {
     load_attr: FuncRef,
     store_attr: FuncRef,
     load_index: FuncRef,
-    store_index_value: FuncRef,
     store_index_name: FuncRef,
 }
 
@@ -295,10 +286,6 @@ struct LoweringContext {
     sp_var: Variable,
     stack_base: Value,
     call_args_base: Value,
-    tmp_addr: Value,
-    locals_slot: Option<StackSlot>,
-    locals_set_slot: Option<StackSlot>,
-    local_indices: HashMap<String, i64>,
     blocks: Vec<Block>,
     error_block: Block,
     code_len: usize,
@@ -334,6 +321,9 @@ impl LoweringContext {
         builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0)
     }
 
+    /// Emits null-guard branch pattern for runtime calls.
+    ///
+    /// Returns a fresh `ok_block` the caller should `switch_to_block` on success.
     fn check_null(&self, builder: &mut FunctionBuilder, value: Value) -> Block {
         let ok_block = builder.create_block();
         let is_null = builder.ins().icmp_imm(IntCC::Equal, value, 0);
@@ -343,60 +333,17 @@ impl LoweringContext {
         ok_block
     }
 
-    fn local_index(&self, name: &str) -> Option<i64> {
-        self.local_indices.get(name).copied()
-    }
-
     fn resolve_target(&self, ip: usize, offset: isize) -> Result<usize> {
         resolve_relative_target(ip, offset, self.code_len)
     }
-
-    fn local_bases(&self, builder: &mut FunctionBuilder) -> Result<(Value, Value)> {
-        let locals_slot = self
-            .locals_slot
-            .ok_or_else(|| anyhow::anyhow!("Missing locals storage"))?;
-        let locals_set_slot = self
-            .locals_set_slot
-            .ok_or_else(|| anyhow::anyhow!("Missing locals set storage"))?;
-        let locals_base = builder.ins().stack_addr(self.ptr_type, locals_slot, 0);
-        let locals_set_base = builder.ins().stack_addr(self.ptr_type, locals_set_slot, 0);
-        Ok((locals_base, locals_set_base))
-    }
-
-    fn store_local(
-        &self,
-        builder: &mut FunctionBuilder,
-        local_idx: i64,
-        value: Value,
-    ) -> Result<()> {
-        let (locals_base, locals_set_base) = self.local_bases(builder)?;
-        let local_addr = builder
-            .ins()
-            .iadd_imm(locals_base, local_idx * self.ptr_size);
-        builder.ins().store(MemFlags::new(), value, local_addr, 0);
-        let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-        let one = builder.ins().iconst(types::I8, 1);
-        builder.ins().store(MemFlags::new(), one, set_addr, 0);
-        Ok(())
-    }
-
-    fn load_local(&self, builder: &mut FunctionBuilder, local_idx: i64) -> Result<Value> {
-        let (locals_base, _) = self.local_bases(builder)?;
-        let local_addr = builder
-            .ins()
-            .iadd_imm(locals_base, local_idx * self.ptr_size);
-        Ok(builder
-            .ins()
-            .load(self.ptr_type, MemFlags::new(), local_addr, 0))
-    }
-
-    fn local_is_set_flag(&self, builder: &mut FunctionBuilder, local_idx: i64) -> Result<Value> {
-        let (_, locals_set_base) = self.local_bases(builder)?;
-        let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-        Ok(builder.ins().load(types::I8, MemFlags::new(), set_addr, 0))
-    }
 }
 
+/// Materializes a string literal as readonly data and returns `(ptr, len)` IR values.
+///
+/// Lowering pattern:
+/// 1. Declare data object in the JIT module.
+/// 2. Reference it via `global_value`.
+/// 3. Build an immediate i64 length constant.
 fn declare_string_literal(
     module: &mut JITModule,
     string_data: &mut StringData,
@@ -413,25 +360,25 @@ fn declare_string_literal(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Lowers one compiled bytecode function into a single Cranelift function body.
+///
+/// High-level emitted pattern:
+/// 1. Import runtime helper symbols used by bytecode operations.
+/// 2. Allocate fixed stack slots for operand stack and call-argument scratch.
+/// 3. Create one Cranelift block per bytecode instruction plus exit/error blocks.
+/// 4. Dispatch each instruction to `emit_instruction`.
+/// 5. Return `None` on normal fallthrough or null pointer on runtime error.
 fn define_function(
     module: &mut JITModule,
     runtime_funcs: &RuntimeFunctions,
     string_data: &mut StringData,
     function_name: &str,
     func_id: FuncId,
-    param_names: &[String],
     code: &[Instruction],
-    locals: &BTreeSet<String>,
 ) -> Result<()> {
     let ptr_type = module.target_config().pointer_type();
     let stack_size = max_stack_depth(code)?.max(1);
     let ptr_size = ptr_type.bytes() as i64;
-    let local_list: Vec<&String> = locals.iter().collect();
-    let local_indices: HashMap<String, i64> = local_list
-        .iter()
-        .enumerate()
-        .map(|(idx, name)| ((*name).clone(), idx as i64))
-        .collect();
 
     // Build this function in an isolated Cranelift compilation context.
     let mut ctx = module.make_context();
@@ -476,10 +423,6 @@ fn define_function(
         runtime_funcs.get(runtime::RuntimeFunctionId::LessThan)?,
         &mut ctx.func,
     );
-    let less_than_truthy = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::LessThanTruthy)?,
-        &mut ctx.func,
-    );
     let is_truthy = module.declare_func_in_func(
         runtime_funcs.get(runtime::RuntimeFunctionId::IsTruthy)?,
         &mut ctx.func,
@@ -508,10 +451,6 @@ fn define_function(
         runtime_funcs.get(runtime::RuntimeFunctionId::LoadIndex)?,
         &mut ctx.func,
     );
-    let store_index_value = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexValue)?,
-        &mut ctx.func,
-    );
     let store_index_name = module.declare_func_in_func(
         runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
         &mut ctx.func,
@@ -527,7 +466,6 @@ fn define_function(
         add,
         sub,
         less_than,
-        less_than_truthy,
         is_truthy,
         call_value,
         load_name,
@@ -535,7 +473,6 @@ fn define_function(
         load_attr,
         store_attr,
         load_index,
-        store_index_value,
         store_index_name,
     };
 
@@ -547,9 +484,9 @@ fn define_function(
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     let ctx_param = builder.block_params(entry_block)[0];
-    let args_param = builder.block_params(entry_block)[1];
+    let _args_param = builder.block_params(entry_block)[1];
 
-    // Reserve stack slots for the VM operand stack, call scratch space, and locals.
+    // Reserve stack slots for the VM operand stack and call scratch space.
     let ptr_align_shift = (ptr_size as u32).trailing_zeros() as u8;
     let stack_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
         cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
@@ -562,77 +499,16 @@ fn define_function(
             (stack_size as u32) * (ptr_size as u32),
             ptr_align_shift,
         ));
-    let tmp_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-        ptr_size as u32,
-        ptr_align_shift,
-    ));
-    let locals_slot = if local_list.is_empty() {
-        None
-    } else {
-        Some(
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                (local_list.len() as u32) * (ptr_size as u32),
-                ptr_align_shift,
-            )),
-        )
-    };
-    let locals_set_slot = if local_list.is_empty() {
-        None
-    } else {
-        Some(
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                local_list.len() as u32,
-                0,
-            )),
-        )
-    };
 
     // `stack_addr` returns a frame-relative pointer to the start of a stack slot.
-    // These are the base addresses for our VM operand stack, call scratch space,
-    // and scalar temporaries.
+    // These are the base addresses for our VM operand stack and call scratch space.
     let stack_base = builder.ins().stack_addr(ptr_type, stack_slot, 0);
     let call_args_base = builder.ins().stack_addr(ptr_type, call_args_slot, 0);
-    let tmp_addr = builder.ins().stack_addr(ptr_type, tmp_slot, 0);
     let sp_var = Variable::from_u32(0);
     builder.declare_var(sp_var, ptr_type);
     // `sp_var` stores a logical stack depth (number of values), not a byte offset.
     let zero = builder.ins().iconst(ptr_type, 0);
     builder.def_var(sp_var, zero);
-
-    if let Some(set_slot) = locals_set_slot {
-        let locals_set_base = builder.ins().stack_addr(ptr_type, set_slot, 0);
-        let zero_flag = builder.ins().iconst(types::I8, 0);
-        for idx in 0..local_list.len() {
-            let offset = builder.ins().iadd_imm(locals_set_base, idx as i64);
-            builder.ins().store(MemFlags::new(), zero_flag, offset, 0);
-        }
-    }
-    if !param_names.is_empty() {
-        if locals_set_slot.is_none() || locals_slot.is_none() {
-            bail!("Missing locals storage for function parameters");
-        }
-        let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-        let locals_set_base = builder
-            .ins()
-            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-        for (index, param_name) in param_names.iter().enumerate() {
-            let local_index = local_indices.get(param_name).copied().ok_or_else(|| {
-                anyhow::anyhow!("Missing local slot for parameter '{param_name}'")
-            })?;
-            let param_addr = builder
-                .ins()
-                .iadd_imm(args_param, (index as i64) * ptr_size);
-            let value = builder.ins().load(ptr_type, MemFlags::new(), param_addr, 0);
-            let local_addr = builder.ins().iadd_imm(locals_base, local_index * ptr_size);
-            builder.ins().store(MemFlags::new(), value, local_addr, 0);
-            let set_addr = builder.ins().iadd_imm(locals_set_base, local_index);
-            let one = builder.ins().iconst(types::I8, 1);
-            builder.ins().store(MemFlags::new(), one, set_addr, 0);
-        }
-    }
 
     // Create one block per bytecode instruction plus a dedicated exit block.
     let mut blocks = Vec::with_capacity(code.len() + 1);
@@ -649,10 +525,6 @@ fn define_function(
         sp_var,
         stack_base,
         call_args_base,
-        tmp_addr,
-        locals_slot,
-        locals_set_slot,
-        local_indices,
         blocks,
         error_block,
         code_len: code.len(),
@@ -668,7 +540,6 @@ fn define_function(
             module,
             string_data,
             &lowering,
-            code,
             idx,
             instruction,
         )?;
@@ -703,20 +574,14 @@ fn define_function(
 fn store_to_scope_with_name_ptr(
     builder: &mut FunctionBuilder,
     lowering: &LoweringContext,
-    name: &str,
     name_ptr: Value,
     name_len: Value,
     value: Value,
-) -> Result<()> {
-    if let Some(local_idx) = lowering.local_index(name) {
-        lowering.store_local(builder, local_idx, value)?;
-    } else {
-        builder.ins().call(
-            lowering.runtime.store_name,
-            &[lowering.ctx_param, name_ptr, name_len, value],
-        );
-    }
-    Ok(())
+) {
+    builder.ins().call(
+        lowering.runtime.store_name,
+        &[lowering.ctx_param, name_ptr, name_len, value],
+    );
 }
 
 fn store_to_scope(
@@ -735,9 +600,17 @@ fn store_to_scope(
         "name",
         name,
     )?;
-    store_to_scope_with_name_ptr(builder, lowering, name, name_ptr, name_len, value)
+    store_to_scope_with_name_ptr(builder, lowering, name_ptr, name_len, value);
+    Ok(())
 }
 
+/// Lowers class definition metadata and emits a `runtime_define_class` call.
+///
+/// Lowering pattern:
+/// 1. Materialize class name.
+/// 2. Materialize method name/symbol arrays in stack slots.
+/// 3. Call `runtime_define_class`.
+/// 4. Check for null error and store resulting class object under class name.
 fn emit_define_class(
     builder: &mut FunctionBuilder,
     module: &mut JITModule,
@@ -891,9 +764,16 @@ fn emit_define_class(
     let class_value = builder.inst_results(call)[0];
     let ok_block = lowering.check_null(builder, class_value);
     builder.switch_to_block(ok_block);
-    store_to_scope_with_name_ptr(builder, lowering, name, name_ptr, name_len_val, class_value)
+    store_to_scope_with_name_ptr(builder, lowering, name_ptr, name_len_val, class_value);
+    Ok(())
 }
 
+/// Lowers `DefineFunction` by creating a runtime function object from its symbol.
+///
+/// Lowering pattern:
+/// 1. Materialize function symbol literal.
+/// 2. Call `runtime_make_function`.
+/// 3. Null-check result and store under the declared function name.
 fn emit_define_function(
     builder: &mut FunctionBuilder,
     module: &mut JITModule,
@@ -920,6 +800,13 @@ fn emit_define_function(
     store_to_scope(builder, module, string_data, lowering, name, function_value)
 }
 
+/// Lowers `LoadName` into runtime name resolution and pushes result onto operand stack.
+///
+/// Lowering pattern:
+/// 1. Materialize name literal.
+/// 2. Call `runtime_load_name`.
+/// 3. Branch to shared error block on null.
+/// 4. Push loaded value.
 fn emit_load_name(
     builder: &mut FunctionBuilder,
     module: &mut JITModule,
@@ -936,50 +823,14 @@ fn emit_load_name(
         name,
     )?;
 
-    if let Some(local_idx) = lowering.local_index(name) {
-        let is_set = lowering.local_is_set_flag(builder, local_idx)?;
-        let local_block = builder.create_block();
-        let global_block = builder.create_block();
-        let cont_block = builder.create_block();
-        builder
-            .ins()
-            .brif(is_set, local_block, &[], global_block, &[]);
-
-        builder.switch_to_block(local_block);
-        let local_val = lowering.load_local(builder, local_idx)?;
-        builder
-            .ins()
-            .store(MemFlags::new(), local_val, lowering.tmp_addr, 0);
-        builder.ins().jump(cont_block, &[]);
-
-        builder.switch_to_block(global_block);
-        let call = builder.ins().call(
-            lowering.runtime.load_name,
-            &[lowering.ctx_param, name_ptr, name_len_val],
-        );
-        let result = builder.inst_results(call)[0];
-        let ok_block = lowering.check_null(builder, result);
-        builder.switch_to_block(ok_block);
-        builder
-            .ins()
-            .store(MemFlags::new(), result, lowering.tmp_addr, 0);
-        builder.ins().jump(cont_block, &[]);
-
-        builder.switch_to_block(cont_block);
-        let value = builder
-            .ins()
-            .load(lowering.ptr_type, MemFlags::new(), lowering.tmp_addr, 0);
-        lowering.push_value(builder, value);
-    } else {
-        let call = builder.ins().call(
-            lowering.runtime.load_name,
-            &[lowering.ctx_param, name_ptr, name_len_val],
-        );
-        let result = builder.inst_results(call)[0];
-        let ok_block = lowering.check_null(builder, result);
-        builder.switch_to_block(ok_block);
-        lowering.push_value(builder, result);
-    }
+    let call = builder.ins().call(
+        lowering.runtime.load_name,
+        &[lowering.ctx_param, name_ptr, name_len_val],
+    );
+    let result = builder.inst_results(call)[0];
+    let ok_block = lowering.check_null(builder, result);
+    builder.switch_to_block(ok_block);
+    lowering.push_value(builder, result);
     Ok(())
 }
 
@@ -1003,63 +854,34 @@ fn emit_store_index(
 ) -> Result<()> {
     let value = lowering.pop_value(builder);
     let index = lowering.pop_value(builder);
-    if let Some(local_idx) = lowering.local_index(name) {
-        let is_set = lowering.local_is_set_flag(builder, local_idx)?;
-        let local_block = builder.create_block();
-        let global_block = builder.create_block();
-        let cont_block = builder.create_block();
-        builder
-            .ins()
-            .brif(is_set, local_block, &[], global_block, &[]);
-
-        builder.switch_to_block(local_block);
-        let target_value = lowering.load_local(builder, local_idx)?;
-        builder.ins().call(
-            lowering.runtime.store_index_value,
-            &[lowering.ctx_param, target_value, index, value],
-        );
-        builder.ins().jump(cont_block, &[]);
-
-        builder.switch_to_block(global_block);
-        let (name_ptr, name_len_val) = declare_string_literal(
-            module,
-            string_data,
-            builder,
-            lowering.ptr_type,
-            "name",
-            name,
-        )?;
-        builder.ins().call(
-            lowering.runtime.store_index_name,
-            &[lowering.ctx_param, name_ptr, name_len_val, index, value],
-        );
-        builder.ins().jump(cont_block, &[]);
-
-        builder.switch_to_block(cont_block);
-    } else {
-        let (name_ptr, name_len_val) = declare_string_literal(
-            module,
-            string_data,
-            builder,
-            lowering.ptr_type,
-            "name",
-            name,
-        )?;
-        builder.ins().call(
-            lowering.runtime.store_index_name,
-            &[lowering.ctx_param, name_ptr, name_len_val, index, value],
-        );
-    }
+    let (name_ptr, name_len_val) = declare_string_literal(
+        module,
+        string_data,
+        builder,
+        lowering.ptr_type,
+        "name",
+        name,
+    )?;
+    builder.ins().call(
+        lowering.runtime.store_index_name,
+        &[lowering.ctx_param, name_ptr, name_len_val, index, value],
+    );
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Lowers one bytecode instruction into Cranelift IR.
+///
+/// Pattern shape by family:
+/// - Stack producers/consumers: runtime call + `push_value`/`pop_value`.
+/// - Control flow: `brif`/`jump` to pre-created per-instruction blocks.
+/// - Errorable runtime calls: null-check and branch to shared error block.
+/// - Returns: emit direct `return_` and mark instruction as terminating.
 fn emit_instruction(
     builder: &mut FunctionBuilder,
     module: &mut JITModule,
     string_data: &mut StringData,
     lowering: &LoweringContext,
-    code: &[Instruction],
     idx: usize,
     instruction: &Instruction,
 ) -> Result<bool> {
@@ -1172,38 +994,15 @@ fn emit_instruction(
         Instruction::LessThan => {
             let right = lowering.pop_value(builder);
             let left = lowering.pop_value(builder);
-            if let Some(Instruction::JumpIfFalse(target)) = code.get(idx + 1) {
-                let call = builder.ins().call(
-                    lowering.runtime.less_than_truthy,
-                    &[lowering.ctx_param, left, right],
-                );
-                let truthy_or_error = builder.inst_results(call)[0];
-                let non_error_block = builder.create_block();
-                let is_error = builder.ins().icmp_imm(IntCC::Equal, truthy_or_error, 2);
-                builder
-                    .ins()
-                    .brif(is_error, lowering.error_block, &[], non_error_block, &[]);
-                builder.switch_to_block(non_error_block);
-                let target_index = lowering.resolve_target(idx + 1, *target)?;
-                builder.ins().brif(
-                    truthy_or_error,
-                    lowering.block(idx + 2),
-                    &[],
-                    lowering.block(target_index),
-                    &[],
-                );
-                Ok(true)
-            } else {
-                let call = builder.ins().call(
-                    lowering.runtime.less_than,
-                    &[lowering.ctx_param, left, right],
-                );
-                let result = builder.inst_results(call)[0];
-                let ok_block = lowering.check_null(builder, result);
-                builder.switch_to_block(ok_block);
-                lowering.push_value(builder, result);
-                Ok(false)
-            }
+            let call = builder.ins().call(
+                lowering.runtime.less_than,
+                &[lowering.ctx_param, left, right],
+            );
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
         }
         Instruction::LoadIndex => {
             let index = lowering.pop_value(builder);
@@ -1334,16 +1133,7 @@ fn function_symbol(name: &str) -> String {
     format!("fn_{name}")
 }
 
-fn collect_store_names(code: &[Instruction]) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for instruction in code {
-        if let Instruction::StoreName(name) = instruction {
-            names.insert(name.clone());
-        }
-    }
-    names
-}
-
+/// Computes maximum operand-stack depth for a bytecode block and validates stack consistency.
 fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
     if code.is_empty() {
         return Ok(0);
@@ -1396,6 +1186,7 @@ fn max_stack_depth(code: &[Instruction]) -> Result<usize> {
     Ok(max_depth)
 }
 
+/// Resolves VM-style relative jump offsets into absolute instruction indices.
 fn resolve_relative_target(ip: usize, offset: isize, code_len: usize) -> Result<usize> {
     let target = (ip as isize) + 1 + offset;
     if target < 0 || (target as usize) > code_len {
@@ -1404,6 +1195,7 @@ fn resolve_relative_target(ip: usize, offset: isize, code_len: usize) -> Result<
     Ok(target as usize)
 }
 
+/// Propagates inferred stack depth to a control-flow successor and checks join consistency.
 fn propagate_depth(
     depths: &mut [Option<i32>],
     worklist: &mut VecDeque<usize>,
@@ -1425,6 +1217,7 @@ fn propagate_depth(
     Ok(())
 }
 
+/// Returns net operand-stack delta for one bytecode instruction.
 fn stack_effect(instruction: &Instruction) -> i32 {
     match instruction {
         Instruction::PushInt(_)
@@ -1443,5 +1236,68 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         Instruction::Add | Instruction::Sub | Instruction::LessThan => -1,
         Instruction::Jump(_) | Instruction::Return => 0,
         Instruction::ReturnValue => -1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{max_stack_depth, resolve_relative_target};
+    use crate::bytecode::Instruction;
+
+    #[test]
+    fn computes_max_stack_depth_for_linear_code() {
+        let code = vec![
+            Instruction::PushInt(1),
+            Instruction::PushInt(2),
+            Instruction::Add,
+            Instruction::Pop,
+        ];
+        let depth = max_stack_depth(&code).expect("stack depth should be valid");
+        assert_eq!(depth, 2);
+    }
+
+    #[test]
+    fn computes_max_stack_depth_for_branching_code() {
+        let code = vec![
+            Instruction::PushBool(true),
+            Instruction::JumpIfFalse(2),
+            Instruction::PushInt(1),
+            Instruction::Jump(1),
+            Instruction::PushInt(2),
+            Instruction::Pop,
+        ];
+        let depth = max_stack_depth(&code).expect("stack depth should be valid");
+        assert_eq!(depth, 1);
+    }
+
+    #[test]
+    fn errors_on_stack_underflow() {
+        let code = vec![Instruction::Pop];
+        let error = max_stack_depth(&code).expect_err("expected stack underflow");
+        assert_eq!(error.to_string(), "Bytecode stack underflow at 0");
+    }
+
+    #[test]
+    fn errors_on_stack_mismatch_at_join_point() {
+        let code = vec![
+            Instruction::PushBool(true),
+            Instruction::JumpIfFalse(1),
+            Instruction::PushInt(1),
+            Instruction::Return,
+        ];
+        let error = max_stack_depth(&code).expect_err("expected stack mismatch");
+        assert_eq!(error.to_string(), "Bytecode stack mismatch at 3");
+    }
+
+    #[test]
+    fn resolves_relative_jump_targets() {
+        let target = resolve_relative_target(2, -2, 6).expect("valid jump target");
+        assert_eq!(target, 1);
+    }
+
+    #[test]
+    fn rejects_invalid_relative_jump_target() {
+        let error = resolve_relative_target(0, -2, 3).expect_err("expected invalid jump target");
+        assert_eq!(error.to_string(), "Invalid jump target at 0 with offset -2");
     }
 }
