@@ -31,6 +31,8 @@ pub(crate) enum RuntimeError {
     NegativeIndex { index: i64 },
     #[error("List index out of bounds: index {index}, len {len}")]
     IndexOutOfBounds { index: usize, len: usize },
+    #[error("Dictionary key not found: {key}")]
+    MissingKey { key: String },
     #[error("Undefined variable '{name}'")]
     UndefinedVariable { name: String },
     #[error("Undefined function '{name}'")]

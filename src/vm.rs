@@ -184,6 +184,80 @@ mod tests {
     }
 
     #[test]
+    fn supports_dict_literals_index_assignment_and_len() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::Dict(vec![
+                        (Expression::String("a".to_string()), Expression::Integer(1)),
+                        (Expression::String("b".to_string()), Expression::Integer(2)),
+                    ]),
+                },
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Identifier("values".to_string())],
+                )),
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Index {
+                        object: Box::new(Expression::Identifier("values".to_string())),
+                        index: Box::new(Expression::String("a".to_string())),
+                    }],
+                )),
+                Statement::Assign {
+                    target: AssignTarget::Index {
+                        name: "values".to_string(),
+                        index: Expression::String("b".to_string()),
+                    },
+                    value: Expression::Integer(7),
+                },
+                Statement::Expr(call(
+                    "print",
+                    vec![Expression::Identifier("values".to_string())],
+                )),
+                Statement::Expr(call(
+                    "print",
+                    vec![call(
+                        "len",
+                        vec![Expression::Identifier("values".to_string())],
+                    )],
+                )),
+                Statement::If {
+                    condition: Expression::Identifier("values".to_string()),
+                    then_body: vec![Statement::Expr(call("print", vec![Expression::Integer(1)]))],
+                    else_body: vec![Statement::Expr(call("print", vec![Expression::Integer(0)]))],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("empty".to_string()),
+                    value: Expression::Dict(vec![]),
+                },
+                Statement::If {
+                    condition: Expression::Identifier("empty".to_string()),
+                    then_body: vec![Statement::Expr(call("print", vec![Expression::Integer(1)]))],
+                    else_body: vec![Statement::Expr(call("print", vec![Expression::Integer(0)]))],
+                },
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                {\"a\": 1, \"b\": 2}
+                1
+                {\"a\": 1, \"b\": 7}
+                2
+                1
+                0
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
     fn supports_instance_attribute_assignment() {
         let value_attr = Expression::Attribute {
             object: Box::new(Expression::Identifier("b".to_string())),

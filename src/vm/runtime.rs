@@ -184,6 +184,17 @@ impl<'a> VmRuntime<'a> {
                     values.reverse();
                     self.stack.push(Value::list_object(values));
                 }
+                Instruction::BuildDict(count) => {
+                    let mut entries = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let value = self.pop_stack()?;
+                        let key = self.pop_stack()?;
+                        entries.push((key, value));
+                    }
+                    entries.reverse();
+                    let dict = Value::dict_object(entries)?;
+                    self.stack.push(dict);
+                }
                 Instruction::PushNone => self.stack.push(Value::none_object()),
                 Instruction::LoadName(name) => {
                     let value = if let Some(value) = environment.load_cloned(&name) {

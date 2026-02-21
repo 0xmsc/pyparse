@@ -205,6 +205,7 @@ struct RuntimeCalls {
     make_none: FuncRef,
     make_function: FuncRef,
     make_list: FuncRef,
+    make_dict: FuncRef,
     define_class: FuncRef,
     add: FuncRef,
     sub: FuncRef,
@@ -248,6 +249,10 @@ impl RuntimeCalls {
             ),
             make_list: module.declare_func_in_func(
                 runtime_funcs.get(runtime::RuntimeFunctionId::MakeList)?,
+                func,
+            ),
+            make_dict: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeDict)?,
                 func,
             ),
             define_class: module.declare_func_in_func(
@@ -895,6 +900,17 @@ fn emit_instruction(
             );
             Ok(false)
         }
+        Instruction::BuildDict(count) => {
+            store_stack_values_for_call_args(builder, lowering, count * 2);
+            let count_val = builder.ins().iconst(types::I64, *count as i64);
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
+                lowering.runtime.make_dict,
+                &[lowering.ctx_param, lowering.call_args_base, count_val],
+            );
+            Ok(false)
+        }
         Instruction::PushNone => {
             emit_runtime_call_and_push(
                 builder,
@@ -1144,6 +1160,7 @@ fn stack_effect(instruction: &Instruction) -> i32 {
         Instruction::DefineClass { .. } | Instruction::DefineFunction { .. } => 0,
         Instruction::LoadAttr(_) => 0,
         Instruction::BuildList(count) => 1 - (*count as i32),
+        Instruction::BuildDict(count) => 1 - ((*count as i32) * 2),
         Instruction::Call { argc } => -(*argc as i32),
         Instruction::StoreName(_) | Instruction::Pop | Instruction::JumpIfFalse(_) => -1,
         Instruction::LoadIndex => -1,

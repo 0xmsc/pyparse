@@ -278,6 +278,15 @@ impl InterpreterRuntime {
                 }
                 Ok(Value::list_object(values))
             }
+            Expression::Dict(entries) => {
+                let mut values = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    let key_value = self.eval_expression(key, environment)?;
+                    let value_value = self.eval_expression(value, environment)?;
+                    values.push((key_value, value_value));
+                }
+                Value::dict_object(values).map_err(Into::into)
+            }
             Expression::Identifier(name) => {
                 if let Some(value) = environment.load_cloned(name) {
                     return Ok(value);

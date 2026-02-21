@@ -191,6 +191,8 @@ impl<'a> Lexer<'a> {
             ')' => TokenKind::RParen,
             '[' => TokenKind::LBracket,
             ']' => TokenKind::RBracket,
+            '{' => TokenKind::LBrace,
+            '}' => TokenKind::RBrace,
             _ => return None,
         };
 
@@ -580,6 +582,34 @@ mod tests {
             TokenKind::LParen,
             TokenKind::Integer(3),
             TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
+    }
+
+    #[test]
+    fn tokenizes_dict_braces() {
+        let input = indoc! {r#"
+            values = {1: 2, "k": 3}
+        "#};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        let expected_kinds = vec![
+            TokenKind::Identifier("values"),
+            TokenKind::Equal,
+            TokenKind::LBrace,
+            TokenKind::Integer(1),
+            TokenKind::Colon,
+            TokenKind::Integer(2),
+            TokenKind::Comma,
+            TokenKind::String("k"),
+            TokenKind::Colon,
+            TokenKind::Integer(3),
+            TokenKind::RBrace,
             TokenKind::Newline,
             TokenKind::EOF,
         ];

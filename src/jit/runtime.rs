@@ -26,6 +26,7 @@ pub(super) enum RuntimeFunctionId {
     MakeNone,
     MakeFunction,
     MakeList,
+    MakeDict,
     DefineClass,
     Add,
     Sub,
@@ -490,6 +491,47 @@ unsafe extern "C" fn runtime_make_list(
     runtime.alloc_value(Value::list_object(elements))
 }
 
+unsafe extern "C" fn runtime_make_dict(
+    ctx: *mut Runtime,
+    values: *const *mut Value,
+    count: i64,
+) -> *mut Value {
+    let runtime = unsafe { &mut *ctx };
+    if count < 0 {
+        runtime.set_error_message("Dictionary entry count cannot be negative".to_string());
+        return ptr::null_mut();
+    }
+    let count = count as usize;
+    if count > 0 && values.is_null() {
+        runtime.set_error_message("Dictionary entries cannot be null".to_string());
+        return ptr::null_mut();
+    }
+
+    let mut entries = Vec::with_capacity(count);
+    for index in 0..count {
+        let key_ptr = unsafe { *values.add(index * 2) };
+        let value_ptr = unsafe { *values.add(index * 2 + 1) };
+        if key_ptr.is_null() {
+            runtime.set_error_message("Dictionary key cannot be null".to_string());
+            return ptr::null_mut();
+        }
+        if value_ptr.is_null() {
+            runtime.set_error_message("Dictionary value cannot be null".to_string());
+            return ptr::null_mut();
+        }
+        entries.push((unsafe { (&*key_ptr).clone() }, unsafe {
+            (&*value_ptr).clone()
+        }));
+    }
+    match Value::dict_object(entries) {
+        Ok(dict) => runtime.alloc_value(dict),
+        Err(error) => {
+            runtime.set_runtime_error(error);
+            ptr::null_mut()
+        }
+    }
+}
+
 /// Runtime hook creating class objects from method names and compiled callable IDs.
 unsafe extern "C" fn runtime_define_class(
     ctx: *mut Runtime,
@@ -809,7 +851,7 @@ unsafe extern "C" fn runtime_store_index_name(
 }
 
 /// Returns the runtime hook table imported by JIT codegen.
-pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
+pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 19] {
     use RuntimeAbiType::{I8, I64, Ptr};
 
     [
@@ -852,6 +894,13 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
             id: RuntimeFunctionId::MakeList,
             symbol: "runtime_make_list",
             function: runtime_make_list as *const u8,
+            param_types: &[Ptr, Ptr, I64],
+            return_types: &[Ptr],
+        },
+        RuntimeFunctionSpec {
+            id: RuntimeFunctionId::MakeDict,
+            symbol: "runtime_make_dict",
+            function: runtime_make_dict as *const u8,
             param_types: &[Ptr, Ptr, I64],
             return_types: &[Ptr],
         },

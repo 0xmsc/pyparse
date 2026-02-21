@@ -562,6 +562,56 @@ mod tests {
     }
 
     #[test]
+    fn supports_dict_literals_index_assignment_and_len() {
+        let program = Program {
+            statements: vec![
+                Statement::Assign {
+                    target: AssignTarget::Name("values".to_string()),
+                    value: Expression::Dict(vec![
+                        (Expression::String("a".to_string()), int(1)),
+                        (Expression::String("b".to_string()), int(2)),
+                    ]),
+                },
+                print(vec![identifier("values")]),
+                print(vec![Expression::Index {
+                    object: Box::new(identifier("values")),
+                    index: Box::new(Expression::String("a".to_string())),
+                }]),
+                Statement::Assign {
+                    target: AssignTarget::Index {
+                        name: "values".to_string(),
+                        index: Expression::String("b".to_string()),
+                    },
+                    value: int(7),
+                },
+                print(vec![identifier("values")]),
+                print(vec![call("len", vec![identifier("values")])]),
+                Statement::If {
+                    condition: identifier("values"),
+                    then_body: vec![print(vec![int(1)])],
+                    else_body: vec![print(vec![int(0)])],
+                },
+                Statement::Assign {
+                    target: AssignTarget::Name("empty".to_string()),
+                    value: Expression::Dict(vec![]),
+                },
+                Statement::If {
+                    condition: identifier("empty"),
+                    then_body: vec![print(vec![int(1)])],
+                    else_body: vec![print(vec![int(0)])],
+                },
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(
+            output,
+            "{\"a\": 1, \"b\": 2}\n1\n{\"a\": 1, \"b\": 7}\n2\n1\n0"
+        );
+    }
+
+    #[test]
     fn supports_instance_attribute_assignment() {
         let value_attr = Expression::Attribute {
             object: Box::new(identifier("b")),

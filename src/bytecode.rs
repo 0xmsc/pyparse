@@ -13,6 +13,7 @@ pub enum Instruction {
     PushBool(bool),
     PushString(String),
     BuildList(usize),
+    BuildDict(usize),
     PushNone,
     LoadName(String),
     StoreName(String),
@@ -289,6 +290,13 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
             }
             code.push(Instruction::BuildList(elements.len()));
         }
+        Expression::Dict(entries) => {
+            for (key, value) in entries {
+                code.extend(compile_expression(key)?);
+                code.extend(compile_expression(value)?);
+            }
+            code.push(Instruction::BuildDict(entries.len()));
+        }
         Expression::Identifier(name) => {
             code.push(Instruction::LoadName(name.to_string()));
         }
@@ -517,6 +525,34 @@ mod tests {
                 Instruction::PushInt(1),
                 Instruction::PushInt(2),
                 Instruction::BuildList(2),
+                Instruction::Call { argc: 1 },
+                Instruction::Pop
+            ]
+        );
+    }
+
+    #[test]
+    fn compiles_dict_literal_expression() {
+        let program = Program {
+            statements: vec![Statement::Expr(call(
+                "print",
+                vec![Expression::Dict(vec![
+                    (Expression::String("a".to_string()), Expression::Integer(1)),
+                    (Expression::String("b".to_string()), Expression::Integer(2)),
+                ])],
+            ))],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::LoadName("print".to_string()),
+                Instruction::PushString("a".to_string()),
+                Instruction::PushInt(1),
+                Instruction::PushString("b".to_string()),
+                Instruction::PushInt(2),
+                Instruction::BuildDict(2),
                 Instruction::Call { argc: 1 },
                 Instruction::Pop
             ]

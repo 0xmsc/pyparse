@@ -35,6 +35,8 @@ pub enum TokenKind<'a> {
     RParen,   // )
     LBracket, // [
     RBracket, // ]
+    LBrace,   // {
+    RBrace,   // }
 
     // Structural
     Newline,

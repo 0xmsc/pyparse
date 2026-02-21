@@ -2,6 +2,7 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::bool::{self, BoolObject};
 use crate::runtime::callable::{BuiltinFunctionObject, CallableObject, FunctionObject};
 use crate::runtime::class::{ClassObject, InstanceObject};
+use crate::runtime::dict::DictObject;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::list::ListObject;
@@ -274,6 +275,11 @@ impl Value {
     pub(crate) fn class_object(name: String, methods: HashMap<String, Value>) -> Self {
         let class_object = ClassObject::new(name, methods);
         Self::new(Rc::new(RefCell::new(Box::new(class_object))))
+    }
+
+    pub(crate) fn dict_object(entries: Vec<(Value, Value)>) -> Result<Self, RuntimeError> {
+        let dict_object = DictObject::new(entries)?;
+        Ok(Self::new(Rc::new(RefCell::new(Box::new(dict_object)))))
     }
 
     pub(crate) fn instance_object(class: ObjectRef) -> Self {

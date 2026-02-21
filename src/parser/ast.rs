@@ -5,6 +5,7 @@ pub enum Expression {
     Boolean(bool),
     String(String),
     List(Vec<Expression>),
+    Dict(Vec<(Expression, Expression)>),
     Index {
         object: Box<Expression>,
         index: Box<Expression>,

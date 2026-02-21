@@ -344,8 +344,31 @@ impl<'a> Parser<'a> {
         Ok(expressions)
     }
 
-    /// Parse primary expressions (literals, identifiers, grouped, list literals).
-    /// Examples: `42`, `name`, `(a + b)`, `[1, 2]`.
+    /// Parse dict items in `{key: value}` form until `}`.
+    /// Example: `{"a": 1, "b": 2}`.
+    fn parse_dict_entries(&mut self) -> ParseResult<Vec<(Expression, Expression)>> {
+        let mut entries = Vec::new();
+        if self.current_kind() == TokenKind::RBrace {
+            return Ok(entries);
+        }
+        loop {
+            let key = self.parse_expression()?;
+            self.expect_token(TokenKind::Colon, ":")?;
+            let value = self.parse_expression()?;
+            entries.push((key, value));
+            if self.try_consume(TokenKind::Comma) {
+                if self.current_kind() == TokenKind::RBrace {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Parse primary expressions (literals, identifiers, grouped, list/dict literals).
+    /// Examples: `42`, `name`, `(a + b)`, `[1, 2]`, `{"a": 1}`.
     fn parse_primary(&mut self) -> ParseResult<Expression> {
         let expression = match self.current_kind() {
             TokenKind::Integer(value) => Expression::Integer(value),
@@ -358,6 +381,12 @@ impl<'a> Parser<'a> {
                 let elements = self.parse_expression_list(TokenKind::RBracket)?;
                 self.expect_token(TokenKind::RBracket, "]")?;
                 return Ok(Expression::List(elements));
+            }
+            TokenKind::LBrace => {
+                self.advance();
+                let entries = self.parse_dict_entries()?;
+                self.expect_token(TokenKind::RBrace, "}")?;
+                return Ok(Expression::Dict(entries));
             }
             TokenKind::LParen => {
                 self.advance();
@@ -863,6 +892,41 @@ mod tests {
                     args: vec![Expression::List(vec![
                         Expression::Integer(1),
                         Expression::Integer(2),
+                    ])],
+                })],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_dict_literal_with_trailing_comma() {
+        let tokens = vec![
+            tok(TokenKind::Identifier("print")),
+            tok(TokenKind::LParen),
+            tok(TokenKind::LBrace),
+            tok(TokenKind::String("a")),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Integer(1)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::String("b")),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Integer(2)),
+            tok(TokenKind::Comma),
+            tok(TokenKind::RBrace),
+            tok(TokenKind::RParen),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse should succeed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Expr(Expression::Call {
+                    callee: Box::new(Expression::Identifier("print".to_string())),
+                    args: vec![Expression::Dict(vec![
+                        (Expression::String("a".to_string()), Expression::Integer(1)),
+                        (Expression::String("b".to_string()), Expression::Integer(2)),
                     ])],
                 })],
             }
