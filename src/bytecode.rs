@@ -3,6 +3,10 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
+/// Stack-machine instruction set consumed by the VM and JIT backends.
+///
+/// Instructions follow a Python-like operand-stack model where expression
+/// evaluation pushes values and operators/calls consume them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     PushInt(i64),
@@ -57,6 +61,7 @@ pub struct CompiledCallable {
     pub function: CompiledFunction,
 }
 
+/// Fully compiled program: top-level code plus function/class callable bodies.
 #[derive(Debug, Clone)]
 pub struct CompiledProgram {
     pub callables: Vec<CompiledCallable>,

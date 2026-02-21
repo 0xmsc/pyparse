@@ -35,6 +35,7 @@ pub(super) enum RuntimeFunctionId {
     StoreIndexName,
 }
 
+/// One exported runtime hook with its ABI shape for Cranelift import wiring.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RuntimeFunctionSpec {
     pub(super) id: RuntimeFunctionId,
@@ -44,6 +45,7 @@ pub(super) struct RuntimeFunctionSpec {
     pub(super) return_types: &'static [RuntimeAbiType],
 }
 
+/// Minimal ABI type vocabulary shared by JIT codegen/runtime hook signatures.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum RuntimeAbiType {
     Ptr,
@@ -54,6 +56,7 @@ pub(super) enum RuntimeAbiType {
 const MIN_INTERNED_INT: i64 = -1_000_000;
 const MAX_INTERNED_INT: i64 = 1_000_000;
 
+/// JIT function ABI: `(runtime_ptr, argv_ptr) -> value_ptr`.
 pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
 /// Metadata for a compiled JIT function callable from runtime dispatch.
@@ -89,6 +92,7 @@ pub(super) struct Runtime {
     runtime_error: Option<RuntimeError>,
 }
 
+/// Compact owned snapshot used when runtime hooks must return stable value pointers.
 enum RuntimeValueSnapshot {
     Int(i64),
     Bool(bool),

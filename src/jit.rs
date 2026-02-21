@@ -16,6 +16,10 @@ static DUMP_CLIF: AtomicBool = AtomicBool::new(false);
 
 pub struct JIT;
 
+/// JIT-compiled executable state kept alive for function pointer validity.
+///
+/// The module owns generated machine code; dropping it invalidates `entry` and
+/// `functions`.
 pub struct PreparedProgram {
     _module: JITModule,
     entry: EntryFunction,

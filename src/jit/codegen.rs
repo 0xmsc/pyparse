@@ -94,6 +94,7 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     })
 }
 
+/// Lookup table from runtime hook IDs to imported Cranelift function IDs.
 struct RuntimeFunctions {
     by_id: HashMap<runtime::RuntimeFunctionId, FuncId>,
 }
@@ -107,6 +108,7 @@ impl RuntimeFunctions {
     }
 }
 
+/// Interns string literals into data objects with unique symbol names.
 struct StringData {
     counter: usize,
 }
@@ -190,6 +192,7 @@ fn declare_runtime_functions(
 }
 
 #[derive(Clone, Copy)]
+/// Per-function imported runtime call handles used during instruction lowering.
 struct RuntimeCalls {
     make_int: FuncRef,
     make_bool: FuncRef,
@@ -288,6 +291,10 @@ impl RuntimeCalls {
     }
 }
 
+/// Mutable lowering state shared while translating one bytecode function body.
+///
+/// This centralizes operand-stack addressing, control-flow blocks, and runtime
+/// call handles so individual instruction emitters stay small.
 struct LoweringContext {
     ptr_type: Type,
     ptr_size: i64,
