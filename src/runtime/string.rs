@@ -64,7 +64,9 @@ impl RuntimeObject for StringObject {
 }
 
 pub(crate) fn downcast_string(value: &Value) -> Option<String> {
-    let object_ref = value.object_ref();
+    let Value::Object(object_ref) = value else {
+        return None;
+    };
     let object = object_ref.borrow();
     object
         .as_any()

@@ -1,12 +1,12 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::bool::{self, BoolObject};
+use crate::runtime::bool;
 use crate::runtime::callable::{BuiltinFunctionObject, CallableObject, FunctionObject};
 use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::dict::DictObject;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::int::{self, IntObject};
+use crate::runtime::int;
 use crate::runtime::list::ListObject;
-use crate::runtime::none::NoneObject;
+use crate::runtime::method::bound_method;
 use crate::runtime::object::{
     BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
 };
@@ -18,22 +18,12 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 /// Boxed runtime value shared across interpreter, VM, and JIT paths.
-///
-/// `Value` stores an object handle plus a small cached kind for common scalar
-/// types (`int`, `bool`, `None`) so hot-path checks avoid repeated downcasts.
 #[derive(Clone)]
-pub(crate) struct Value {
-    object: ObjectRef,
-    kind: ValueKind,
-}
-
-/// Fast-path tag used by `Value` for frequently queried primitive kinds.
-#[derive(Clone, Copy)]
-enum ValueKind {
+pub(crate) enum Value {
     Int(i64),
     Bool(bool),
     None,
-    Other,
+    Object(ObjectRef),
 }
 
 impl fmt::Debug for Value {
@@ -43,74 +33,70 @@ impl fmt::Debug for Value {
 }
 
 impl Value {
-    fn new(object: ObjectRef) -> Self {
-        Self::new_with_kind(object, ValueKind::Other)
-    }
-
-    fn new_with_kind(object: ObjectRef, kind: ValueKind) -> Self {
-        Self { object, kind }
-    }
-
     pub(crate) fn from_object_ref(object: ObjectRef) -> Self {
-        Self::new(object)
-    }
-
-    pub(crate) fn object_ref(&self) -> ObjectRef {
-        self.object.clone()
+        Self::Object(object)
     }
 
     pub(crate) fn type_name(&self) -> &'static str {
-        match self.kind {
-            ValueKind::Int(_) => "int",
-            ValueKind::Bool(_) => "bool",
-            ValueKind::None => "NoneType",
-            ValueKind::Other => self.object.borrow().type_name(),
+        match self {
+            Value::Int(_) => "int",
+            Value::Bool(_) => "bool",
+            Value::None => "NoneType",
+            Value::Object(object) => object.borrow().type_name(),
         }
     }
 
     pub(crate) fn as_int(&self) -> Option<i64> {
-        if let ValueKind::Int(value) = self.kind {
-            return Some(value);
+        if let Value::Int(value) = self {
+            return Some(*value);
         }
-        let object = self.object.borrow();
-        object
-            .as_any()
-            .downcast_ref::<IntObject>()
-            .map(IntObject::value)
+        None
     }
 
     pub(crate) fn as_bool(&self) -> Option<bool> {
-        if let ValueKind::Bool(value) = self.kind {
-            return Some(value);
+        if let Value::Bool(value) = self {
+            return Some(*value);
         }
-        let object = self.object.borrow();
-        object
-            .as_any()
-            .downcast_ref::<BoolObject>()
-            .map(BoolObject::value)
+        None
     }
 
     pub(crate) fn is_none(&self) -> bool {
-        if matches!(self.kind, ValueKind::None) {
-            return true;
-        }
-        let object = self.object.borrow();
-        object.as_any().downcast_ref::<NoneObject>().is_some()
+        matches!(self, Value::None)
     }
 
     pub(crate) fn to_output(&self) -> String {
-        if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
-            return string::downcast_string(&str_value).expect("__str__ must return str");
-        }
+        match self {
+            Value::Int(value) => value.to_string(),
+            Value::Bool(value) => {
+                if *value {
+                    "True".to_string()
+                } else {
+                    "False".to_string()
+                }
+            }
+            Value::None => "None".to_string(),
+            Value::Object(_) => {
+                if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
+                    return string::downcast_string(&str_value).expect("__str__ must return str");
+                }
 
-        if let Some(repr_value) = self.try_call_magic_method("__repr__", "__repr__") {
-            return string::downcast_string(&repr_value).expect("__repr__ must return str");
-        }
+                if let Some(repr_value) = self.try_call_magic_method("__repr__", "__repr__") {
+                    return string::downcast_string(&repr_value).expect("__repr__ must return str");
+                }
 
-        panic!("missing __str__ and __repr__ for {}", self.type_name());
+                panic!("missing __str__ and __repr__ for {}", self.type_name());
+            }
+        }
     }
 
     pub(crate) fn is_truthy(&self) -> bool {
+        match self {
+            Value::Int(value) => return *value != 0,
+            Value::Bool(value) => return *value,
+            Value::None => return false,
+            Value::Object(_) => {}
+        }
+
         if let Some(is_truthy) = self.try_builtin_truthiness() {
             return is_truthy;
         }
@@ -127,13 +113,10 @@ impl Value {
     }
 
     fn try_builtin_truthiness(&self) -> Option<bool> {
-        match self.kind {
-            ValueKind::Bool(value) => return Some(value),
-            ValueKind::Int(value) => return Some(value != 0),
-            ValueKind::None => return Some(false),
-            ValueKind::Other => {}
-        }
-        let object = self.object.borrow();
+        let Value::Object(object_ref) = self else {
+            return None;
+        };
+        let object = object_ref.borrow();
         if let Some(string) = object.as_any().downcast_ref::<StringObject>() {
             return Some(!string.value().is_empty());
         }
@@ -144,14 +127,28 @@ impl Value {
     }
 
     pub(crate) fn get_attribute(&self, attribute: &str) -> Result<Value, RuntimeError> {
-        let receiver = self.object_ref();
-        let object = receiver.borrow();
-        object.get_attribute(receiver.clone(), attribute)
+        match self {
+            Value::Int(value) => int_attribute(*value, attribute),
+            Value::Bool(value) => bool_attribute(*value, attribute),
+            Value::None => none_attribute(attribute),
+            Value::Object(receiver) => {
+                let object = receiver.borrow();
+                object.get_attribute(receiver.clone(), attribute)
+            }
+        }
     }
 
     pub(crate) fn set_attribute(&self, attribute: &str, value: Value) -> Result<(), RuntimeError> {
-        let mut object = self.object.borrow_mut();
-        object.set_attribute(attribute, value)
+        match self {
+            Value::Object(object) => {
+                let mut object = object.borrow_mut();
+                object.set_attribute(attribute, value)
+            }
+            _ => Err(RuntimeError::UnknownAttribute {
+                attribute: attribute.to_string(),
+                type_name: self.type_name().to_string(),
+            }),
+        }
     }
 
     pub(crate) fn call(
@@ -159,9 +156,15 @@ impl Value {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let receiver = self.object_ref();
-        let object = receiver.borrow();
-        object.call(receiver.clone(), context, args)
+        match self {
+            Value::Object(receiver) => {
+                let object = receiver.borrow();
+                object.call(receiver.clone(), context, args)
+            }
+            _ => Err(RuntimeError::ObjectNotCallable {
+                type_name: self.type_name().to_string(),
+            }),
+        }
     }
 
     pub(crate) fn add(
@@ -242,7 +245,9 @@ impl Value {
         context: &mut dyn CallContext,
         rhs: &Value,
     ) -> Result<bool, RuntimeError> {
-        if Rc::ptr_eq(&self.object, &rhs.object) {
+        if let (Value::Object(left), Value::Object(right)) = (self, rhs)
+            && Rc::ptr_eq(left, right)
+        {
             return Ok(true);
         }
         if let (Some(left), Some(right)) = (self.numeric_key_value(), rhs.numeric_key_value()) {
@@ -295,47 +300,38 @@ impl Value {
     }
 
     pub(crate) fn list_object(values: Vec<Value>) -> Self {
-        Self::new(new_list_object(values))
+        Self::Object(new_list_object(values))
     }
 
     pub(crate) fn int_object(value: i64) -> Self {
-        Self::new_with_kind(
-            Rc::new(RefCell::new(Box::new(IntObject::new(value)))),
-            ValueKind::Int(value),
-        )
+        Self::Int(value)
     }
 
     pub(crate) fn bool_object(value: bool) -> Self {
-        Self::new_with_kind(
-            Rc::new(RefCell::new(Box::new(BoolObject::new(value)))),
-            ValueKind::Bool(value),
-        )
+        Self::Bool(value)
     }
 
     pub(crate) fn string_object(value: String) -> Self {
-        Self::new(Rc::new(RefCell::new(Box::new(StringObject::new(value)))))
+        Self::Object(Rc::new(RefCell::new(Box::new(StringObject::new(value)))))
     }
 
     pub(crate) fn none_object() -> Self {
-        Self::new_with_kind(
-            Rc::new(RefCell::new(Box::new(NoneObject::new()))),
-            ValueKind::None,
-        )
+        Self::None
     }
 
     pub(crate) fn builtin_function_object(builtin: BuiltinFunction) -> Self {
         let builtin_object = BuiltinFunctionObject::new(builtin);
-        Self::new(Rc::new(RefCell::new(Box::new(builtin_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(builtin_object))))
     }
 
     pub(crate) fn function_object(name: String, callable_id: CallableId) -> Self {
         let function_object = FunctionObject::new(name, callable_id);
-        Self::new(Rc::new(RefCell::new(Box::new(function_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(function_object))))
     }
 
     pub(crate) fn class_object(name: String, methods: HashMap<String, Value>) -> Self {
         let class_object = ClassObject::new(name, methods);
-        Self::new(Rc::new(RefCell::new(Box::new(class_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(class_object))))
     }
 
     pub(crate) fn dict_object_with_context(
@@ -343,25 +339,24 @@ impl Value {
         context: &mut dyn CallContext,
     ) -> Result<Self, RuntimeError> {
         let dict_object = DictObject::new(entries, context)?;
-        Ok(Self::new(Rc::new(RefCell::new(Box::new(dict_object)))))
+        Ok(Self::Object(Rc::new(RefCell::new(Box::new(dict_object)))))
     }
 
     pub(crate) fn instance_object(class: ObjectRef) -> Self {
         let instance_object = InstanceObject::new(class);
-        Self::new(Rc::new(RefCell::new(Box::new(instance_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(instance_object))))
     }
 
     pub(crate) fn bound_method_object(callable: BoundMethodCallable) -> Self {
         let bound_method_object = CallableObject::bound_method(callable);
-        Self::new(Rc::new(RefCell::new(Box::new(bound_method_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(bound_method_object))))
     }
 
     pub(crate) fn method_wrapper_object(callable: BoundMethodCallable) -> Self {
         let method_wrapper_object = CallableObject::method_wrapper(callable);
-        Self::new(Rc::new(RefCell::new(Box::new(method_wrapper_object))))
+        Self::Object(Rc::new(RefCell::new(Box::new(method_wrapper_object))))
     }
 
-    /// Calls a zero-argument magic method in a context that forbids nested dispatch.
     fn call_magic_method(
         &self,
         callee: Value,
@@ -372,7 +367,6 @@ impl Value {
         self.call_bound_method(callee, &mut context, args, operation)
     }
 
-    /// Resolves an operator magic method and executes it with one rhs argument.
     fn call_binary_operator(
         &self,
         context: &mut dyn CallContext,
@@ -385,7 +379,6 @@ impl Value {
         self.call_bound_method(callee, context, vec![rhs], operation)
     }
 
-    /// Invokes a previously-resolved callable and maps non-callable errors to operation errors.
     fn call_bound_method(
         &self,
         callee: Value,
@@ -394,22 +387,17 @@ impl Value {
         operation: &str,
     ) -> Result<Value, RuntimeError> {
         let callee_type_name = callee.type_name().to_string();
-        let object_ref = callee.object_ref();
-        object_ref
-            .borrow()
-            .call(object_ref.clone(), context, args)
-            .map_err(|error| match error {
-                RuntimeError::ObjectNotCallable { .. } if operation != "__call__" => {
-                    RuntimeError::UnsupportedOperation {
-                        operation: operation.to_string(),
-                        type_name: callee_type_name,
-                    }
+        callee.call(context, args).map_err(|error| match error {
+            RuntimeError::ObjectNotCallable { .. } if operation != "__call__" => {
+                RuntimeError::UnsupportedOperation {
+                    operation: operation.to_string(),
+                    type_name: callee_type_name,
                 }
-                other => other,
-            })
+            }
+            other => other,
+        })
     }
 
-    /// Best-effort helper for optional magic methods used by truthiness/string rendering.
     fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {
         let callee = match self.get_attribute(attribute) {
             Ok(callee) => callee,
@@ -430,17 +418,26 @@ impl Value {
     }
 
     fn object_identity_hash(&self) -> i64 {
-        Rc::as_ptr(&self.object) as usize as i64
+        let Value::Object(object) = self else {
+            panic!("object_identity_hash only valid for object values");
+        };
+        Rc::as_ptr(object) as usize as i64
     }
 
     fn is_unhashable_container(&self) -> bool {
-        let object = self.object.borrow();
+        let Value::Object(object_ref) = self else {
+            return false;
+        };
+        let object = object_ref.borrow();
         object.as_any().downcast_ref::<ListObject>().is_some()
             || object.as_any().downcast_ref::<DictObject>().is_some()
     }
 
     fn instance_hash_policy(&self) -> Option<(bool, bool)> {
-        let object = self.object.borrow();
+        let Value::Object(object_ref) = self else {
+            return None;
+        };
+        let object = object_ref.borrow();
         let instance = object.as_any().downcast_ref::<InstanceObject>()?;
         let class_ref = instance.class_ref();
         drop(object);
@@ -508,6 +505,143 @@ impl Value {
             });
         };
         Ok(Some(equal))
+    }
+}
+
+fn expect_unary_method_args<'a>(
+    method: &str,
+    args: &'a [Value],
+) -> Result<&'a Value, RuntimeError> {
+    RuntimeError::expect_method_arity(method, 1, args.len())?;
+    Ok(args.first().expect("len checked above"))
+}
+
+fn int_attribute(value: i64, attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__add__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__add__", &args)?;
+            let Some(rhs_int) = int::downcast_i64(rhs) else {
+                return Err(RuntimeError::InvalidArgumentType {
+                    operation: "__add__".to_string(),
+                    argument: "rhs".to_string(),
+                    expected: "int".to_string(),
+                    got: rhs.type_name().to_string(),
+                });
+            };
+            Ok(Value::int_object(value + rhs_int))
+        })),
+        "__sub__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__sub__", &args)?;
+            let Some(rhs_int) = int::downcast_i64(rhs) else {
+                return Err(RuntimeError::InvalidArgumentType {
+                    operation: "__sub__".to_string(),
+                    argument: "rhs".to_string(),
+                    expected: "int".to_string(),
+                    got: rhs.type_name().to_string(),
+                });
+            };
+            Ok(Value::int_object(value - rhs_int))
+        })),
+        "__lt__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__lt__", &args)?;
+            let Some(rhs_int) = int::downcast_i64(rhs) else {
+                return Err(RuntimeError::InvalidArgumentType {
+                    operation: "__lt__".to_string(),
+                    argument: "rhs".to_string(),
+                    expected: "int".to_string(),
+                    got: rhs.type_name().to_string(),
+                });
+            };
+            Ok(Value::bool_object(value < rhs_int))
+        })),
+        "__eq__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__eq__", &args)?;
+            Ok(Value::bool_object(
+                rhs.numeric_key_value()
+                    .is_some_and(|rhs_value| value == rhs_value),
+            ))
+        })),
+        "__hash__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__hash__", 0, args.len())?;
+            Ok(Value::int_object(value))
+        })),
+        "__bool__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+            Ok(Value::bool_object(value != 0))
+        })),
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            let rendered = value.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object(rendered.clone()))
+            }))
+        }
+        _ => Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "int".to_string(),
+        }),
+    }
+}
+
+fn bool_attribute(value: bool, attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__eq__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__eq__", &args)?;
+            let lhs_value = if value { 1 } else { 0 };
+            Ok(Value::bool_object(
+                rhs.numeric_key_value()
+                    .is_some_and(|rhs_value| lhs_value == rhs_value),
+            ))
+        })),
+        "__hash__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__hash__", 0, args.len())?;
+            Ok(Value::int_object(if value { 1 } else { 0 }))
+        })),
+        "__bool__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+            Ok(Value::bool_object(value))
+        })),
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            let rendered = if value { "True" } else { "False" }.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object(rendered.clone()))
+            }))
+        }
+        _ => Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "bool".to_string(),
+        }),
+    }
+}
+
+fn none_attribute(attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__eq__" => Ok(bound_method(move |_context, args| {
+            let rhs = expect_unary_method_args("__eq__", &args)?;
+            Ok(Value::bool_object(rhs.is_none()))
+        })),
+        "__hash__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__hash__", 0, args.len())?;
+            Ok(Value::int_object(0x9e37_79b9_i64))
+        })),
+        "__bool__" => Ok(bound_method(move |_context, args| {
+            RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+            Ok(Value::bool_object(false))
+        })),
+        "__str__" | "__repr__" => {
+            let method = attribute.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity(&method, 0, args.len())?;
+                Ok(Value::string_object("None".to_string()))
+            }))
+        }
+        _ => Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "NoneType".to_string(),
+        }),
     }
 }
 
