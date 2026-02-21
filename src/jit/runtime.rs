@@ -58,6 +58,7 @@ pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -
 /// Metadata for a compiled JIT function callable from runtime dispatch.
 #[derive(Clone)]
 pub(super) struct CompiledFunctionPointer {
+    pub(super) name: String,
     pub(super) entry: EntryFunction,
     pub(super) arity: usize,
     pub(super) params: Vec<String>,
@@ -65,7 +66,6 @@ pub(super) struct CompiledFunctionPointer {
 
 #[derive(Clone)]
 struct RegisteredFunction {
-    name: String,
     function: CompiledFunctionPointer,
 }
 
@@ -85,7 +85,7 @@ pub(super) struct Runtime {
     #[allow(clippy::vec_box)]
     interned_values: Vec<Box<Value>>,
     int_intern: FxHashMap<i64, usize>,
-    functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
+    functions: Arc<Vec<CompiledFunctionPointer>>,
     next_callable_id: u32,
     callables_by_id: FxHashMap<u32, RegisteredCallable>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
@@ -130,7 +130,7 @@ fn resolve_name(local_value: Option<Value>, global_value: Option<Value>) -> Name
 }
 
 impl Runtime {
-    fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
+    fn new(functions: Arc<Vec<CompiledFunctionPointer>>) -> Self {
         let mut callables_by_id = FxHashMap::default();
         for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
             callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
@@ -176,27 +176,28 @@ impl Runtime {
         }
     }
 
-    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
-        let function =
-            self.functions
-                .get(symbol)
-                .cloned()
-                .ok_or_else(|| RuntimeError::UndefinedFunction {
-                    name: symbol.to_string(),
-                })?;
+    fn register_function(
+        &mut self,
+        compiled_callable_id: u32,
+    ) -> Result<(String, CallableId), RuntimeError> {
+        let function = self
+            .functions
+            .get(compiled_callable_id as usize)
+            .cloned()
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: format!("<callable:{compiled_callable_id}>"),
+            })?;
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
+        let function_name = function.name.clone();
         self.callables_by_id.insert(
             callable_id.0,
-            RegisteredCallable::Function(RegisteredFunction {
-                name: symbol.to_string(),
-                function,
-            }),
+            RegisteredCallable::Function(RegisteredFunction { function }),
         );
-        Ok(callable_id)
+        Ok((function_name, callable_id))
     }
 
     fn alloc_value(&mut self, value: Value) -> *mut Value {
@@ -339,9 +340,8 @@ impl CallContext for Runtime {
             }
             RegisteredCallable::Function(callable_function) => callable_function,
         };
-        let function_name = callable_function.name;
         let function = callable_function.function;
-        RuntimeError::expect_function_arity(function_name.as_str(), function.arity, args.len())?;
+        RuntimeError::expect_function_arity(function.name.as_str(), function.arity, args.len())?;
 
         let mut arg_values = args;
         let mut frame =
@@ -417,20 +417,24 @@ unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut Value {
 
 unsafe extern "C" fn runtime_make_function(
     ctx: *mut Runtime,
-    ptr: *const u8,
-    len: i64,
+    compiled_callable_id: i64,
 ) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
-    let symbol_id = runtime.intern_symbol_ptr(ptr, len);
-    let symbol = runtime.symbol_name(symbol_id).to_string();
-    let callable_id = match runtime.register_function(&symbol) {
+    let compiled_callable_id = match u32::try_from(compiled_callable_id) {
         Ok(callable_id) => callable_id,
+        Err(_) => {
+            runtime.set_error_message("Callable id must fit in u32".to_string());
+            return ptr::null_mut();
+        }
+    };
+    let (function_name, callable_id) = match runtime.register_function(compiled_callable_id) {
+        Ok(value) => value,
         Err(error) => {
             runtime.set_runtime_error(error);
             return ptr::null_mut();
         }
     };
-    runtime.alloc_value(Value::function_object(symbol, callable_id))
+    runtime.alloc_value(Value::function_object(function_name, callable_id))
 }
 
 unsafe extern "C" fn runtime_make_list(
@@ -467,8 +471,7 @@ unsafe extern "C" fn runtime_define_class(
     class_name_len: i64,
     method_name_ptrs: *const *const u8,
     method_name_lens: *const i64,
-    method_symbol_ptrs: *const *const u8,
-    method_symbol_lens: *const i64,
+    method_callable_ids: *const i64,
     count: i64,
 ) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
@@ -480,8 +483,7 @@ unsafe extern "C" fn runtime_define_class(
     if count > 0
         && (method_name_ptrs.is_null()
             || method_name_lens.is_null()
-            || method_symbol_ptrs.is_null()
-            || method_symbol_lens.is_null())
+            || method_callable_ids.is_null())
     {
         runtime.set_error_message("Class methods cannot be null".to_string());
         return ptr::null_mut();
@@ -493,20 +495,24 @@ unsafe extern "C" fn runtime_define_class(
     for index in 0..count {
         let method_name_ptr = unsafe { *method_name_ptrs.add(index) };
         let method_name_len = unsafe { *method_name_lens.add(index) };
-        let method_symbol_ptr = unsafe { *method_symbol_ptrs.add(index) };
-        let method_symbol_len = unsafe { *method_symbol_lens.add(index) };
+        let method_callable_id = unsafe { *method_callable_ids.add(index) };
 
-        if method_name_ptr.is_null() || method_symbol_ptr.is_null() {
+        if method_name_ptr.is_null() {
             runtime.set_error_message("Class method entries cannot be null".to_string());
             return ptr::null_mut();
         }
 
         let method_name_symbol = runtime.intern_symbol_ptr(method_name_ptr, method_name_len);
-        let method_symbol_symbol = runtime.intern_symbol_ptr(method_symbol_ptr, method_symbol_len);
         let method_name = runtime.symbol_name(method_name_symbol).to_string();
-        let method_symbol = runtime.symbol_name(method_symbol_symbol).to_string();
-        let callable_id = match runtime.register_function(&method_symbol) {
+        let method_callable_id = match u32::try_from(method_callable_id) {
             Ok(callable_id) => callable_id,
+            Err(_) => {
+                runtime.set_error_message("Callable id must fit in u32".to_string());
+                return ptr::null_mut();
+            }
+        };
+        let (function_name, callable_id) = match runtime.register_function(method_callable_id) {
+            Ok(value) => value,
             Err(error) => {
                 runtime.set_runtime_error(error);
                 return ptr::null_mut();
@@ -514,7 +520,7 @@ unsafe extern "C" fn runtime_define_class(
         };
         methods.insert(
             method_name,
-            Value::function_object(method_symbol, callable_id),
+            Value::function_object(function_name, callable_id),
         );
     }
     runtime.alloc_value(Value::class_object(class_name, methods))
@@ -812,7 +818,7 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
             id: RuntimeFunctionId::MakeFunction,
             symbol: "runtime_make_function",
             function: runtime_make_function as *const u8,
-            param_types: &[Ptr, Ptr, I64],
+            param_types: &[Ptr, I64],
             return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
@@ -826,7 +832,7 @@ pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
             id: RuntimeFunctionId::DefineClass,
             symbol: "runtime_define_class",
             function: runtime_define_class as *const u8,
-            param_types: &[Ptr, Ptr, I64, Ptr, Ptr, Ptr, Ptr, I64],
+            param_types: &[Ptr, Ptr, I64, Ptr, Ptr, Ptr, I64],
             return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
@@ -919,7 +925,7 @@ pub(super) fn register_runtime_symbols(builder: &mut JITBuilder) {
 /// Executes the JIT entry function inside a fresh runtime context.
 pub(super) fn run_prepared(
     entry: EntryFunction,
-    functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
+    functions: Arc<Vec<CompiledFunctionPointer>>,
 ) -> Result<String> {
     let mut runtime = Runtime::new(functions);
     let result = (entry)(&mut runtime as *mut Runtime, ptr::null());

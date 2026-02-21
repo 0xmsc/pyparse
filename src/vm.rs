@@ -59,10 +59,9 @@ impl Default for VM {
 mod tests {
     use super::{VM, runtime::VmError};
     use crate::ast::{AssignTarget, Expression, Program, Statement};
-    use crate::bytecode::{CompiledFunction, CompiledProgram, Instruction, compile};
+    use crate::bytecode::{CompiledProgram, Instruction, compile};
     use crate::runtime::error::RuntimeError;
     use indoc::indoc;
-    use std::collections::HashMap;
 
     fn call(name: &str, args: Vec<Expression>) -> Expression {
         Expression::Call {
@@ -84,7 +83,7 @@ mod tests {
     #[test]
     fn run_compiled_reports_stack_underflow() {
         let compiled = CompiledProgram {
-            functions: HashMap::<String, CompiledFunction>::new(),
+            callables: vec![],
             main: vec![Instruction::Pop],
         };
 
@@ -98,7 +97,7 @@ mod tests {
     #[test]
     fn run_compiled_reports_invalid_jump_target() {
         let compiled = CompiledProgram {
-            functions: HashMap::<String, CompiledFunction>::new(),
+            callables: vec![],
             main: vec![Instruction::Jump(10)],
         };
 

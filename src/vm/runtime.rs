@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::builtins::BuiltinFunction;
-use crate::bytecode::{CompiledProgram, Instruction};
+use crate::bytecode::{CompiledCallable, CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
 use crate::runtime::object::{CallContext, CallableId};
@@ -13,7 +13,8 @@ pub(super) type VmResult<T> = std::result::Result<T, VmError>;
 #[derive(Clone)]
 struct RegisteredFunction {
     name: String,
-    function: crate::bytecode::CompiledFunction,
+    params: Vec<String>,
+    code: Vec<Instruction>,
 }
 
 #[derive(Clone)]
@@ -81,22 +82,20 @@ impl CallContext for VmCallContext<'_, '_, '_> {
             }
             RegisteredCallable::Function(callable_function) => callable_function,
         };
-        let function_name = callable_function.name;
-        let function = callable_function.function;
         RuntimeError::expect_function_arity(
-            function_name.as_str(),
-            function.params.len(),
+            callable_function.name.as_str(),
+            callable_function.params.len(),
             args.len(),
         )?;
         let mut locals_map = HashMap::new();
-        for (param, value) in function.params.iter().zip(args) {
+        for (param, value) in callable_function.params.iter().zip(args) {
             locals_map.insert(param.to_string(), value);
         }
         let mut child_environment = self.environment.child_with_locals(&mut locals_map);
         let parent_stack = std::mem::take(&mut self.runtime.stack);
         let result = self
             .runtime
-            .execute_code(&function.code, &mut child_environment);
+            .execute_code(&callable_function.code, &mut child_environment);
         self.runtime.stack = parent_stack;
         result.map_err(map_vm_error_to_runtime_error)
     }
@@ -124,25 +123,27 @@ impl<'a> VmRuntime<'a> {
         }
     }
 
-    fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
-        let function = self.program.functions.get(symbol).cloned().ok_or_else(|| {
-            RuntimeError::UndefinedFunction {
-                name: symbol.to_string(),
-            }
-        })?;
+    fn register_function(
+        &mut self,
+        compiled_callable_id: u32,
+    ) -> Result<(String, CallableId), RuntimeError> {
+        let callable = self
+            .program
+            .callables
+            .get(compiled_callable_id as usize)
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: format!("<callable:{compiled_callable_id}>"),
+            })?;
+        let function = registered_function_from_compiled(callable);
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.callables_by_id.insert(
-            callable_id.0,
-            RegisteredCallable::Function(RegisteredFunction {
-                name: symbol.to_string(),
-                function,
-            }),
-        );
-        Ok(callable_id)
+        let function_name = function.name.clone();
+        self.callables_by_id
+            .insert(callable_id.0, RegisteredCallable::Function(function));
+        Ok((function_name, callable_id))
     }
 
     fn output_string(self) -> String {
@@ -183,9 +184,9 @@ impl<'a> VmRuntime<'a> {
                     };
                     self.stack.push(value);
                 }
-                Instruction::DefineFunction { name, symbol } => {
-                    let callable_id = self.register_function(&symbol)?;
-                    environment.store(name, Value::function_object(symbol, callable_id));
+                Instruction::DefineFunction { name, callable_id } => {
+                    let (function_name, callable_id) = self.register_function(callable_id)?;
+                    environment.store(name, Value::function_object(function_name, callable_id));
                 }
                 Instruction::StoreName(name) => {
                     let value = self.pop_stack()?;
@@ -193,10 +194,13 @@ impl<'a> VmRuntime<'a> {
                 }
                 Instruction::DefineClass { name, methods } => {
                     let mut class_methods = HashMap::with_capacity(methods.len());
-                    for (method_name, symbol) in methods {
-                        let callable_id = self.register_function(&symbol)?;
-                        class_methods
-                            .insert(method_name, Value::function_object(symbol, callable_id));
+                    for (method_name, method_callable_id) in methods {
+                        let (function_name, callable_id) =
+                            self.register_function(method_callable_id)?;
+                        class_methods.insert(
+                            method_name,
+                            Value::function_object(function_name, callable_id),
+                        );
                     }
                     let class_value = Value::class_object(name.clone(), class_methods);
                     environment.store(name, class_value);
@@ -326,5 +330,13 @@ fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
         VmError::StackUnderflow => panic!("stack underflow while calling function"),
         VmError::Runtime(error) => error,
         VmError::InvalidJumpTarget => panic!("invalid jump target while calling function"),
+    }
+}
+
+fn registered_function_from_compiled(callable: &CompiledCallable) -> RegisteredFunction {
+    RegisteredFunction {
+        name: callable.name.clone(),
+        params: callable.function.params.clone(),
+        code: callable.function.code.clone(),
     }
 }

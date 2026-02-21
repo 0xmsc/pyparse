@@ -9,7 +9,6 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
-use rustc_hash::FxHashMap;
 
 use crate::ast::Program;
 use crate::bytecode::{Instruction, compile};
@@ -26,8 +25,7 @@ use super::runtime::{self, CompiledFunctionPointer, EntryFunction};
 /// 4. Finalize machine code and capture entry pointers.
 pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let compiled = compile(program)?;
-    let mut function_names: Vec<&String> = compiled.functions.keys().collect();
-    function_names.sort();
+    let callable_count = compiled.callables.len();
 
     let mut builder = JITBuilder::new(cranelift_module::default_libcall_names())?;
     runtime::register_runtime_symbols(&mut builder);
@@ -38,32 +36,28 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let mut string_data = StringData::new();
 
     // Declare all function symbols up front so later lowering can reference them.
-    let mut function_ids = HashMap::new();
+    let mut function_ids = Vec::with_capacity(callable_count);
     // Lower each user-defined function into Cranelift IR, one function at a time.
-    for name in &function_names {
-        compiled
-            .functions
-            .get(*name)
-            .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?;
+    for callable_id in 0..callable_count {
         let func_sig = value_function_signature(&mut module, ptr_type);
-        let func_id = module.declare_function(&function_symbol(name), Linkage::Local, &func_sig)?;
-        function_ids.insert((*name).clone(), func_id);
+        let func_id = module.declare_function(
+            &function_symbol(callable_id as u32),
+            Linkage::Local,
+            &func_sig,
+        )?;
+        function_ids.push(func_id);
     }
     let main_sig = value_function_signature(&mut module, ptr_type);
     let main_id = module.declare_function("run_main", Linkage::Local, &main_sig)?;
 
-    for name in &function_names {
-        let function = compiled
-            .functions
-            .get(*name)
-            .ok_or_else(|| anyhow::anyhow!("Missing function '{name}'"))?;
+    for (callable_id, callable) in compiled.callables.iter().enumerate() {
         define_function(
             &mut module,
             &runtime_funcs,
             &mut string_data,
-            name,
-            function_ids.get(*name).copied().unwrap(),
-            &function.code,
+            &callable.name,
+            function_ids[callable_id],
+            &callable.function.code,
         )?;
     }
 
@@ -81,22 +75,16 @@ pub(super) fn prepare_program(program: &Program) -> Result<PreparedProgram> {
     let entry = module.get_finalized_function(main_id);
     let entry: EntryFunction = unsafe { std::mem::transmute(entry) };
 
-    let mut functions = FxHashMap::default();
-    for (name, func_id) in &function_ids {
-        let entry = module.get_finalized_function(*func_id);
+    let mut functions = Vec::with_capacity(callable_count);
+    for (callable_id, callable) in compiled.callables.iter().enumerate() {
+        let entry = module.get_finalized_function(function_ids[callable_id]);
         let entry: EntryFunction = unsafe { std::mem::transmute(entry) };
-        let function = compiled
-            .functions
-            .get(name)
-            .ok_or_else(|| anyhow::anyhow!("Missing function metadata for '{name}'"))?;
-        functions.insert(
-            name.clone(),
-            CompiledFunctionPointer {
-                entry,
-                arity: function.params.len(),
-                params: function.params.clone(),
-            },
-        );
+        functions.push(CompiledFunctionPointer {
+            name: callable.name.clone(),
+            entry,
+            arity: callable.function.params.len(),
+            params: callable.function.params.clone(),
+        });
     }
 
     Ok(PreparedProgram {
@@ -544,7 +532,7 @@ fn store_to_scope(
 ///
 /// Lowering pattern:
 /// 1. Materialize class name.
-/// 2. Materialize method name/symbol arrays in stack slots.
+/// 2. Materialize method name/callable-id arrays in stack slots.
 /// 3. Call `runtime_define_class`.
 /// 4. Check for null error and store resulting class object under class name.
 fn emit_define_class(
@@ -553,7 +541,7 @@ fn emit_define_class(
     string_data: &mut StringData,
     lowering: &LoweringContext,
     name: &str,
-    methods: &[(String, String)],
+    methods: &[(String, u32)],
 ) -> Result<()> {
     let (name_ptr, name_len_val) = declare_string_literal(
         module,
@@ -568,108 +556,82 @@ fn emit_define_class(
     let method_count_val = builder.ins().iconst(types::I64, method_count as i64);
     let zero_ptr = builder.ins().iconst(lowering.ptr_type, 0);
 
-    let (
-        method_name_ptrs_base,
-        method_name_lens_base,
-        method_symbol_ptrs_base,
-        method_symbol_lens_base,
-    ) = if method_count == 0 {
-        (zero_ptr, zero_ptr, zero_ptr, zero_ptr)
-    } else {
-        let ptr_align_shift = (lowering.ptr_size as u32).trailing_zeros() as u8;
-        let len_align_shift = (std::mem::size_of::<i64>() as u32).trailing_zeros() as u8;
-        let pointer_array_bytes = (method_count as u32) * (lowering.ptr_size as u32);
-        let length_array_bytes = (method_count as u32) * (std::mem::size_of::<i64>() as u32);
-        let method_name_ptrs_slot =
-            create_explicit_stack_slot(builder, pointer_array_bytes, ptr_align_shift);
-        let method_name_lens_slot =
-            create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
-        let method_symbol_ptrs_slot =
-            create_explicit_stack_slot(builder, pointer_array_bytes, ptr_align_shift);
-        let method_symbol_lens_slot =
-            create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
+    let (method_name_ptrs_base, method_name_lens_base, method_callable_ids_base) =
+        if method_count == 0 {
+            (zero_ptr, zero_ptr, zero_ptr)
+        } else {
+            let ptr_align_shift = (lowering.ptr_size as u32).trailing_zeros() as u8;
+            let len_align_shift = (std::mem::size_of::<i64>() as u32).trailing_zeros() as u8;
+            let pointer_array_bytes = (method_count as u32) * (lowering.ptr_size as u32);
+            let length_array_bytes = (method_count as u32) * (std::mem::size_of::<i64>() as u32);
+            let method_name_ptrs_slot =
+                create_explicit_stack_slot(builder, pointer_array_bytes, ptr_align_shift);
+            let method_name_lens_slot =
+                create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
+            let method_callable_ids_slot =
+                create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
 
-        let method_name_ptrs_base =
-            builder
-                .ins()
-                .stack_addr(lowering.ptr_type, method_name_ptrs_slot, 0);
-        let method_name_lens_base =
-            builder
-                .ins()
-                .stack_addr(lowering.ptr_type, method_name_lens_slot, 0);
-        let method_symbol_ptrs_base =
-            builder
-                .ins()
-                .stack_addr(lowering.ptr_type, method_symbol_ptrs_slot, 0);
-        let method_symbol_lens_base =
-            builder
-                .ins()
-                .stack_addr(lowering.ptr_type, method_symbol_lens_slot, 0);
+            let method_name_ptrs_base =
+                builder
+                    .ins()
+                    .stack_addr(lowering.ptr_type, method_name_ptrs_slot, 0);
+            let method_name_lens_base =
+                builder
+                    .ins()
+                    .stack_addr(lowering.ptr_type, method_name_lens_slot, 0);
+            let method_callable_ids_base =
+                builder
+                    .ins()
+                    .stack_addr(lowering.ptr_type, method_callable_ids_slot, 0);
 
-        for (method_index, (method_name, method_symbol)) in methods.iter().enumerate() {
-            let (method_name_ptr, method_name_len_val) = declare_string_literal(
-                module,
-                string_data,
-                builder,
-                lowering.ptr_type,
-                "method_name",
-                method_name,
-            )?;
-            let method_name_ptr_addr = builder.ins().iadd_imm(
+            for (method_index, (method_name, method_callable_id)) in methods.iter().enumerate() {
+                let (method_name_ptr, method_name_len_val) = declare_string_literal(
+                    module,
+                    string_data,
+                    builder,
+                    lowering.ptr_type,
+                    "method_name",
+                    method_name,
+                )?;
+                let method_name_ptr_addr = builder.ins().iadd_imm(
+                    method_name_ptrs_base,
+                    (method_index as i64) * lowering.ptr_size,
+                );
+                let method_name_len_addr = builder.ins().iadd_imm(
+                    method_name_lens_base,
+                    (method_index as i64) * (std::mem::size_of::<i64>() as i64),
+                );
+                builder
+                    .ins()
+                    .store(MemFlags::new(), method_name_ptr, method_name_ptr_addr, 0);
+                builder.ins().store(
+                    MemFlags::new(),
+                    method_name_len_val,
+                    method_name_len_addr,
+                    0,
+                );
+
+                let method_callable_id_val = builder
+                    .ins()
+                    .iconst(types::I64, i64::from(*method_callable_id));
+                let method_callable_id_addr = builder.ins().iadd_imm(
+                    method_callable_ids_base,
+                    (method_index as i64) * (std::mem::size_of::<i64>() as i64),
+                );
+                builder.ins().store(
+                    MemFlags::new(),
+                    method_callable_id_val,
+                    method_callable_id_addr,
+                    0,
+                );
+            }
+
+            (
                 method_name_ptrs_base,
-                (method_index as i64) * lowering.ptr_size,
-            );
-            let method_name_len_addr = builder.ins().iadd_imm(
                 method_name_lens_base,
-                (method_index as i64) * (std::mem::size_of::<i64>() as i64),
-            );
-            builder
-                .ins()
-                .store(MemFlags::new(), method_name_ptr, method_name_ptr_addr, 0);
-            builder.ins().store(
-                MemFlags::new(),
-                method_name_len_val,
-                method_name_len_addr,
-                0,
-            );
-
-            let (method_symbol_ptr, method_symbol_len_val) = declare_string_literal(
-                module,
-                string_data,
-                builder,
-                lowering.ptr_type,
-                "method_symbol",
-                method_symbol,
-            )?;
-            let method_symbol_ptr_addr = builder.ins().iadd_imm(
-                method_symbol_ptrs_base,
-                (method_index as i64) * lowering.ptr_size,
-            );
-            let method_symbol_len_addr = builder.ins().iadd_imm(
-                method_symbol_lens_base,
-                (method_index as i64) * (std::mem::size_of::<i64>() as i64),
-            );
-            builder.ins().store(
-                MemFlags::new(),
-                method_symbol_ptr,
-                method_symbol_ptr_addr,
-                0,
-            );
-            builder.ins().store(
-                MemFlags::new(),
-                method_symbol_len_val,
-                method_symbol_len_addr,
-                0,
-            );
-        }
-
-        (
-            method_name_ptrs_base,
-            method_name_lens_base,
-            method_symbol_ptrs_base,
-            method_symbol_lens_base,
-        )
-    };
+                method_callable_ids_base,
+            )
+        };
 
     let class_value = emit_checked_runtime_call_result(
         builder,
@@ -681,8 +643,7 @@ fn emit_define_class(
             name_len_val,
             method_name_ptrs_base,
             method_name_lens_base,
-            method_symbol_ptrs_base,
-            method_symbol_lens_base,
+            method_callable_ids_base,
             method_count_val,
         ],
     );
@@ -690,10 +651,10 @@ fn emit_define_class(
     Ok(())
 }
 
-/// Lowers `DefineFunction` by creating a runtime function object from its symbol.
+/// Lowers `DefineFunction` by creating a runtime function object from callable ID.
 ///
 /// Lowering pattern:
-/// 1. Materialize function symbol literal.
+/// 1. Materialize callable ID immediate.
 /// 2. Call `runtime_make_function`.
 /// 3. Null-check result and store under the declared function name.
 fn emit_define_function(
@@ -702,21 +663,14 @@ fn emit_define_function(
     string_data: &mut StringData,
     lowering: &LoweringContext,
     name: &str,
-    symbol: &str,
+    callable_id: u32,
 ) -> Result<()> {
-    let (symbol_ptr, symbol_len_val) = declare_string_literal(
-        module,
-        string_data,
-        builder,
-        lowering.ptr_type,
-        "fn_symbol",
-        symbol,
-    )?;
+    let callable_id_val = builder.ins().iconst(types::I64, i64::from(callable_id));
     let function_value = emit_checked_runtime_call_result(
         builder,
         lowering,
         lowering.runtime.make_function,
-        &[lowering.ctx_param, symbol_ptr, symbol_len_val],
+        &[lowering.ctx_param, callable_id_val],
     );
     store_to_scope(builder, module, string_data, lowering, name, function_value)
 }
@@ -942,8 +896,8 @@ fn emit_instruction(
             emit_define_class(builder, module, string_data, lowering, name, methods)?;
             Ok(false)
         }
-        Instruction::DefineFunction { name, symbol } => {
-            emit_define_function(builder, module, string_data, lowering, name, symbol)?;
+        Instruction::DefineFunction { name, callable_id } => {
+            emit_define_function(builder, module, string_data, lowering, name, *callable_id)?;
             Ok(false)
         }
         Instruction::LoadName(name) => {
@@ -1079,8 +1033,8 @@ fn emit_instruction(
     }
 }
 
-fn function_symbol(name: &str) -> String {
-    format!("fn_{name}")
+fn function_symbol(callable_id: u32) -> String {
+    format!("fn_{callable_id}")
 }
 
 /// Computes maximum operand-stack depth for a bytecode block and validates stack consistency.

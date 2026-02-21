@@ -14,11 +14,11 @@ pub enum Instruction {
     StoreName(String),
     DefineFunction {
         name: String,
-        symbol: String,
+        callable_id: u32,
     },
     DefineClass {
         name: String,
-        methods: Vec<(String, String)>,
+        methods: Vec<(String, u32)>,
     },
     Add,
     Sub,
@@ -46,30 +46,39 @@ pub struct CompiledFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompiledCallable {
+    pub name: String,
+    pub function: CompiledFunction,
+}
+
+#[derive(Debug, Clone)]
 pub struct CompiledProgram {
-    pub functions: HashMap<String, CompiledFunction>,
+    pub callables: Vec<CompiledCallable>,
     pub main: CompiledBlock,
 }
 
 pub fn compile(program: &Program) -> Result<CompiledProgram> {
-    let mut functions = HashMap::new();
+    let mut callable_ids = HashMap::new();
+    let mut callables = Vec::new();
     let mut main = Vec::new();
 
     for statement in &program.statements {
         match statement {
             Statement::FunctionDef { name, params, body } => {
-                if functions.contains_key(name) {
-                    bail!("Duplicate function definition '{name}'");
-                }
-                let compiled = compile_function(params, body)?;
-                functions.insert(name.to_string(), compiled);
+                let callable_id = define_callable(
+                    &mut callable_ids,
+                    &mut callables,
+                    name.to_string(),
+                    params,
+                    body,
+                )?;
                 main.push(Instruction::DefineFunction {
                     name: name.to_string(),
-                    symbol: name.to_string(),
+                    callable_id,
                 });
             }
             Statement::ClassDef { name, body } => {
-                let methods = compile_class_methods(name, body, &mut functions)?;
+                let methods = compile_class_methods(name, body, &mut callable_ids, &mut callables)?;
                 main.push(Instruction::DefineClass {
                     name: name.clone(),
                     methods,
@@ -79,7 +88,28 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
         }
     }
 
-    Ok(CompiledProgram { functions, main })
+    Ok(CompiledProgram { callables, main })
+}
+
+fn define_callable(
+    callable_ids: &mut HashMap<String, u32>,
+    callables: &mut Vec<CompiledCallable>,
+    name: String,
+    params: &[String],
+    body: &[Statement],
+) -> Result<u32> {
+    if callable_ids.contains_key(&name) {
+        bail!("Duplicate function definition '{name}'");
+    }
+    let callable_id =
+        u32::try_from(callables.len()).map_err(|_| anyhow::anyhow!("Too many callables"))?;
+    let function = compile_function(params, body)?;
+    callables.push(CompiledCallable {
+        name: name.clone(),
+        function,
+    });
+    callable_ids.insert(name, callable_id);
+    Ok(callable_id)
 }
 
 fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
@@ -192,8 +222,9 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
 fn compile_class_methods(
     class_name: &str,
     body: &[Statement],
-    functions: &mut HashMap<String, CompiledFunction>,
-) -> Result<Vec<(String, String)>> {
+    callable_ids: &mut HashMap<String, u32>,
+    callables: &mut Vec<CompiledCallable>,
+) -> Result<Vec<(String, u32)>> {
     let mut methods = Vec::new();
     for statement in body {
         match statement {
@@ -203,12 +234,8 @@ fn compile_class_methods(
                 body,
             } => {
                 let symbol = class_method_symbol(class_name, method_name);
-                if functions.contains_key(&symbol) {
-                    bail!("Duplicate function definition '{symbol}'");
-                }
-                let compiled = compile_function(params, body)?;
-                functions.insert(symbol.clone(), compiled);
-                methods.push((method_name.clone(), symbol));
+                let callable_id = define_callable(callable_ids, callables, symbol, params, body)?;
+                methods.push((method_name.clone(), callable_id));
             }
             Statement::Pass => {}
             _ => {
@@ -305,12 +332,14 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert_eq!(compiled.functions.len(), 1);
+        assert_eq!(compiled.callables.len(), 1);
 
-        let function = compiled
-            .functions
-            .get("foo")
-            .expect("expected compiled function 'foo'");
+        let callable = compiled
+            .callables
+            .first()
+            .expect("expected compiled callable");
+        assert_eq!(callable.name, "foo");
+        let function = &callable.function;
         assert!(function.params.is_empty());
         assert_eq!(
             function.code,
@@ -326,7 +355,7 @@ mod tests {
             vec![
                 Instruction::DefineFunction {
                     name: "foo".to_string(),
-                    symbol: "foo".to_string(),
+                    callable_id: 0,
                 },
                 Instruction::LoadName("foo".to_string()),
                 Instruction::Call { argc: 0 },
@@ -342,7 +371,7 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        assert!(compiled.functions.is_empty());
+        assert!(compiled.callables.is_empty());
         assert_eq!(
             compiled.main,
             vec![
@@ -416,10 +445,12 @@ mod tests {
         };
 
         let compiled = compile(&program).expect("compile should succeed");
-        let function = compiled
-            .functions
-            .get("sum2")
-            .expect("expected compiled function 'sum2'");
+        let callable = compiled
+            .callables
+            .iter()
+            .find(|callable| callable.name == "sum2")
+            .expect("expected compiled callable 'sum2'");
+        let function = &callable.function;
         assert_eq!(function.params, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(
             function.code,
@@ -436,7 +467,7 @@ mod tests {
             vec![
                 Instruction::DefineFunction {
                     name: "sum2".to_string(),
-                    symbol: "sum2".to_string(),
+                    callable_id: 0,
                 },
                 Instruction::LoadName("sum2".to_string()),
                 Instruction::PushInt(1),
