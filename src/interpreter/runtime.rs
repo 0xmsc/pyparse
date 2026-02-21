@@ -75,6 +75,7 @@ impl InterpreterRuntime {
         }
     }
 
+    /// Registers a user-defined function body in runtime callable dispatch.
     fn register_function(
         &mut self,
         name: String,
@@ -280,6 +281,7 @@ impl InterpreterRuntime {
         }
     }
 
+    /// Evaluates callee/arguments left-to-right and delegates to generic value-call dispatch.
     fn eval_call(
         &mut self,
         callee: &Expression,
@@ -294,6 +296,7 @@ impl InterpreterRuntime {
         self.call_value(callee, evaluated_args, environment)
     }
 
+    /// Calls a runtime value through the interpreter call context.
     fn call_value(
         &mut self,
         callee: Value,

@@ -124,6 +124,7 @@ fn resolve_name(local_value: Option<Value>, global_value: Option<Value>) -> Name
 }
 
 impl Runtime {
+    /// Builds a fresh JIT runtime with builtin globals and callable registry state.
     fn new(functions: Arc<Vec<CompiledFunctionPointer>>) -> Self {
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
@@ -149,6 +150,7 @@ impl Runtime {
         runtime
     }
 
+    /// Inserts builtin functions into global scope as ordinary `Value`s.
     fn seed_builtin_globals(&mut self) {
         for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
             let symbol = self.intern_symbol_name(builtin.name());
@@ -158,6 +160,7 @@ impl Runtime {
         }
     }
 
+    /// Maps a compiled callable index to a runtime `CallableId` and display name.
     fn register_function(
         &mut self,
         compiled_callable_id: u32,
@@ -342,11 +345,13 @@ impl CallContext for Runtime {
     }
 }
 
+/// Decodes `(ptr, len)` string ABI arguments passed from JIT-emitted code.
 fn decode_runtime_string(ptr: *const u8, len: i64) -> String {
     let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
     String::from_utf8_lossy(slice).to_string()
 }
 
+/// Captures values in an allocation-friendly representation for JIT runtime returns.
 fn snapshot_value(value: &Value) -> RuntimeValueSnapshot {
     if let Some(integer) = value.as_int() {
         return RuntimeValueSnapshot::Int(integer);
@@ -384,6 +389,7 @@ unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut Value {
     runtime.none_ptr()
 }
 
+/// Runtime hook creating function objects from compiled callable IDs.
 unsafe extern "C" fn runtime_make_function(
     ctx: *mut Runtime,
     compiled_callable_id: i64,
@@ -434,6 +440,7 @@ unsafe extern "C" fn runtime_make_list(
     runtime.alloc_value(Value::list_object(elements))
 }
 
+/// Runtime hook creating class objects from method names and compiled callable IDs.
 unsafe extern "C" fn runtime_define_class(
     ctx: *mut Runtime,
     class_name_ptr: *const u8,
@@ -569,6 +576,7 @@ unsafe extern "C" fn runtime_is_truthy(value: *mut Value) -> u8 {
     if value.is_truthy() { 1 } else { 0 }
 }
 
+/// Runtime hook that executes generic callable dispatch for JIT-emitted `Call`.
 unsafe extern "C" fn runtime_call(
     ctx: *mut Runtime,
     callee: *mut Value,

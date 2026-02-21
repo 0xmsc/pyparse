@@ -291,6 +291,7 @@ impl Value {
         Self::new(Rc::new(RefCell::new(Box::new(method_wrapper_object))))
     }
 
+    /// Calls a zero-argument magic method in a context that forbids nested dispatch.
     fn call_magic_method(
         &self,
         callee: Value,
@@ -301,6 +302,7 @@ impl Value {
         self.call_bound_method(callee, &mut context, args, operation)
     }
 
+    /// Resolves an operator magic method and executes it with one rhs argument.
     fn call_binary_operator(
         &self,
         context: &mut dyn CallContext,
@@ -313,6 +315,7 @@ impl Value {
         self.call_bound_method(callee, context, vec![rhs], operation)
     }
 
+    /// Invokes a previously-resolved callable and maps non-callable errors to operation errors.
     fn call_bound_method(
         &self,
         callee: Value,
@@ -336,6 +339,7 @@ impl Value {
             })
     }
 
+    /// Best-effort helper for optional magic methods used by truthiness/string rendering.
     fn try_call_magic_method(&self, attribute: &str, operation: &str) -> Option<Value> {
         let callee = match self.get_attribute(attribute) {
             Ok(callee) => callee,

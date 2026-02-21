@@ -63,6 +63,7 @@ pub struct CompiledProgram {
     pub main: CompiledBlock,
 }
 
+/// Compiles AST into bytecode plus callable metadata consumed by VM and JIT backends.
 pub fn compile(program: &Program) -> Result<CompiledProgram> {
     let mut callable_ids = HashMap::new();
     let mut callables = Vec::new();
@@ -97,6 +98,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
     Ok(CompiledProgram { callables, main })
 }
 
+/// Compiles one function body and assigns a stable callable ID within this program.
 fn define_callable(
     callable_ids: &mut HashMap<String, u32>,
     callables: &mut Vec<CompiledCallable>,
@@ -118,6 +120,7 @@ fn define_callable(
     Ok(callable_id)
 }
 
+/// Compiles a function body and appends implicit `Return` fallthrough behavior.
 fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
     let mut code = compile_block(body, CompileScope::FunctionBody)?;
     code.push(Instruction::Return);
@@ -128,6 +131,7 @@ fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFun
     })
 }
 
+/// Compiles a statement list under the same control-flow scope.
 fn compile_block(statements: &[Statement], scope: CompileScope) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     for statement in statements {
@@ -136,6 +140,7 @@ fn compile_block(statements: &[Statement], scope: CompileScope) -> Result<Compil
     Ok(code)
 }
 
+/// Compiles a single statement while enforcing scope-specific validity rules.
 fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
@@ -225,6 +230,7 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
     Ok(code)
 }
 
+/// Compiles class methods into callable IDs and returns class method dispatch metadata.
 fn compile_class_methods(
     class_name: &str,
     body: &[Statement],
@@ -254,10 +260,12 @@ fn compile_class_methods(
     Ok(methods)
 }
 
+/// Builds a unique callable symbol for class methods in compiled metadata.
 fn class_method_symbol(class_name: &str, method_name: &str) -> String {
     format!("__class_method::{class_name}::{method_name}")
 }
 
+/// Compiles an expression to stack-machine bytecode.
 fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match expr {

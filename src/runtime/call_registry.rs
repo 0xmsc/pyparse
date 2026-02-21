@@ -18,6 +18,7 @@ pub(crate) struct CallRegistry<F> {
 }
 
 impl<F> CallRegistry<F> {
+    /// Creates a registry pre-populated with builtin callable IDs.
     pub(crate) fn new() -> Self {
         let mut callables_by_id = HashMap::new();
         for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
@@ -36,6 +37,7 @@ impl<F> CallRegistry<F> {
         }
     }
 
+    /// Registers a user function and returns the runtime `CallableId`.
     pub(crate) fn register_function(&mut self, function: F) -> CallableId {
         let callable_id = CallableId(self.next_callable_id);
         self.next_callable_id = self
@@ -49,6 +51,7 @@ impl<F> CallRegistry<F> {
 }
 
 impl<F: Clone> CallRegistry<F> {
+    /// Resolves a runtime `CallableId` to either builtin or user callable metadata.
     pub(crate) fn resolve(
         &self,
         callable_id: &CallableId,

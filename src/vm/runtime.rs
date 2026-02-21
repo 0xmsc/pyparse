@@ -87,6 +87,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 }
 
 impl<'a> VmRuntime<'a> {
+    /// Initializes a VM runtime with builtin callable registrations.
     fn new(program: &'a CompiledProgram) -> Self {
         Self {
             program,
@@ -96,6 +97,7 @@ impl<'a> VmRuntime<'a> {
         }
     }
 
+    /// Maps a compiled callable ID to a freshly registered runtime callable.
     fn register_function(
         &mut self,
         compiled_callable_id: u32,
@@ -117,6 +119,7 @@ impl<'a> VmRuntime<'a> {
         self.output.join("\n")
     }
 
+    /// Executes stack bytecode and returns the function result value.
     fn execute_code(
         &mut self,
         code: &[Instruction],
@@ -278,6 +281,7 @@ impl<'a> VmRuntime<'a> {
         self.stack.pop().ok_or(VmError::StackUnderflow)
     }
 
+    /// Invokes a runtime `Value` as callable using VM call-context dispatch.
     fn call_value(
         &mut self,
         callee: Value,
@@ -292,6 +296,7 @@ impl<'a> VmRuntime<'a> {
     }
 }
 
+/// Converts VM-internal errors surfaced from nested calls into runtime errors.
 fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
     match error {
         VmError::StackUnderflow => panic!("stack underflow while calling function"),
@@ -300,6 +305,7 @@ fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
     }
 }
 
+/// Copies compiled callable metadata into runtime-owned dispatch metadata.
 fn registered_function_from_compiled(callable: &CompiledCallable) -> RegisteredFunction {
     RegisteredFunction {
         name: callable.name.clone(),
