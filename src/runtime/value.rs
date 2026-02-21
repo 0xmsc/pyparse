@@ -9,7 +9,6 @@ use crate::runtime::list::ListObject;
 use crate::runtime::object::{
     BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
 };
-use crate::runtime::string::{self as runtime_string, StringObject};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -25,6 +24,7 @@ mod r#str;
 pub(crate) enum Value {
     Int(i64),
     Bool(bool),
+    Str(String),
     None,
     Object(ObjectRef),
 }
@@ -44,6 +44,7 @@ impl Value {
         match self {
             Value::Int(_) => "int",
             Value::Bool(_) => "bool",
+            Value::Str(_) => "str",
             Value::None => "NoneType",
             Value::Object(object) => object.borrow().type_name(),
         }
@@ -63,15 +64,18 @@ impl Value {
         None
     }
 
+    pub(crate) fn as_str(&self) -> Option<&str> {
+        if let Value::Str(value) = self {
+            return Some(value);
+        }
+        None
+    }
+
     pub(crate) fn is_none(&self) -> bool {
         matches!(self, Value::None)
     }
 
     pub(crate) fn to_output(&self) -> String {
-        if let Some(rendered) = r#str::try_to_output(self) {
-            return rendered;
-        }
-
         match self {
             Value::Int(value) => value.to_string(),
             Value::Bool(value) => {
@@ -81,16 +85,21 @@ impl Value {
                     "False".to_string()
                 }
             }
+            Value::Str(value) => value.clone(),
             Value::None => "None".to_string(),
             Value::Object(_) => {
                 if let Some(str_value) = self.try_call_magic_method("__str__", "__str__") {
-                    return runtime_string::downcast_string(&str_value)
-                        .expect("__str__ must return str");
+                    return str_value
+                        .as_str()
+                        .expect("__str__ must return str")
+                        .to_string();
                 }
 
                 if let Some(repr_value) = self.try_call_magic_method("__repr__", "__repr__") {
-                    return runtime_string::downcast_string(&repr_value)
-                        .expect("__repr__ must return str");
+                    return repr_value
+                        .as_str()
+                        .expect("__repr__ must return str")
+                        .to_string();
                 }
 
                 panic!("missing __str__ and __repr__ for {}", self.type_name());
@@ -102,6 +111,7 @@ impl Value {
         match self {
             Value::Int(value) => return *value != 0,
             Value::Bool(value) => return *value,
+            Value::Str(value) => return !value.is_empty(),
             Value::None => return false,
             Value::Object(_) => {}
         }
@@ -122,9 +132,6 @@ impl Value {
     }
 
     fn try_builtin_truthiness(&self) -> Option<bool> {
-        if let Some(is_truthy) = r#str::try_truthiness(self) {
-            return Some(is_truthy);
-        }
         let Value::Object(object_ref) = self else {
             return None;
         };
@@ -139,6 +146,7 @@ impl Value {
         match self {
             Value::Int(value) => int::attribute(*value, attribute),
             Value::Bool(value) => r#bool::attribute(*value, attribute),
+            Value::Str(value) => r#str::attribute(value, attribute),
             Value::None => none::attribute(attribute),
             Value::Object(receiver) => {
                 let object = receiver.borrow();
@@ -322,7 +330,7 @@ impl Value {
     }
 
     pub(crate) fn string_object(value: String) -> Self {
-        Self::Object(Rc::new(RefCell::new(Box::new(StringObject::new(value)))))
+        Self::Str(value)
     }
 
     pub(crate) fn none_object() -> Self {

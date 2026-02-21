@@ -1,21 +1,44 @@
 use super::Value;
-use crate::runtime::string;
+use crate::runtime::error::RuntimeError;
+use crate::runtime::method::bound_method;
 use std::hash::{Hash, Hasher};
 
-pub(super) fn try_to_output(value: &Value) -> Option<String> {
-    string::downcast_string(value)
-}
-
-pub(super) fn try_truthiness(value: &Value) -> Option<bool> {
-    string::downcast_string(value).map(|text| !text.is_empty())
+pub(super) fn attribute(value: &str, attribute: &str) -> Result<Value, RuntimeError> {
+    match attribute {
+        "__bool__" => {
+            let is_non_empty = !value.is_empty();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity("__bool__", 0, args.len())?;
+                Ok(Value::bool_object(is_non_empty))
+            }))
+        }
+        "__str__" => {
+            let value = value.to_string();
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity("__str__", 0, args.len())?;
+                Ok(Value::string_object(value.clone()))
+            }))
+        }
+        "__repr__" => {
+            let rendered = format!("{value:?}");
+            Ok(bound_method(move |_context, args| {
+                RuntimeError::expect_method_arity("__repr__", 0, args.len())?;
+                Ok(Value::string_object(rendered.clone()))
+            }))
+        }
+        _ => Err(RuntimeError::UnknownAttribute {
+            attribute: attribute.to_string(),
+            type_name: "str".to_string(),
+        }),
+    }
 }
 
 pub(super) fn try_hash_key(value: &Value) -> Option<i64> {
-    string::downcast_string(value).map(|text| hash_string(&text))
+    value.as_str().map(hash_string)
 }
 
 pub(super) fn try_key_equals(lhs: &Value, rhs: &Value) -> Option<bool> {
-    match (string::downcast_string(lhs), string::downcast_string(rhs)) {
+    match (lhs.as_str(), rhs.as_str()) {
         (Some(left), Some(right)) => Some(left == right),
         _ => None,
     }
