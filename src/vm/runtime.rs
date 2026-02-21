@@ -36,8 +36,8 @@ pub(super) fn run_compiled_program(
 /// Stateful bytecode executor shared across nested VM function calls.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
-    function_ids_by_name: HashMap<String, CallableId>,
-    function_names_by_id: HashMap<u32, String>,
+    next_callable_id: u32,
+    function_symbols_by_id: HashMap<u32, String>,
     output: Vec<String>,
     stack: Vec<Value>,
 }
@@ -61,7 +61,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 
         let function_name = self
             .runtime
-            .function_names_by_id
+            .function_symbols_by_id
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
@@ -96,15 +96,24 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 
 impl<'a> VmRuntime<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        let (function_ids_by_name, function_names_by_id) =
-            build_function_id_maps(program.functions.keys().map(String::as_str));
         Self {
             program,
-            function_ids_by_name,
-            function_names_by_id,
+            next_callable_id: FIRST_USER_CALLABLE_ID,
+            function_symbols_by_id: HashMap::new(),
             output: Vec::new(),
             stack: Vec::new(),
         }
+    }
+
+    fn register_callable_symbol(&mut self, symbol: &str) -> CallableId {
+        let callable_id = CallableId(self.next_callable_id);
+        self.next_callable_id = self
+            .next_callable_id
+            .checked_add(1)
+            .expect("callable id overflow");
+        self.function_symbols_by_id
+            .insert(callable_id.0, symbol.to_string());
+        callable_id
     }
 
     fn output_string(self) -> String {
@@ -151,13 +160,7 @@ impl<'a> VmRuntime<'a> {
                     if !self.program.functions.contains_key(&symbol) {
                         return Err(RuntimeError::UndefinedFunction { name: symbol }.into());
                     }
-                    let callable_id =
-                        *self
-                            .function_ids_by_name
-                            .get(symbol.as_str())
-                            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                                name: symbol.clone(),
-                            })?;
+                    let callable_id = self.register_callable_symbol(&symbol);
                     environment.store(name, Value::function_object(symbol, callable_id));
                 }
                 Instruction::StoreName(name) => {
@@ -165,20 +168,13 @@ impl<'a> VmRuntime<'a> {
                     environment.store(name, value);
                 }
                 Instruction::DefineClass { name, methods } => {
-                    let methods = methods
-                        .into_iter()
-                        .map(|(method_name, symbol)| {
-                            let callable_id = self
-                                .function_ids_by_name
-                                .get(symbol.as_str())
-                                .copied()
-                                .ok_or_else(|| RuntimeError::UndefinedFunction {
-                                    name: symbol.clone(),
-                                })?;
-                            Ok((method_name, Value::function_object(symbol, callable_id)))
-                        })
-                        .collect::<Result<HashMap<_, _>, RuntimeError>>()?;
-                    let class_value = Value::class_object(name.clone(), methods);
+                    let mut class_methods = HashMap::with_capacity(methods.len());
+                    for (method_name, symbol) in methods {
+                        let callable_id = self.register_callable_symbol(&symbol);
+                        class_methods
+                            .insert(method_name, Value::function_object(symbol, callable_id));
+                    }
+                    let class_value = Value::class_object(name.clone(), class_methods);
                     environment.store(name, class_value);
                 }
                 Instruction::LoadAttr(attribute) => {
@@ -299,34 +295,6 @@ impl<'a> VmRuntime<'a> {
         };
         callee.call(&mut context, args).map_err(Into::into)
     }
-}
-
-fn build_function_id_maps<'a, I>(
-    function_names: I,
-) -> (HashMap<String, CallableId>, HashMap<u32, String>)
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut names = function_names
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-
-    let mut ids_by_name = HashMap::new();
-    let mut names_by_id = HashMap::new();
-    for (offset, name) in names.into_iter().enumerate() {
-        let offset = u32::try_from(offset).expect("callable id offset overflow");
-        let callable_id = CallableId(
-            FIRST_USER_CALLABLE_ID
-                .checked_add(offset)
-                .expect("callable id overflow"),
-        );
-        names_by_id.insert(callable_id.0, name.clone());
-        ids_by_name.insert(name, callable_id);
-    }
-    (ids_by_name, names_by_id)
 }
 
 fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {

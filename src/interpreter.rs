@@ -5,7 +5,6 @@ use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::Environment;
-use crate::runtime::object::CallableId;
 
 mod error;
 mod runtime;
@@ -14,8 +13,6 @@ mod value;
 use error::InterpreterError;
 use runtime::{ExecResult, InterpreterRuntime};
 use value::Value;
-
-const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
 #[derive(Debug, Clone)]
 struct Function {
@@ -45,12 +42,10 @@ impl PreparedInterpreter {
         // -> eval_expression -> eval_call -> exec_block (function body).
         let mut globals = HashMap::new();
         let mut environment = Environment::top_level(&mut globals);
-        let (function_ids_by_name, function_names_by_id) =
-            build_function_id_maps(self.functions.keys().map(String::as_str));
         let mut runtime = InterpreterRuntime {
             functions: &self.functions,
-            function_ids_by_name,
-            function_names_by_id,
+            next_callable_id: runtime::FIRST_USER_CALLABLE_ID,
+            function_symbols_by_id: HashMap::new(),
             output: Vec::new(),
         };
         match runtime.exec_block(&self.main_statements, &mut environment)? {
@@ -59,34 +54,6 @@ impl PreparedInterpreter {
         }
         Ok(runtime.output.join("\n"))
     }
-}
-
-fn build_function_id_maps<'a, I>(
-    function_names: I,
-) -> (HashMap<String, CallableId>, HashMap<u32, String>)
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut names = function_names
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-
-    let mut ids_by_name = HashMap::new();
-    let mut names_by_id = HashMap::new();
-    for (offset, name) in names.into_iter().enumerate() {
-        let offset = u32::try_from(offset).expect("callable id offset overflow");
-        let callable_id = CallableId(
-            FIRST_USER_CALLABLE_ID
-                .checked_add(offset)
-                .expect("callable id overflow"),
-        );
-        names_by_id.insert(callable_id.0, name.clone());
-        ids_by_name.insert(name, callable_id);
-    }
-    (ids_by_name, names_by_id)
 }
 
 impl Default for Interpreter {
