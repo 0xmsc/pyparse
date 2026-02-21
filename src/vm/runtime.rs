@@ -4,7 +4,7 @@ use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
-use crate::runtime::object::{CallContext, CallableId};
+use crate::runtime::object::{CallContext, CallableId, assign_user_callable_ids};
 use crate::runtime::value::Value;
 use thiserror::Error;
 
@@ -35,7 +35,8 @@ pub(super) fn run_compiled_program(
 /// Stateful bytecode executor shared across nested VM function calls.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
-    function_names_by_id: HashMap<u32, &'a str>,
+    function_ids_by_name: HashMap<String, CallableId>,
+    function_names_by_id: HashMap<u32, String>,
     output: Vec<String>,
     stack: Vec<Value>,
 }
@@ -61,7 +62,6 @@ impl CallContext for VmCallContext<'_, '_, '_> {
             .runtime
             .function_names_by_id
             .get(&callable_id)
-            .copied()
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
             })?;
@@ -71,10 +71,14 @@ impl CallContext for VmCallContext<'_, '_, '_> {
             .functions
             .get(function_name)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: function_name.to_string(),
+                name: function_name.clone(),
             })?
             .clone();
-        RuntimeError::expect_function_arity(function_name, function.params.len(), args.len())?;
+        RuntimeError::expect_function_arity(
+            function_name.as_str(),
+            function.params.len(),
+            args.len(),
+        )?;
         let mut locals_map = HashMap::new();
         for (param, value) in function.params.iter().zip(args) {
             locals_map.insert(param.to_string(), value);
@@ -91,13 +95,17 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 
 impl<'a> VmRuntime<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        let function_names_by_id = program
-            .functions
-            .keys()
-            .map(|name| (CallableId::function(name).as_u32(), name.as_str()))
-            .collect::<HashMap<_, _>>();
+        let mut function_ids_by_name = HashMap::new();
+        let mut function_names_by_id = HashMap::new();
+        for (name, callable_id) in
+            assign_user_callable_ids(program.functions.keys().map(String::as_str))
+        {
+            function_names_by_id.insert(callable_id.as_u32(), name.clone());
+            function_ids_by_name.insert(name, callable_id);
+        }
         Self {
             program,
+            function_ids_by_name,
             function_names_by_id,
             output: Vec::new(),
             stack: Vec::new(),
@@ -148,7 +156,14 @@ impl<'a> VmRuntime<'a> {
                     if !self.program.functions.contains_key(&symbol) {
                         return Err(RuntimeError::UndefinedFunction { name: symbol }.into());
                     }
-                    environment.store(name, Value::function_object(symbol));
+                    let callable_id =
+                        *self
+                            .function_ids_by_name
+                            .get(symbol.as_str())
+                            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                                name: symbol.clone(),
+                            })?;
+                    environment.store(name, Value::function_object(symbol, callable_id));
                 }
                 Instruction::StoreName(name) => {
                     let value = self.pop_stack()?;
@@ -157,8 +172,17 @@ impl<'a> VmRuntime<'a> {
                 Instruction::DefineClass { name, methods } => {
                     let methods = methods
                         .into_iter()
-                        .map(|(method_name, symbol)| (method_name, Value::function_object(symbol)))
-                        .collect::<HashMap<_, _>>();
+                        .map(|(method_name, symbol)| {
+                            let callable_id = self
+                                .function_ids_by_name
+                                .get(symbol.as_str())
+                                .copied()
+                                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                                    name: symbol.clone(),
+                                })?;
+                            Ok((method_name, Value::function_object(symbol, callable_id)))
+                        })
+                        .collect::<Result<HashMap<_, _>, RuntimeError>>()?;
                     let class_value = Value::class_object(name.clone(), methods);
                     environment.store(name, class_value);
                 }

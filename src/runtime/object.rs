@@ -1,9 +1,7 @@
 use crate::builtins::BuiltinFunction;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
 
 use crate::runtime::error::RuntimeError;
 use crate::runtime::list::ListObject;
@@ -13,47 +11,43 @@ use crate::runtime::value::Value;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CallableId(u32);
 
-#[derive(Default)]
-struct CallableNameInterner {
-    next_id: u32,
-    by_name: HashMap<String, u32>,
-}
-
-fn callable_name_interner() -> &'static Mutex<CallableNameInterner> {
-    static INTER: OnceLock<Mutex<CallableNameInterner>> = OnceLock::new();
-    INTER.get_or_init(|| {
-        Mutex::new(CallableNameInterner {
-            // Reserve low IDs for builtins.
-            next_id: 1024,
-            by_name: HashMap::new(),
-        })
-    })
-}
+pub(crate) const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
 impl CallableId {
     pub(crate) fn builtin(builtin: BuiltinFunction) -> Self {
         Self(builtin.callable_id())
     }
 
-    pub(crate) fn function(name: &str) -> Self {
-        let mut interner = callable_name_interner()
-            .lock()
-            .expect("callable interner mutex poisoned");
-        if let Some(id) = interner.by_name.get(name) {
-            return Self(*id);
-        }
-        let id = interner.next_id;
-        interner.next_id = interner
-            .next_id
-            .checked_add(1)
-            .expect("callable id overflow");
-        interner.by_name.insert(name.to_string(), id);
-        Self(id)
+    pub(crate) fn from_u32(callable_id: u32) -> Self {
+        Self(callable_id)
     }
 
     pub(crate) fn as_u32(self) -> u32 {
         self.0
     }
+}
+
+pub(crate) fn assign_user_callable_ids<'a, I>(function_names: I) -> Vec<(String, CallableId)>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut names = function_names
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(offset, name)| {
+            let offset = u32::try_from(offset).expect("callable id offset overflow");
+            let callable_id = FIRST_USER_CALLABLE_ID
+                .checked_add(offset)
+                .expect("callable id overflow");
+            (name, CallableId::from_u32(callable_id))
+        })
+        .collect()
 }
 
 /// Backend callback interface used by runtime values for indirect calls.

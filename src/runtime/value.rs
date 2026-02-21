@@ -266,8 +266,8 @@ impl Value {
         Self::new(Rc::new(RefCell::new(Box::new(builtin_object))))
     }
 
-    pub(crate) fn function_object(name: String) -> Self {
-        let function_object = FunctionObject::new(name);
+    pub(crate) fn function_object(name: String, callable_id: CallableId) -> Self {
+        let function_object = FunctionObject::new(name, callable_id);
         Self::new(Rc::new(RefCell::new(Box::new(function_object))))
     }
 

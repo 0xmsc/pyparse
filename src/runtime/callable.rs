@@ -24,11 +24,12 @@ impl BuiltinFunctionObject {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FunctionObject {
     name: String,
+    callable_id: CallableId,
 }
 
 impl FunctionObject {
-    pub(crate) fn new(name: String) -> Self {
-        Self { name }
+    pub(crate) fn new(name: String, callable_id: CallableId) -> Self {
+        Self { name, callable_id }
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -138,7 +139,7 @@ impl RuntimeObject for FunctionObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         match attribute {
             "__call__" => {
-                let callable_id = CallableId::function(&self.name);
+                let callable_id = self.callable_id;
                 Ok(bound_method(move |context, args| {
                     context.call_callable(&callable_id, args)
                 }))
@@ -164,7 +165,7 @@ impl RuntimeObject for FunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_callable(&CallableId::function(&self.name), args)
+        context.call_callable(&self.callable_id, args)
     }
 }
 

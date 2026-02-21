@@ -17,7 +17,8 @@ pub(super) enum ExecResult {
 /// Runtime executor for interpreted statements and expressions.
 pub(super) struct InterpreterRuntime<'a> {
     pub(super) functions: &'a HashMap<String, Function>,
-    pub(super) function_names_by_id: HashMap<u32, &'a str>,
+    pub(super) function_ids_by_name: HashMap<String, CallableId>,
+    pub(super) function_names_by_id: HashMap<u32, String>,
     pub(super) output: Vec<String>,
 }
 
@@ -42,7 +43,6 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
             .runtime
             .function_names_by_id
             .get(&callable_id)
-            .copied()
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
             })?;
@@ -52,9 +52,13 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
             .get(function_name)
             .cloned()
             .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: function_name.to_string(),
+                name: function_name.clone(),
             })?;
-        RuntimeError::expect_function_arity(function_name, function.params.len(), args.len())?;
+        RuntimeError::expect_function_arity(
+            function_name.as_str(),
+            function.params.len(),
+            args.len(),
+        )?;
         let mut local_scope = HashMap::new();
         for (param, value) in function.params.iter().zip(args) {
             local_scope.insert(param.clone(), value);
@@ -97,7 +101,14 @@ impl<'a> InterpreterRuntime<'a> {
                 if !environment.is_top_level() {
                     return Err(RuntimeError::NestedFunctionDefinitionsUnsupported.into());
                 }
-                environment.store(name.to_string(), Value::function_object(name.to_string()));
+                let callable_id = *self
+                    .function_ids_by_name
+                    .get(name)
+                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?;
+                environment.store(
+                    name.to_string(),
+                    Value::function_object(name.to_string(), callable_id),
+                );
                 Ok(ExecResult::Continue)
             }
             Statement::ClassDef { name, body } => {
@@ -107,9 +118,16 @@ impl<'a> InterpreterRuntime<'a> {
                         Statement::FunctionDef {
                             name: method_name, ..
                         } => {
+                            let method_symbol = class_method_symbol(name, method_name);
+                            let callable_id = *self
+                                .function_ids_by_name
+                                .get(method_symbol.as_str())
+                                .ok_or_else(|| RuntimeError::UndefinedFunction {
+                                    name: method_symbol.clone(),
+                                })?;
                             methods.insert(
                                 method_name.clone(),
-                                Value::function_object(class_method_symbol(name, method_name)),
+                                Value::function_object(method_symbol, callable_id),
                             );
                         }
                         Statement::Pass => {}

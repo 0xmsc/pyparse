@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::{CallContext, CallableId};
+use crate::runtime::object::{CallContext, CallableId, assign_user_callable_ids};
 use crate::runtime::value::Value;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -73,6 +73,7 @@ pub(super) struct Runtime {
     interned_values: Vec<Box<Value>>,
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
+    function_ids_by_name: FxHashMap<String, CallableId>,
     function_names_by_id: FxHashMap<u32, String>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
@@ -126,10 +127,12 @@ fn resolve_name(
 
 impl Runtime {
     fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
-        let function_names_by_id = functions
-            .keys()
-            .map(|name| (CallableId::function(name).as_u32(), name.clone()))
-            .collect::<FxHashMap<_, _>>();
+        let mut function_ids_by_name = FxHashMap::default();
+        let mut function_names_by_id = FxHashMap::default();
+        for (name, callable_id) in assign_user_callable_ids(functions.keys().map(String::as_str)) {
+            function_names_by_id.insert(callable_id.as_u32(), name.clone());
+            function_ids_by_name.insert(name, callable_id);
+        }
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
@@ -143,6 +146,7 @@ impl Runtime {
             interned_values,
             int_intern: FxHashMap::default(),
             functions,
+            function_ids_by_name,
             function_names_by_id,
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
@@ -395,7 +399,15 @@ unsafe extern "C" fn runtime_make_function(
     let runtime = unsafe { &mut *ctx };
     let symbol_id = runtime.intern_symbol_ptr(ptr, len);
     let symbol = runtime.symbol_name(symbol_id).to_string();
-    runtime.alloc_value(Value::function_object(symbol))
+    let callable_id = if let Some(callable_id) = runtime.function_ids_by_name.get(symbol.as_str()) {
+        *callable_id
+    } else {
+        runtime.set_runtime_error(RuntimeError::UndefinedFunction {
+            name: symbol.clone(),
+        });
+        return ptr::null_mut();
+    };
+    runtime.alloc_value(Value::function_object(symbol, callable_id))
 }
 
 unsafe extern "C" fn runtime_make_list(
@@ -470,7 +482,19 @@ unsafe extern "C" fn runtime_define_class(
         let method_symbol_symbol = runtime.intern_symbol_ptr(method_symbol_ptr, method_symbol_len);
         let method_name = runtime.symbol_name(method_name_symbol).to_string();
         let method_symbol = runtime.symbol_name(method_symbol_symbol).to_string();
-        methods.insert(method_name, Value::function_object(method_symbol));
+        let callable_id =
+            if let Some(callable_id) = runtime.function_ids_by_name.get(method_symbol.as_str()) {
+                *callable_id
+            } else {
+                runtime.set_runtime_error(RuntimeError::UndefinedFunction {
+                    name: method_symbol.clone(),
+                });
+                return ptr::null_mut();
+            };
+        methods.insert(
+            method_name,
+            Value::function_object(method_symbol, callable_id),
+        );
     }
     runtime.alloc_value(Value::class_object(class_name, methods))
 }
