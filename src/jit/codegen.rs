@@ -1,3 +1,8 @@
+//! Bytecode-to-Cranelift lowering for the JIT backend.
+//!
+//! This module translates VM-style stack bytecode into Cranelift IR and wires
+//! every semantic operation through imported runtime hooks.
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 

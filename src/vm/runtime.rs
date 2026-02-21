@@ -41,6 +41,9 @@ pub(super) fn run_compiled_program(
 }
 
 /// Stateful bytecode executor shared across nested VM function calls.
+///
+/// One operand stack is reused while running a code object; function calls save
+/// and restore that stack around child execution.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
     call_registry: CallRegistry<RegisteredFunction>,

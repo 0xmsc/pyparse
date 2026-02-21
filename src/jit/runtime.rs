@@ -1,3 +1,8 @@
+//! Runtime support for JIT-generated code.
+//!
+//! Owns value storage, name/symbol intern tables, callable registration, and
+//! the C-ABI hooks imported by Cranelift-generated functions.
+
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::Arc;
@@ -74,6 +79,11 @@ struct RegisteredFunction {
 }
 
 /// Runtime state used by JIT-emitted code and runtime hooks.
+///
+/// The runtime keeps:
+/// - globals/current call-frame locals in symbol-ID keyed maps,
+/// - stable pointer-backed value storage for hook ABI boundaries,
+/// - callable metadata for `CallableId` dispatch.
 pub(super) struct Runtime {
     globals: FxHashMap<u32, Value>,
     call_frames: Vec<FxHashMap<u32, Value>>,

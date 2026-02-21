@@ -1,3 +1,9 @@
+//! Bytecode backend.
+//!
+//! Pipeline: `AST -> CompiledProgram -> stack-machine execution`.
+//! `compile` lowers syntax into `Instruction`s, then `VmRuntime` interprets
+//! those instructions with runtime object/call semantics shared via `Value`.
+
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -10,10 +16,14 @@ mod runtime;
 
 use runtime::{VmResult, run_compiled_program};
 
+/// Bytecode backend entry point.
+///
+/// Holds backend-global state used by direct `run_compiled` calls.
 pub struct VM {
     globals: HashMap<String, Value>,
 }
 
+/// Prepared VM artifact containing compiled bytecode plus callable metadata.
 pub struct PreparedVM {
     compiled: CompiledProgram,
 }

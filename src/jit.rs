@@ -1,3 +1,9 @@
+//! Cranelift JIT backend.
+//!
+//! Pipeline: `AST -> bytecode -> Cranelift IR -> machine code`.
+//! Generated code does not implement Python object semantics directly; it calls
+//! runtime hooks in `jit::runtime` for allocation, dispatch, and name access.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -14,6 +20,7 @@ use runtime::{CompiledFunctionPointer, EntryFunction};
 
 static DUMP_CLIF: AtomicBool = AtomicBool::new(false);
 
+/// Cranelift-based backend entry point.
 pub struct JIT;
 
 /// JIT-compiled executable state kept alive for function pointer validity.

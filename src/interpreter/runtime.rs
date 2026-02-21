@@ -22,6 +22,11 @@ pub(super) enum ExecResult {
 }
 
 /// Runtime executor for interpreted statements and expressions.
+///
+/// Execution model:
+/// - Walk statements/expressions directly from AST.
+/// - Resolve names through `Environment` (locals shadow globals).
+/// - Delegate callable/object semantics through `Value` + `CallContext`.
 pub(super) struct InterpreterRuntime {
     call_registry: CallRegistry<RegisteredFunction>,
     pub(super) output: Vec<String>,
