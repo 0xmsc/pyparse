@@ -192,7 +192,11 @@ impl<'a> VmRuntime<'a> {
                         entries.push((key, value));
                     }
                     entries.reverse();
-                    let dict = Value::dict_object(entries)?;
+                    let mut context = VmCallContext {
+                        runtime: self,
+                        environment,
+                    };
+                    let dict = Value::dict_object_with_context(entries, &mut context)?;
                     self.stack.push(dict);
                 }
                 Instruction::PushNone => self.stack.push(Value::none_object()),

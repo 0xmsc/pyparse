@@ -21,6 +21,10 @@ impl ClassObject {
         self.methods.get(attribute).cloned()
     }
 
+    pub(crate) fn has_method(&self, attribute: &str) -> bool {
+        self.methods.contains_key(attribute)
+    }
+
     pub(crate) fn name(&self) -> &str {
         &self.name
     }

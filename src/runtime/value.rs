@@ -14,6 +14,7 @@ use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 /// Boxed runtime value shared across interpreter, VM, and JIT paths.
@@ -202,6 +203,66 @@ impl Value {
         self.call_binary_operator(context, "__lt__", rhs)
     }
 
+    pub(crate) fn hash_key(&self, context: &mut dyn CallContext) -> Result<i64, RuntimeError> {
+        if let Some(value) = self.numeric_key_value() {
+            return Ok(value);
+        }
+        if let Some(value) = string::downcast_string(self) {
+            return Ok(hash_string(&value));
+        }
+        if self.is_none() {
+            return Ok(0x9e37_79b9_i64);
+        }
+        if self.is_unhashable_container() {
+            return Err(RuntimeError::UnhashableType {
+                type_name: self.type_name().to_string(),
+            });
+        }
+
+        if let Some((has_eq, has_hash)) = self.instance_hash_policy() {
+            if has_hash {
+                return self.call_hash_method(context);
+            }
+            if has_eq {
+                return Err(RuntimeError::UnhashableType {
+                    type_name: self.type_name().to_string(),
+                });
+            }
+            return Ok(self.object_identity_hash());
+        }
+
+        match self.try_call_hash_method(context)? {
+            Some(hash) => Ok(hash),
+            None => Ok(self.object_identity_hash()),
+        }
+    }
+
+    pub(crate) fn key_equals(
+        &self,
+        context: &mut dyn CallContext,
+        rhs: &Value,
+    ) -> Result<bool, RuntimeError> {
+        if Rc::ptr_eq(&self.object, &rhs.object) {
+            return Ok(true);
+        }
+        if let (Some(left), Some(right)) = (self.numeric_key_value(), rhs.numeric_key_value()) {
+            return Ok(left == right);
+        }
+        if let (Some(left), Some(right)) =
+            (string::downcast_string(self), string::downcast_string(rhs))
+        {
+            return Ok(left == right);
+        }
+        if self.is_none() || rhs.is_none() {
+            return Ok(self.is_none() && rhs.is_none());
+        }
+
+        if let Some(equal) = self.try_call_eq_method(context, rhs)? {
+            return Ok(equal);
+        }
+        Ok(false)
+    }
+
     pub(crate) fn get_item_with_context(
         &self,
         context: &mut dyn CallContext,
@@ -277,8 +338,11 @@ impl Value {
         Self::new(Rc::new(RefCell::new(Box::new(class_object))))
     }
 
-    pub(crate) fn dict_object(entries: Vec<(Value, Value)>) -> Result<Self, RuntimeError> {
-        let dict_object = DictObject::new(entries)?;
+    pub(crate) fn dict_object_with_context(
+        entries: Vec<(Value, Value)>,
+        context: &mut dyn CallContext,
+    ) -> Result<Self, RuntimeError> {
+        let dict_object = DictObject::new(entries, context)?;
         Ok(Self::new(Rc::new(RefCell::new(Box::new(dict_object)))))
     }
 
@@ -357,6 +421,94 @@ impl Value {
                 .unwrap_or_else(|error| panic!("failed to call {attribute}: {error}")),
         )
     }
+
+    fn numeric_key_value(&self) -> Option<i64> {
+        if let Some(value) = self.as_bool() {
+            return Some(if value { 1 } else { 0 });
+        }
+        self.as_int()
+    }
+
+    fn object_identity_hash(&self) -> i64 {
+        Rc::as_ptr(&self.object) as usize as i64
+    }
+
+    fn is_unhashable_container(&self) -> bool {
+        let object = self.object.borrow();
+        object.as_any().downcast_ref::<ListObject>().is_some()
+            || object.as_any().downcast_ref::<DictObject>().is_some()
+    }
+
+    fn instance_hash_policy(&self) -> Option<(bool, bool)> {
+        let object = self.object.borrow();
+        let instance = object.as_any().downcast_ref::<InstanceObject>()?;
+        let class_ref = instance.class_ref();
+        drop(object);
+
+        let class_borrow = class_ref.borrow();
+        let class = class_borrow
+            .as_any()
+            .downcast_ref::<ClassObject>()
+            .expect("instance class must be ClassObject");
+        Some((class.has_method("__eq__"), class.has_method("__hash__")))
+    }
+
+    fn call_hash_method(&self, context: &mut dyn CallContext) -> Result<i64, RuntimeError> {
+        let callee = self.get_attribute("__hash__")?;
+        let result = self.call_bound_method(callee, context, Vec::new(), "__hash__")?;
+        let Some(hash) = result.as_int() else {
+            return Err(RuntimeError::InvalidArgumentType {
+                operation: "__hash__".to_string(),
+                argument: "return".to_string(),
+                expected: "int".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        Ok(hash)
+    }
+
+    fn try_call_hash_method(
+        &self,
+        context: &mut dyn CallContext,
+    ) -> Result<Option<i64>, RuntimeError> {
+        let callee = match self.get_attribute("__hash__") {
+            Ok(callee) => callee,
+            Err(RuntimeError::UnknownAttribute { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let result = self.call_bound_method(callee, context, Vec::new(), "__hash__")?;
+        let Some(hash) = result.as_int() else {
+            return Err(RuntimeError::InvalidArgumentType {
+                operation: "__hash__".to_string(),
+                argument: "return".to_string(),
+                expected: "int".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        Ok(Some(hash))
+    }
+
+    fn try_call_eq_method(
+        &self,
+        context: &mut dyn CallContext,
+        rhs: &Value,
+    ) -> Result<Option<bool>, RuntimeError> {
+        let callee = match self.get_attribute("__eq__") {
+            Ok(callee) => callee,
+            Err(RuntimeError::UnknownAttribute { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let result = self.call_bound_method(callee, context, vec![rhs.clone()], "__eq__")?;
+        let Some(equal) = result.as_bool() else {
+            return Err(RuntimeError::InvalidArgumentType {
+                operation: "__eq__".to_string(),
+                argument: "return".to_string(),
+                expected: "bool".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        Ok(Some(equal))
+    }
 }
 
 /// Minimal call context used when invoking magic methods that must not recurse
@@ -371,6 +523,12 @@ impl CallContext for NoopCallContext {
     ) -> Result<Value, RuntimeError> {
         panic!("call requested without runtime call context")
     }
+}
+
+fn hash_string(value: &str) -> i64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish() as i64
 }
 
 fn map_unknown_attribute_to_unsupported(error: RuntimeError, operation: &str) -> RuntimeError {

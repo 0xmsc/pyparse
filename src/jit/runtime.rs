@@ -523,7 +523,7 @@ unsafe extern "C" fn runtime_make_dict(
             (&*value_ptr).clone()
         }));
     }
-    match Value::dict_object(entries) {
+    match Value::dict_object_with_context(entries, runtime) {
         Ok(dict) => runtime.alloc_value(dict),
         Err(error) => {
             runtime.set_runtime_error(error);

@@ -285,7 +285,11 @@ impl InterpreterRuntime {
                     let value_value = self.eval_expression(value, environment)?;
                     values.push((key_value, value_value));
                 }
-                Value::dict_object(values).map_err(Into::into)
+                let mut context = InterpreterCallContext {
+                    runtime: self,
+                    environment,
+                };
+                Value::dict_object_with_context(values, &mut context).map_err(Into::into)
             }
             Expression::Identifier(name) => {
                 if let Some(value) = environment.load_cloned(name) {

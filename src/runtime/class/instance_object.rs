@@ -20,6 +20,10 @@ impl InstanceObject {
             attributes: HashMap::new(),
         }
     }
+
+    pub(crate) fn class_ref(&self) -> ObjectRef {
+        self.class.clone()
+    }
 }
 
 fn class_method(class: ObjectRef, attribute: &str) -> Option<Value> {
