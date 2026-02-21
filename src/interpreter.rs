@@ -18,10 +18,6 @@ mod value;
 use error::InterpreterError;
 use runtime::{ExecResult, InterpreterRuntime};
 
-/// AST-walking backend that executes programs directly without compilation.
-///
-/// `prepare` stores a copy of top-level statements; execution happens later in
-/// `PreparedInterpreter::run`.
 pub struct Interpreter;
 
 impl Interpreter {
@@ -30,9 +26,6 @@ impl Interpreter {
     }
 }
 
-/// Prepared interpreter artifact containing top-level AST statements.
-///
-/// Each `run` creates a fresh runtime/global scope and evaluates the stored AST.
 pub struct PreparedInterpreter {
     statements: Vec<Statement>,
 }

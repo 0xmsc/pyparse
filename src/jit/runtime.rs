@@ -12,7 +12,7 @@ use cranelift_jit::JITBuilder;
 use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
-use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
+use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::call_builtin_with_output;
 use crate::runtime::object::{CallContext, CallableId};
@@ -75,7 +75,73 @@ pub(super) struct CompiledFunctionPointer {
 
 #[derive(Clone)]
 struct RegisteredFunction {
-    function: CompiledFunctionPointer,
+    name: String,
+    implementation: RegisteredFunctionImplementation,
+}
+
+#[derive(Clone)]
+enum RegisteredFunctionImplementation {
+    Builtin(BuiltinFunction),
+    Compiled(CompiledFunctionPointer),
+}
+
+impl RegisteredFunction {
+    fn builtin(builtin: BuiltinFunction) -> Self {
+        Self {
+            name: builtin.name().to_string(),
+            implementation: RegisteredFunctionImplementation::Builtin(builtin),
+        }
+    }
+
+    fn compiled(function: CompiledFunctionPointer) -> Self {
+        Self {
+            name: function.name.clone(),
+            implementation: RegisteredFunctionImplementation::Compiled(function),
+        }
+    }
+
+    fn invoke(self, runtime: &mut Runtime, args: Vec<Value>) -> Result<Value, RuntimeError> {
+        match self.implementation {
+            RegisteredFunctionImplementation::Builtin(builtin) => {
+                call_builtin_with_output(builtin, args, &mut runtime.output)
+            }
+            RegisteredFunctionImplementation::Compiled(function) => {
+                RuntimeError::expect_function_arity(
+                    self.name.as_str(),
+                    function.arity,
+                    args.len(),
+                )?;
+
+                let mut arg_values = args;
+                let mut frame =
+                    FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
+                for (param, arg) in function.params.iter().zip(arg_values.iter()) {
+                    let symbol = runtime.intern_symbol_name(param);
+                    frame.insert(symbol, arg.clone());
+                }
+
+                let mut arg_ptrs = Vec::with_capacity(arg_values.len());
+                for arg in &mut arg_values {
+                    arg_ptrs.push(arg as *mut Value);
+                }
+
+                runtime.call_frames.push(frame);
+                let runtime_ptr = runtime as *mut Runtime;
+                let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
+                runtime.call_frames.pop();
+                if result.is_null() {
+                    if let Some(error) = runtime.runtime_error.clone() {
+                        return Err(error);
+                    }
+                    return Err(RuntimeError::UnsupportedOperation {
+                        operation: "call".to_string(),
+                        type_name: "function".to_string(),
+                    });
+                }
+                Ok(unsafe { (&*result).clone() })
+            }
+        }
+    }
 }
 
 /// Runtime state used by JIT-emitted code and runtime hooks.
@@ -160,6 +226,11 @@ impl Runtime {
             error: None,
             runtime_error: None,
         };
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            runtime
+                .call_registry
+                .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
+        }
         runtime.seed_builtin_globals();
         runtime
     }
@@ -186,9 +257,9 @@ impl Runtime {
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{compiled_callable_id}>"),
             })?;
-        let callable_id = self.call_registry.register_function(RegisteredFunction {
-            function: function.clone(),
-        });
+        let callable_id = self
+            .call_registry
+            .register_function(RegisteredFunction::compiled(function.clone()));
         let function_name = function.name.clone();
         Ok((function_name, callable_id))
     }
@@ -320,42 +391,7 @@ impl CallContext for Runtime {
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
         let callable = self.call_registry.resolve(callable_id)?;
-        let callable_function = match callable {
-            RegisteredCallable::Builtin(builtin) => {
-                return call_builtin_with_output(builtin, args, &mut self.output);
-            }
-            RegisteredCallable::Function(callable_function) => callable_function,
-        };
-        let function = callable_function.function;
-        RuntimeError::expect_function_arity(function.name.as_str(), function.arity, args.len())?;
-
-        let mut arg_values = args;
-        let mut frame =
-            FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
-        for (param, arg) in function.params.iter().zip(arg_values.iter()) {
-            let symbol = self.intern_symbol_name(param);
-            frame.insert(symbol, arg.clone());
-        }
-
-        let mut arg_ptrs = Vec::with_capacity(arg_values.len());
-        for arg in &mut arg_values {
-            arg_ptrs.push(arg as *mut Value);
-        }
-
-        self.call_frames.push(frame);
-        let runtime_ptr = self as *mut Runtime;
-        let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
-        self.call_frames.pop();
-        if result.is_null() {
-            if let Some(error) = self.runtime_error.clone() {
-                return Err(error);
-            }
-            return Err(RuntimeError::UnsupportedOperation {
-                operation: "call".to_string(),
-                type_name: "function".to_string(),
-            });
-        }
-        Ok(unsafe { (&*result).clone() })
+        callable.invoke(self, args)
     }
 }
 

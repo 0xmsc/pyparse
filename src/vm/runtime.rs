@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
+use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledCallable, CompiledProgram, Instruction};
-use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
+use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
 use crate::runtime::object::{CallContext, CallableId};
@@ -13,8 +14,57 @@ pub(super) type VmResult<T> = std::result::Result<T, VmError>;
 #[derive(Clone)]
 struct RegisteredFunction {
     name: String,
-    params: Vec<String>,
-    code: Vec<Instruction>,
+    implementation: RegisteredFunctionImplementation,
+}
+
+#[derive(Clone)]
+enum RegisteredFunctionImplementation {
+    Builtin(BuiltinFunction),
+    User {
+        params: Vec<String>,
+        code: Vec<Instruction>,
+    },
+}
+
+impl RegisteredFunction {
+    fn builtin(builtin: BuiltinFunction) -> Self {
+        Self {
+            name: builtin.name().to_string(),
+            implementation: RegisteredFunctionImplementation::Builtin(builtin),
+        }
+    }
+
+    fn user(name: String, params: Vec<String>, code: Vec<Instruction>) -> Self {
+        Self {
+            name,
+            implementation: RegisteredFunctionImplementation::User { params, code },
+        }
+    }
+
+    fn invoke(
+        self,
+        runtime: &mut VmRuntime<'_>,
+        environment: &mut Environment<'_>,
+        args: Vec<Value>,
+    ) -> VmResult<Value> {
+        match self.implementation {
+            RegisteredFunctionImplementation::Builtin(builtin) => {
+                call_builtin_with_output(builtin, args, &mut runtime.output).map_err(Into::into)
+            }
+            RegisteredFunctionImplementation::User { params, code } => {
+                RuntimeError::expect_function_arity(self.name.as_str(), params.len(), args.len())?;
+                let mut locals_map = HashMap::new();
+                for (param, value) in params.into_iter().zip(args) {
+                    locals_map.insert(param, value);
+                }
+                let mut child_environment = environment.child_with_locals(&mut locals_map);
+                let parent_stack = std::mem::take(&mut runtime.stack);
+                let result = runtime.execute_code(&code, &mut child_environment);
+                runtime.stack = parent_stack;
+                result
+            }
+        }
+    }
 }
 
 /// VM execution errors produced while running compiled bytecode.
@@ -64,37 +114,23 @@ impl CallContext for VmCallContext<'_, '_, '_> {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let callable = self.runtime.call_registry.resolve(callable_id)?;
-        let callable_function = match callable {
-            RegisteredCallable::Builtin(builtin) => {
-                return call_builtin_with_output(builtin, args, &mut self.runtime.output);
-            }
-            RegisteredCallable::Function(callable_function) => callable_function,
-        };
-        RuntimeError::expect_function_arity(
-            callable_function.name.as_str(),
-            callable_function.params.len(),
-            args.len(),
-        )?;
-        let mut locals_map = HashMap::new();
-        for (param, value) in callable_function.params.iter().zip(args) {
-            locals_map.insert(param.to_string(), value);
-        }
-        let mut child_environment = self.environment.child_with_locals(&mut locals_map);
-        let parent_stack = std::mem::take(&mut self.runtime.stack);
-        let result = self
-            .runtime
-            .execute_code(&callable_function.code, &mut child_environment);
-        self.runtime.stack = parent_stack;
-        result.map_err(map_vm_error_to_runtime_error)
+        callable
+            .invoke(self.runtime, self.environment, args)
+            .map_err(map_vm_error_to_runtime_error)
     }
 }
 
 impl<'a> VmRuntime<'a> {
     /// Initializes a VM runtime with builtin callable registrations.
     fn new(program: &'a CompiledProgram) -> Self {
+        let mut call_registry = CallRegistry::new();
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            call_registry
+                .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
+        }
         Self {
             program,
-            call_registry: CallRegistry::new(),
+            call_registry,
             output: Vec::new(),
             stack: Vec::new(),
         }
@@ -310,9 +346,9 @@ fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {
 
 /// Copies compiled callable metadata into runtime-owned dispatch metadata.
 fn registered_function_from_compiled(callable: &CompiledCallable) -> RegisteredFunction {
-    RegisteredFunction {
-        name: callable.name.clone(),
-        params: callable.function.params.clone(),
-        code: callable.function.code.clone(),
-    }
+    RegisteredFunction::user(
+        callable.name.clone(),
+        callable.function.params.clone(),
+        callable.function.code.clone(),
+    )
 }

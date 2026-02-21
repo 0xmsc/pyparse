@@ -16,14 +16,10 @@ mod runtime;
 
 use runtime::{VmResult, run_compiled_program};
 
-/// Bytecode backend entry point.
-///
-/// Holds backend-global state used by direct `run_compiled` calls.
 pub struct VM {
     globals: HashMap<String, Value>,
 }
 
-/// Prepared VM artifact containing compiled bytecode plus callable metadata.
 pub struct PreparedVM {
     compiled: CompiledProgram,
 }

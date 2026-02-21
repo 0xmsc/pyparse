@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
-use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
+use crate::builtins::BuiltinFunction;
+use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::{CallContext, CallableId};
@@ -11,8 +12,60 @@ use super::{InterpreterError, value::Value};
 #[derive(Clone)]
 struct RegisteredFunction {
     name: String,
-    params: Vec<String>,
-    body: Vec<Statement>,
+    implementation: RegisteredFunctionImplementation,
+}
+
+#[derive(Clone)]
+enum RegisteredFunctionImplementation {
+    Builtin(BuiltinFunction),
+    User {
+        params: Vec<String>,
+        body: Vec<Statement>,
+    },
+}
+
+impl RegisteredFunction {
+    fn builtin(builtin: BuiltinFunction) -> Self {
+        Self {
+            name: builtin.name().to_string(),
+            implementation: RegisteredFunctionImplementation::Builtin(builtin),
+        }
+    }
+
+    fn user(name: String, params: Vec<String>, body: Vec<Statement>) -> Self {
+        Self {
+            name,
+            implementation: RegisteredFunctionImplementation::User { params, body },
+        }
+    }
+
+    fn invoke(
+        self,
+        runtime: &mut InterpreterRuntime,
+        environment: &mut Environment<'_>,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match self.implementation {
+            RegisteredFunctionImplementation::Builtin(builtin) => {
+                call_builtin_with_output(builtin, args, &mut runtime.output)
+            }
+            RegisteredFunctionImplementation::User { params, body } => {
+                RuntimeError::expect_function_arity(self.name.as_str(), params.len(), args.len())?;
+                let mut local_scope = HashMap::new();
+                for (param, value) in params.into_iter().zip(args) {
+                    local_scope.insert(param, value);
+                }
+                let mut local_environment = environment.child_with_locals(&mut local_scope);
+                match runtime
+                    .exec_block(&body, &mut local_environment)
+                    .map_err(runtime_error_from_interpreter)?
+                {
+                    ExecResult::Continue => Ok(Value::none_object()),
+                    ExecResult::Return(value) => Ok(value),
+                }
+            }
+        }
+    }
 }
 
 /// Control-flow marker for statement execution.
@@ -45,37 +98,19 @@ impl CallContext for InterpreterCallContext<'_, '_> {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let callable = self.runtime.call_registry.resolve(callable_id)?;
-        let callable_function = match callable {
-            RegisteredCallable::Builtin(builtin) => {
-                return call_builtin_with_output(builtin, args, &mut self.runtime.output);
-            }
-            RegisteredCallable::Function(callable_function) => callable_function,
-        };
-        RuntimeError::expect_function_arity(
-            callable_function.name.as_str(),
-            callable_function.params.len(),
-            args.len(),
-        )?;
-        let mut local_scope = HashMap::new();
-        for (param, value) in callable_function.params.iter().zip(args) {
-            local_scope.insert(param.clone(), value);
-        }
-        let mut local_environment = self.environment.child_with_locals(&mut local_scope);
-        match self
-            .runtime
-            .exec_block(&callable_function.body, &mut local_environment)
-            .map_err(runtime_error_from_interpreter)?
-        {
-            ExecResult::Continue => Ok(Value::none_object()),
-            ExecResult::Return(value) => Ok(value),
-        }
+        callable.invoke(self.runtime, self.environment, args)
     }
 }
 
 impl InterpreterRuntime {
     pub(super) fn new() -> Self {
+        let mut call_registry = CallRegistry::new();
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            call_registry
+                .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
+        }
         Self {
-            call_registry: CallRegistry::new(),
+            call_registry,
             output: Vec::new(),
         }
     }
@@ -88,7 +123,7 @@ impl InterpreterRuntime {
         body: Vec<Statement>,
     ) -> CallableId {
         self.call_registry
-            .register_function(RegisteredFunction { name, params, body })
+            .register_function(RegisteredFunction::user(name, params, body))
     }
 
     pub(super) fn exec_block(

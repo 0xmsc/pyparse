@@ -20,7 +20,6 @@ use runtime::{CompiledFunctionPointer, EntryFunction};
 
 static DUMP_CLIF: AtomicBool = AtomicBool::new(false);
 
-/// Cranelift-based backend entry point.
 pub struct JIT;
 
 /// JIT-compiled executable state kept alive for function pointer validity.
