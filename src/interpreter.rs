@@ -42,12 +42,7 @@ impl PreparedInterpreter {
         // -> eval_expression -> eval_call -> exec_block (function body).
         let mut globals = HashMap::new();
         let mut environment = Environment::top_level(&mut globals);
-        let mut runtime = InterpreterRuntime {
-            functions: &self.functions,
-            next_callable_id: runtime::FIRST_USER_CALLABLE_ID,
-            callable_functions: HashMap::new(),
-            output: Vec::new(),
-        };
+        let mut runtime = InterpreterRuntime::new(&self.functions);
         match runtime.exec_block(&self.main_statements, &mut environment)? {
             ExecResult::Continue => {}
             ExecResult::Return(_) => return Err(RuntimeError::ReturnOutsideFunction.into()),

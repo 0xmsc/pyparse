@@ -8,12 +8,16 @@ use crate::runtime::object::{CallContext, CallableId};
 
 use super::{Function, InterpreterError, Value};
 
-pub(super) const FIRST_USER_CALLABLE_ID: u32 = 1024;
-
 #[derive(Clone)]
-pub(super) struct RegisteredFunction {
+struct RegisteredFunction {
     name: String,
     function: Function,
+}
+
+#[derive(Clone)]
+enum RegisteredCallable {
+    Builtin(BuiltinFunction),
+    Function(RegisteredFunction),
 }
 
 /// Control-flow marker for statement execution.
@@ -24,9 +28,9 @@ pub(super) enum ExecResult {
 
 /// Runtime executor for interpreted statements and expressions.
 pub(super) struct InterpreterRuntime<'a> {
-    pub(super) functions: &'a HashMap<String, Function>,
-    pub(super) next_callable_id: u32,
-    pub(super) callable_functions: HashMap<u32, RegisteredFunction>,
+    functions: &'a HashMap<String, Function>,
+    next_callable_id: u32,
+    callables_by_id: HashMap<u32, RegisteredCallable>,
     pub(super) output: Vec<String>,
 }
 
@@ -43,18 +47,20 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         let callable_id = callable_id.0;
-        if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
-            return call_builtin_with_output(builtin, args, &mut self.runtime.output);
-        }
-
-        let callable_function = self
+        let callable = self
             .runtime
-            .callable_functions
+            .callables_by_id
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
             })?
             .clone();
+        let callable_function = match callable {
+            RegisteredCallable::Builtin(builtin) => {
+                return call_builtin_with_output(builtin, args, &mut self.runtime.output);
+            }
+            RegisteredCallable::Function(callable_function) => callable_function,
+        };
         let function_name = callable_function.name;
         let function = callable_function.function;
         RuntimeError::expect_function_arity(
@@ -79,6 +85,26 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
 }
 
 impl<'a> InterpreterRuntime<'a> {
+    pub(super) fn new(functions: &'a HashMap<String, Function>) -> Self {
+        let mut callables_by_id = HashMap::new();
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
+        }
+        let next_callable_id = callables_by_id
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .expect("callable id overflow");
+        Self {
+            functions,
+            next_callable_id,
+            callables_by_id,
+            output: Vec::new(),
+        }
+    }
+
     fn register_function(&mut self, symbol: &str) -> Result<CallableId, RuntimeError> {
         let function =
             self.functions
@@ -92,12 +118,12 @@ impl<'a> InterpreterRuntime<'a> {
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.callable_functions.insert(
+        self.callables_by_id.insert(
             callable_id.0,
-            RegisteredFunction {
+            RegisteredCallable::Function(RegisteredFunction {
                 name: symbol.to_string(),
                 function,
-            },
+            }),
         );
         Ok(callable_id)
     }

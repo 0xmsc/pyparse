@@ -51,7 +51,6 @@ pub(super) enum RuntimeAbiType {
 
 const MIN_INTERNED_INT: i64 = -1_000_000;
 const MAX_INTERNED_INT: i64 = 1_000_000;
-const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
 pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
@@ -69,6 +68,12 @@ struct RegisteredFunction {
     function: CompiledFunctionPointer,
 }
 
+#[derive(Clone)]
+enum RegisteredCallable {
+    Builtin(BuiltinFunction),
+    Function(RegisteredFunction),
+}
+
 /// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
     globals: FxHashMap<u32, Value>,
@@ -81,7 +86,7 @@ pub(super) struct Runtime {
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
     next_callable_id: u32,
-    callable_functions: FxHashMap<u32, RegisteredFunction>,
+    callables_by_id: FxHashMap<u32, RegisteredCallable>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
     symbol_names: Vec<String>,
@@ -134,6 +139,17 @@ fn resolve_name(
 
 impl Runtime {
     fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
+        let mut callables_by_id = FxHashMap::default();
+        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
+            callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
+        }
+        let next_callable_id = callables_by_id
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .expect("callable id overflow");
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
@@ -147,8 +163,8 @@ impl Runtime {
             interned_values,
             int_intern: FxHashMap::default(),
             functions,
-            next_callable_id: FIRST_USER_CALLABLE_ID,
-            callable_functions: FxHashMap::default(),
+            next_callable_id,
+            callables_by_id,
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
             symbol_names: Vec::new(),
@@ -171,12 +187,12 @@ impl Runtime {
             .next_callable_id
             .checked_add(1)
             .expect("callable id overflow");
-        self.callable_functions.insert(
+        self.callables_by_id.insert(
             callable_id.0,
-            RegisteredFunction {
+            RegisteredCallable::Function(RegisteredFunction {
                 name: symbol.to_string(),
                 function,
-            },
+            }),
         );
         Ok(callable_id)
     }
@@ -317,27 +333,29 @@ impl CallContext for Runtime {
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
         let callable_id = callable_id.0;
-        if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
-            return match builtin {
-                BuiltinFunction::Print => {
-                    let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                    self.output.push(rendered.join(" "));
-                    Ok(Value::none_object())
-                }
-                BuiltinFunction::Len => {
-                    RuntimeError::expect_function_arity("len", 1, args.len())?;
-                    args[0].len()
-                }
-            };
-        }
-
-        let callable_function = self
-            .callable_functions
+        let callable = self
+            .callables_by_id
             .get(&callable_id)
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{callable_id}>"),
             })?
             .clone();
+        let callable_function = match callable {
+            RegisteredCallable::Builtin(builtin) => {
+                return match builtin {
+                    BuiltinFunction::Print => {
+                        let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                        self.output.push(rendered.join(" "));
+                        Ok(Value::none_object())
+                    }
+                    BuiltinFunction::Len => {
+                        RuntimeError::expect_function_arity("len", 1, args.len())?;
+                        args[0].len()
+                    }
+                };
+            }
+            RegisteredCallable::Function(callable_function) => callable_function,
+        };
         let function_name = callable_function.name;
         let function = callable_function.function;
         RuntimeError::expect_function_arity(function_name.as_str(), function.arity, args.len())?;

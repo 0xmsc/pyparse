@@ -12,14 +12,6 @@ impl BuiltinFunction {
         }
     }
 
-    pub fn from_callable_id(callable_id: u32) -> Option<Self> {
-        match callable_id {
-            1 => Some(Self::Print),
-            2 => Some(Self::Len),
-            _ => None,
-        }
-    }
-
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "print" => Some(Self::Print),
