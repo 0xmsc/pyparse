@@ -8,6 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::execution::call_builtin_with_output;
 use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 
@@ -342,17 +343,7 @@ impl CallContext for Runtime {
             .clone();
         let callable_function = match callable {
             RegisteredCallable::Builtin(builtin) => {
-                return match builtin {
-                    BuiltinFunction::Print => {
-                        let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                        self.output.push(rendered.join(" "));
-                        Ok(Value::none_object())
-                    }
-                    BuiltinFunction::Len => {
-                        RuntimeError::expect_function_arity("len", 1, args.len())?;
-                        args[0].len()
-                    }
-                };
+                return call_builtin_with_output(builtin, args, &mut self.output);
             }
             RegisteredCallable::Function(callable_function) => callable_function,
         };
