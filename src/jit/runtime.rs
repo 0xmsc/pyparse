@@ -85,6 +85,38 @@ pub(super) struct Runtime {
     runtime_error: Option<RuntimeError>,
 }
 
+#[derive(Debug, Clone)]
+enum NameResolution {
+    Value(RuntimeValue),
+    Builtin(BuiltinFunction),
+    Missing,
+}
+
+fn bind_call_frame(params: &[String], args: &[RuntimeValue]) -> HashMap<String, RuntimeValue> {
+    params
+        .iter()
+        .cloned()
+        .zip(args.iter().cloned())
+        .collect::<HashMap<_, _>>()
+}
+
+fn resolve_name(
+    local_value: Option<RuntimeValue>,
+    global_value: Option<RuntimeValue>,
+    builtin: Option<BuiltinFunction>,
+) -> NameResolution {
+    if let Some(value) = local_value {
+        return NameResolution::Value(value);
+    }
+    if let Some(value) = global_value {
+        return NameResolution::Value(value);
+    }
+    if let Some(builtin) = builtin {
+        return NameResolution::Builtin(builtin);
+    }
+    NameResolution::Missing
+}
+
 impl Runtime {
     fn new(functions: Arc<HashMap<String, CompiledFunctionPointer>>) -> Self {
         let interned_values = vec![
@@ -226,10 +258,9 @@ impl CallContext for Runtime {
                 })?;
         RuntimeError::expect_function_arity(name, function.arity, args.len())?;
 
-        let mut frame = HashMap::with_capacity(function.arity);
+        let frame = bind_call_frame(&function.params, &args);
         let mut arg_ptrs = Vec::with_capacity(args.len());
-        for (param, arg) in function.params.iter().zip(args) {
-            frame.insert(param.clone(), arg.clone());
+        for arg in args {
             arg_ptrs.push(self.alloc_or_intern_value(arg));
         }
 
@@ -487,14 +518,22 @@ unsafe extern "C" fn runtime_load_name(
 ) -> *mut RuntimeValue {
     let runtime = unsafe { &mut *ctx };
     let name = runtime.decode_symbol(ptr, len);
-    if let Some(value) = runtime.load_named_value(&name) {
-        return runtime.alloc_or_intern_value(value);
+    let local_value = runtime
+        .call_frames
+        .last()
+        .and_then(|frame| frame.get(&name))
+        .cloned();
+    let global_value = runtime.globals.get(&name).cloned();
+    match resolve_name(local_value, global_value, BuiltinFunction::from_name(&name)) {
+        NameResolution::Value(value) => runtime.alloc_or_intern_value(value),
+        NameResolution::Builtin(builtin) => {
+            runtime.alloc_value(Value::builtin_function_object(builtin))
+        }
+        NameResolution::Missing => {
+            runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
+            ptr::null_mut()
+        }
     }
-    if let Some(builtin) = BuiltinFunction::from_name(&name) {
-        return runtime.alloc_value(Value::builtin_function_object(builtin));
-    }
-    runtime.set_runtime_error(RuntimeError::UndefinedVariable { name });
-    ptr::null_mut()
 }
 
 /// Runtime hook for name assignment (current call-frame locals or globals).
@@ -750,4 +789,60 @@ pub(super) fn run_prepared(
         bail!("JIT execution failed");
     }
     Ok(runtime.output.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NameResolution, bind_call_frame, resolve_name};
+    use crate::builtins::BuiltinFunction;
+    use crate::runtime::value::Value;
+
+    #[test]
+    fn bind_call_frame_maps_params_to_args() {
+        let params = vec!["x".to_string(), "y".to_string()];
+        let args = vec![Value::int_object(1), Value::int_object(2)];
+        let frame = bind_call_frame(&params, &args);
+        assert_eq!(frame.get("x").and_then(|value| value.as_int()), Some(1));
+        assert_eq!(frame.get("y").and_then(|value| value.as_int()), Some(2));
+    }
+
+    #[test]
+    fn resolve_name_prefers_local_over_global_and_builtin() {
+        let resolved = resolve_name(
+            Some(Value::int_object(1)),
+            Some(Value::int_object(2)),
+            Some(BuiltinFunction::Print),
+        );
+        assert!(matches!(
+            resolved,
+            NameResolution::Value(value) if value.as_int() == Some(1)
+        ));
+    }
+
+    #[test]
+    fn resolve_name_falls_back_to_global_then_builtin() {
+        let global = resolve_name(
+            None,
+            Some(Value::int_object(2)),
+            Some(BuiltinFunction::Print),
+        );
+        assert!(matches!(
+            global,
+            NameResolution::Value(value) if value.as_int() == Some(2)
+        ));
+
+        let builtin = resolve_name(None, None, Some(BuiltinFunction::Len));
+        assert!(matches!(
+            builtin,
+            NameResolution::Builtin(BuiltinFunction::Len)
+        ));
+    }
+
+    #[test]
+    fn resolve_name_reports_missing() {
+        assert!(matches!(
+            resolve_name(None, None, None),
+            NameResolution::Missing
+        ));
+    }
 }
