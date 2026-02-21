@@ -17,6 +17,7 @@ pub(super) enum ExecResult {
 /// Runtime executor for interpreted statements and expressions.
 pub(super) struct InterpreterRuntime<'a> {
     pub(super) functions: &'a HashMap<String, Function>,
+    pub(super) function_names_by_id: HashMap<u32, &'a str>,
     pub(super) output: Vec<String>,
 }
 
@@ -32,32 +33,40 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        match callable_id {
-            CallableId::Builtin(builtin) => {
-                call_builtin_with_output(*builtin, args, &mut self.runtime.output)
-            }
-            CallableId::Function(name) => {
-                let function = self
-                    .runtime
-                    .functions
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?;
-                RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
-                let mut local_scope = HashMap::new();
-                for (param, value) in function.params.iter().zip(args) {
-                    local_scope.insert(param.clone(), value);
-                }
-                let mut local_environment = self.environment.child_with_locals(&mut local_scope);
-                match self
-                    .runtime
-                    .exec_block(&function.body, &mut local_environment)
-                    .map_err(runtime_error_from_interpreter)?
-                {
-                    ExecResult::Continue => Ok(Value::none_object()),
-                    ExecResult::Return(value) => Ok(value),
-                }
-            }
+        let callable_id = callable_id.as_u32();
+        if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
+            return call_builtin_with_output(builtin, args, &mut self.runtime.output);
+        }
+
+        let function_name = self
+            .runtime
+            .function_names_by_id
+            .get(&callable_id)
+            .copied()
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: format!("<callable:{callable_id}>"),
+            })?;
+        let function = self
+            .runtime
+            .functions
+            .get(function_name)
+            .cloned()
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: function_name.to_string(),
+            })?;
+        RuntimeError::expect_function_arity(function_name, function.params.len(), args.len())?;
+        let mut local_scope = HashMap::new();
+        for (param, value) in function.params.iter().zip(args) {
+            local_scope.insert(param.clone(), value);
+        }
+        let mut local_environment = self.environment.child_with_locals(&mut local_scope);
+        match self
+            .runtime
+            .exec_block(&function.body, &mut local_environment)
+            .map_err(runtime_error_from_interpreter)?
+        {
+            ExecResult::Continue => Ok(Value::none_object()),
+            ExecResult::Return(value) => Ok(value),
         }
     }
 }

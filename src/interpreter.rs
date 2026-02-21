@@ -5,6 +5,7 @@ use crate::ast::{Program, Statement};
 use crate::backend::{Backend, PreparedBackend};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::Environment;
+use crate::runtime::object::CallableId;
 
 mod error;
 mod runtime;
@@ -42,8 +43,14 @@ impl PreparedInterpreter {
         // -> eval_expression -> eval_call -> exec_block (function body).
         let mut globals = HashMap::new();
         let mut environment = Environment::top_level(&mut globals);
+        let function_names_by_id = self
+            .functions
+            .keys()
+            .map(|name| (CallableId::function(name).as_u32(), name.as_str()))
+            .collect::<HashMap<_, _>>();
         let mut runtime = InterpreterRuntime {
             functions: &self.functions,
+            function_names_by_id,
             output: Vec::new(),
         };
         match runtime.exec_block(&self.main_statements, &mut environment)? {

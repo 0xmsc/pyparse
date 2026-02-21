@@ -73,6 +73,7 @@ pub(super) struct Runtime {
     interned_values: Vec<Box<Value>>,
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
+    function_names_by_id: FxHashMap<u32, String>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
     symbol_names: Vec<String>,
@@ -125,6 +126,10 @@ fn resolve_name(
 
 impl Runtime {
     fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
+        let function_names_by_id = functions
+            .keys()
+            .map(|name| (CallableId::function(name).as_u32(), name.clone()))
+            .collect::<FxHashMap<_, _>>();
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
@@ -138,6 +143,7 @@ impl Runtime {
             interned_values,
             int_intern: FxHashMap::default(),
             functions,
+            function_names_by_id,
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
             symbol_names: Vec::new(),
@@ -282,8 +288,9 @@ impl CallContext for Runtime {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
-        match callable_id {
-            CallableId::Builtin(builtin) => match builtin {
+        let callable_id = callable_id.as_u32();
+        if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
+            return match builtin {
                 BuiltinFunction::Print => {
                     let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
                     self.output.push(rendered.join(" "));
@@ -293,44 +300,48 @@ impl CallContext for Runtime {
                     RuntimeError::expect_function_arity("len", 1, args.len())?;
                     args[0].len()
                 }
-            },
-            CallableId::Function(name) => {
-                let function = self
-                    .functions
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?;
-                RuntimeError::expect_function_arity(name, function.arity, args.len())?;
-
-                let mut arg_values = args;
-                let mut frame =
-                    FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
-                for (param, arg) in function.params.iter().zip(arg_values.iter()) {
-                    let symbol = self.intern_symbol_name(param);
-                    frame.insert(symbol, arg.clone());
-                }
-
-                let mut arg_ptrs = Vec::with_capacity(arg_values.len());
-                for arg in &mut arg_values {
-                    arg_ptrs.push(arg as *mut Value);
-                }
-
-                self.call_frames.push(frame);
-                let runtime_ptr = self as *mut Runtime;
-                let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
-                self.call_frames.pop();
-                if result.is_null() {
-                    if let Some(error) = self.runtime_error.clone() {
-                        return Err(error);
-                    }
-                    return Err(RuntimeError::UnsupportedOperation {
-                        operation: "call".to_string(),
-                        type_name: "function".to_string(),
-                    });
-                }
-                Ok(unsafe { (&*result).clone() })
-            }
+            };
         }
+
+        let function_name = self.function_names_by_id.get(&callable_id).ok_or_else(|| {
+            RuntimeError::UndefinedFunction {
+                name: format!("<callable:{callable_id}>"),
+            }
+        })?;
+        let function = self.functions.get(function_name).cloned().ok_or_else(|| {
+            RuntimeError::UndefinedFunction {
+                name: function_name.to_string(),
+            }
+        })?;
+        RuntimeError::expect_function_arity(function_name, function.arity, args.len())?;
+
+        let mut arg_values = args;
+        let mut frame =
+            FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
+        for (param, arg) in function.params.iter().zip(arg_values.iter()) {
+            let symbol = self.intern_symbol_name(param);
+            frame.insert(symbol, arg.clone());
+        }
+
+        let mut arg_ptrs = Vec::with_capacity(arg_values.len());
+        for arg in &mut arg_values {
+            arg_ptrs.push(arg as *mut Value);
+        }
+
+        self.call_frames.push(frame);
+        let runtime_ptr = self as *mut Runtime;
+        let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
+        self.call_frames.pop();
+        if result.is_null() {
+            if let Some(error) = self.runtime_error.clone() {
+                return Err(error);
+            }
+            return Err(RuntimeError::UnsupportedOperation {
+                operation: "call".to_string(),
+                type_name: "function".to_string(),
+            });
+        }
+        Ok(unsafe { (&*result).clone() })
     }
 }
 

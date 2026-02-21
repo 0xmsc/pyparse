@@ -35,6 +35,7 @@ pub(super) fn run_compiled_program(
 /// Stateful bytecode executor shared across nested VM function calls.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
+    function_names_by_id: HashMap<u32, &'a str>,
     output: Vec<String>,
     stack: Vec<Value>,
 }
@@ -51,39 +52,53 @@ impl CallContext for VmCallContext<'_, '_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        match callable_id {
-            CallableId::Builtin(builtin) => {
-                call_builtin_with_output(*builtin, args, &mut self.runtime.output)
-            }
-            CallableId::Function(name) => {
-                let function = self
-                    .runtime
-                    .program
-                    .functions
-                    .get(name)
-                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?
-                    .clone();
-                RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
-                let mut locals_map = HashMap::new();
-                for (param, value) in function.params.iter().zip(args) {
-                    locals_map.insert(param.to_string(), value);
-                }
-                let mut child_environment = self.environment.child_with_locals(&mut locals_map);
-                let parent_stack = std::mem::take(&mut self.runtime.stack);
-                let result = self
-                    .runtime
-                    .execute_code(&function.code, &mut child_environment);
-                self.runtime.stack = parent_stack;
-                result.map_err(map_vm_error_to_runtime_error)
-            }
+        let callable_id = callable_id.as_u32();
+        if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
+            return call_builtin_with_output(builtin, args, &mut self.runtime.output);
         }
+
+        let function_name = self
+            .runtime
+            .function_names_by_id
+            .get(&callable_id)
+            .copied()
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: format!("<callable:{callable_id}>"),
+            })?;
+        let function = self
+            .runtime
+            .program
+            .functions
+            .get(function_name)
+            .ok_or_else(|| RuntimeError::UndefinedFunction {
+                name: function_name.to_string(),
+            })?
+            .clone();
+        RuntimeError::expect_function_arity(function_name, function.params.len(), args.len())?;
+        let mut locals_map = HashMap::new();
+        for (param, value) in function.params.iter().zip(args) {
+            locals_map.insert(param.to_string(), value);
+        }
+        let mut child_environment = self.environment.child_with_locals(&mut locals_map);
+        let parent_stack = std::mem::take(&mut self.runtime.stack);
+        let result = self
+            .runtime
+            .execute_code(&function.code, &mut child_environment);
+        self.runtime.stack = parent_stack;
+        result.map_err(map_vm_error_to_runtime_error)
     }
 }
 
 impl<'a> VmRuntime<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
+        let function_names_by_id = program
+            .functions
+            .keys()
+            .map(|name| (CallableId::function(name).as_u32(), name.as_str()))
+            .collect::<HashMap<_, _>>();
         Self {
             program,
+            function_names_by_id,
             output: Vec::new(),
             stack: Vec::new(),
         }

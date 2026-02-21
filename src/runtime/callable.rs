@@ -93,7 +93,7 @@ impl RuntimeObject for BuiltinFunctionObject {
         match attribute {
             "__call__" => {
                 let builtin = self.builtin;
-                let callable_id = CallableId::Builtin(builtin);
+                let callable_id = CallableId::builtin(builtin);
                 Ok(bound_method(move |context, args| {
                     context.call_callable(&callable_id, args)
                 }))
@@ -118,7 +118,7 @@ impl RuntimeObject for BuiltinFunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_callable(&CallableId::Builtin(self.builtin), args)
+        context.call_callable(&CallableId::builtin(self.builtin), args)
     }
 }
 
@@ -138,7 +138,7 @@ impl RuntimeObject for FunctionObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         match attribute {
             "__call__" => {
-                let callable_id = CallableId::Function(self.name.clone());
+                let callable_id = CallableId::function(&self.name);
                 Ok(bound_method(move |context, args| {
                     context.call_callable(&callable_id, args)
                 }))
@@ -164,7 +164,7 @@ impl RuntimeObject for FunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_callable(&CallableId::Function(self.name.clone()), args)
+        context.call_callable(&CallableId::function(&self.name), args)
     }
 }
 
