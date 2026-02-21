@@ -7,21 +7,32 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::list::ListObject;
 use crate::runtime::value::Value;
 
+/// Backend callback interface used by runtime values for indirect calls.
+///
+/// `Value`/`RuntimeObject` use this to invoke builtins and user-defined
+/// functions without depending on a specific execution backend.
 pub(crate) trait CallContext {
+    /// Calls a builtin with already-evaluated arguments.
     fn call_builtin(
         &mut self,
         builtin: BuiltinFunction,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError>;
 
+    /// Calls a user-defined function by its symbol/name.
     fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError>;
 }
 
+/// Shared closure type used for bound methods and method wrappers.
 pub(crate) type BoundMethodCallable =
     Rc<dyn Fn(&mut dyn CallContext, Vec<Value>) -> Result<Value, RuntimeError>>;
 
+/// Shared heap handle for all runtime objects wrapped by `Value`.
 pub(crate) type ObjectRef = Rc<RefCell<Box<dyn RuntimeObject>>>;
 
+/// Object protocol implemented by all runtime object types.
+///
+/// Default implementations report unsupported attribute access/calls.
 pub(crate) trait RuntimeObject: std::fmt::Debug + Any {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;

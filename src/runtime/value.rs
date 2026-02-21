@@ -13,12 +13,17 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
+/// Boxed runtime value shared across interpreter, VM, and JIT paths.
+///
+/// `Value` stores an object handle plus a small cached kind for common scalar
+/// types (`int`, `bool`, `None`) so hot-path checks avoid repeated downcasts.
 #[derive(Clone)]
 pub(crate) struct Value {
     object: ObjectRef,
     kind: ValueKind,
 }
 
+/// Fast-path tag used by `Value` for frequently queried primitive kinds.
 #[derive(Clone, Copy)]
 enum ValueKind {
     Int(i64),
@@ -342,6 +347,8 @@ impl Value {
     }
 }
 
+/// Minimal call context used when invoking magic methods that must not recurse
+/// into builtin/function dispatch.
 struct NoopCallContext;
 
 impl CallContext for NoopCallContext {

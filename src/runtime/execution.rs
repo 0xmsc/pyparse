@@ -4,6 +4,9 @@ use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::value::Value;
 
+/// Name-resolution scope used by interpreter and VM execution.
+///
+/// Locals shadow globals when present; top-level execution has no locals map.
 pub(crate) struct Environment<'a> {
     globals: &'a mut HashMap<String, Value>,
     locals: Option<&'a mut HashMap<String, Value>>,
@@ -60,6 +63,7 @@ impl<'a> Environment<'a> {
     }
 }
 
+/// Shared builtin-call implementation for backends that collect printed output.
 pub(crate) fn call_builtin_with_output(
     builtin: BuiltinFunction,
     args: Vec<Value>,

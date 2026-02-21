@@ -20,6 +20,7 @@ pub(super) struct InterpreterRuntime<'a> {
     pub(super) output: Vec<String>,
 }
 
+/// Call adapter passed into `Value` operations while running in interpreter mode.
 struct InterpreterCallContext<'runtime, 'functions, 'env> {
     runtime: &'runtime mut InterpreterRuntime<'functions>,
     environment: &'runtime mut Environment<'env>,

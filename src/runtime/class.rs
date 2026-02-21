@@ -5,6 +5,7 @@ use crate::runtime::value::Value;
 use std::any::Any;
 use std::collections::HashMap;
 
+/// Runtime representation of a Python-like class object.
 #[derive(Debug, Clone)]
 pub(crate) struct ClassObject {
     name: String,
@@ -25,6 +26,7 @@ impl ClassObject {
     }
 }
 
+/// Runtime representation of a class instance with per-instance attributes.
 #[derive(Debug, Clone)]
 pub(crate) struct InstanceObject {
     class: ObjectRef,

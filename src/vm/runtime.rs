@@ -10,6 +10,7 @@ use thiserror::Error;
 
 pub(super) type VmResult<T> = std::result::Result<T, VmError>;
 
+/// VM execution errors produced while running compiled bytecode.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub(super) enum VmError {
     #[error("Stack underflow")]
@@ -20,6 +21,7 @@ pub(super) enum VmError {
     InvalidJumpTarget,
 }
 
+/// Executes a compiled program with VM semantics and returns printed output.
 pub(super) fn run_compiled_program(
     program: &CompiledProgram,
     globals: &mut HashMap<String, Value>,
@@ -30,12 +32,14 @@ pub(super) fn run_compiled_program(
     Ok(runtime.output_string())
 }
 
+/// Stateful bytecode executor shared across nested VM function calls.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
     output: Vec<String>,
     stack: Vec<Value>,
 }
 
+/// Call adapter passed into `Value` operations while running in the VM backend.
 struct VmCallContext<'runtime, 'program, 'env> {
     runtime: &'runtime mut VmRuntime<'program>,
     environment: &'runtime mut Environment<'env>,

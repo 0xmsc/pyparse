@@ -6,6 +6,7 @@ use crate::runtime::value::Value;
 use std::any::Any;
 use std::fmt;
 
+/// Runtime wrapper for a built-in function symbol (e.g. `print`, `len`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BuiltinFunctionObject {
     builtin: BuiltinFunction,
@@ -17,6 +18,7 @@ impl BuiltinFunctionObject {
     }
 }
 
+/// Runtime wrapper for a user-defined function symbol.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FunctionObject {
     name: String,
@@ -38,6 +40,7 @@ enum CallableObjectKind {
     MethodWrapper,
 }
 
+/// Heap object for closures used as bound methods or method-wrapper objects.
 #[derive(Clone)]
 pub(crate) struct CallableObject {
     kind: CallableObjectKind,

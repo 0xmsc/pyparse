@@ -53,6 +53,7 @@ const MAX_INTERNED_INT: i64 = 16384;
 
 pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
+/// Metadata for a compiled JIT function callable from runtime dispatch.
 #[derive(Clone)]
 pub(super) struct CompiledFunctionPointer {
     pub(super) entry: EntryFunction,
@@ -60,6 +61,7 @@ pub(super) struct CompiledFunctionPointer {
     pub(super) params: Vec<String>,
 }
 
+/// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
     globals: HashMap<String, Value>,
     call_frames: Vec<HashMap<String, Value>>,

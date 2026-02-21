@@ -670,7 +670,9 @@ fn emit_define_class(
         )
     };
 
-    let call = builder.ins().call(
+    let class_value = emit_checked_runtime_call_result(
+        builder,
+        lowering,
         lowering.runtime.define_class,
         &[
             lowering.ctx_param,
@@ -683,9 +685,6 @@ fn emit_define_class(
             method_count_val,
         ],
     );
-    let class_value = builder.inst_results(call)[0];
-    let ok_block = lowering.check_null(builder, class_value);
-    builder.switch_to_block(ok_block);
     store_to_scope_with_name_ptr(builder, lowering, name_ptr, name_len_val, class_value);
     Ok(())
 }
@@ -712,13 +711,12 @@ fn emit_define_function(
         "fn_symbol",
         symbol,
     )?;
-    let call = builder.ins().call(
+    let function_value = emit_checked_runtime_call_result(
+        builder,
+        lowering,
         lowering.runtime.make_function,
         &[lowering.ctx_param, symbol_ptr, symbol_len_val],
     );
-    let function_value = builder.inst_results(call)[0];
-    let ok_block = lowering.check_null(builder, function_value);
-    builder.switch_to_block(ok_block);
     store_to_scope(builder, module, string_data, lowering, name, function_value)
 }
 
@@ -745,14 +743,12 @@ fn emit_load_name(
         name,
     )?;
 
-    let call = builder.ins().call(
+    emit_checked_runtime_call_and_push(
+        builder,
+        lowering,
         lowering.runtime.load_name,
         &[lowering.ctx_param, name_ptr, name_len_val],
     );
-    let result = builder.inst_results(call)[0];
-    let ok_block = lowering.check_null(builder, result);
-    builder.switch_to_block(ok_block);
-    lowering.push_value(builder, result);
     Ok(())
 }
 
@@ -791,6 +787,82 @@ fn emit_store_index(
     Ok(())
 }
 
+fn emit_runtime_call_result(
+    builder: &mut FunctionBuilder,
+    runtime_function: FuncRef,
+    args: &[Value],
+) -> Value {
+    let call = builder.ins().call(runtime_function, args);
+    builder.inst_results(call)[0]
+}
+
+fn emit_checked_runtime_call_result(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    runtime_function: FuncRef,
+    args: &[Value],
+) -> Value {
+    let result = emit_runtime_call_result(builder, runtime_function, args);
+    let ok_block = lowering.check_null(builder, result);
+    builder.switch_to_block(ok_block);
+    result
+}
+
+fn emit_runtime_call_and_push(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    runtime_function: FuncRef,
+    args: &[Value],
+) {
+    let result = emit_runtime_call_result(builder, runtime_function, args);
+    lowering.push_value(builder, result);
+}
+
+fn emit_checked_runtime_call_and_push(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    runtime_function: FuncRef,
+    args: &[Value],
+) {
+    let result = emit_checked_runtime_call_result(builder, lowering, runtime_function, args);
+    lowering.push_value(builder, result);
+}
+
+fn pop_binary_values(builder: &mut FunctionBuilder, lowering: &LoweringContext) -> (Value, Value) {
+    let right = lowering.pop_value(builder);
+    let left = lowering.pop_value(builder);
+    (left, right)
+}
+
+fn emit_binary_operation(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    runtime_function: FuncRef,
+) {
+    let (left, right) = pop_binary_values(builder, lowering);
+    emit_checked_runtime_call_and_push(
+        builder,
+        lowering,
+        runtime_function,
+        &[lowering.ctx_param, left, right],
+    );
+}
+
+fn store_stack_values_for_call_args(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    count: usize,
+) {
+    for arg_index in (0..count).rev() {
+        let arg_value = lowering.pop_value(builder);
+        let arg_addr = builder.ins().iadd_imm(
+            lowering.call_args_base,
+            (arg_index as i64) * lowering.ptr_size,
+        );
+        builder.ins().store(MemFlags::new(), arg_value, arg_addr, 0);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Lowers one bytecode instruction into Cranelift IR.
 ///
@@ -810,20 +882,22 @@ fn emit_instruction(
     match instruction {
         Instruction::PushInt(value) => {
             let imm = builder.ins().iconst(types::I64, *value);
-            let call = builder
-                .ins()
-                .call(lowering.runtime.make_int, &[lowering.ctx_param, imm]);
-            let result = builder.inst_results(call)[0];
-            lowering.push_value(builder, result);
+            emit_runtime_call_and_push(
+                builder,
+                lowering,
+                lowering.runtime.make_int,
+                &[lowering.ctx_param, imm],
+            );
             Ok(false)
         }
         Instruction::PushBool(value) => {
             let imm = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
-            let call = builder
-                .ins()
-                .call(lowering.runtime.make_bool, &[lowering.ctx_param, imm]);
-            let result = builder.inst_results(call)[0];
-            lowering.push_value(builder, result);
+            emit_runtime_call_and_push(
+                builder,
+                lowering,
+                lowering.runtime.make_bool,
+                &[lowering.ctx_param, imm],
+            );
             Ok(false)
         }
         Instruction::PushString(value) => {
@@ -835,42 +909,32 @@ fn emit_instruction(
                 "str",
                 value,
             )?;
-            let call = builder.ins().call(
+            emit_runtime_call_and_push(
+                builder,
+                lowering,
                 lowering.runtime.make_string,
                 &[lowering.ctx_param, data_ptr, len_val],
             );
-            let result = builder.inst_results(call)[0];
-            lowering.push_value(builder, result);
             Ok(false)
         }
         Instruction::BuildList(count) => {
-            for element_index in (0..*count).rev() {
-                let element = lowering.pop_value(builder);
-                let element_addr = builder.ins().iadd_imm(
-                    lowering.call_args_base,
-                    (element_index as i64) * lowering.ptr_size,
-                );
-                builder
-                    .ins()
-                    .store(MemFlags::new(), element, element_addr, 0);
-            }
+            store_stack_values_for_call_args(builder, lowering, *count);
             let count_val = builder.ins().iconst(types::I64, *count as i64);
-            let call = builder.ins().call(
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
                 lowering.runtime.make_list,
                 &[lowering.ctx_param, lowering.call_args_base, count_val],
             );
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
             Ok(false)
         }
         Instruction::PushNone => {
-            let call = builder
-                .ins()
-                .call(lowering.runtime.make_none, &[lowering.ctx_param]);
-            let result = builder.inst_results(call)[0];
-            lowering.push_value(builder, result);
+            emit_runtime_call_and_push(
+                builder,
+                lowering,
+                lowering.runtime.make_none,
+                &[lowering.ctx_param],
+            );
             Ok(false)
         }
         Instruction::DefineClass { name, methods } => {
@@ -890,53 +954,26 @@ fn emit_instruction(
             Ok(false)
         }
         Instruction::Add => {
-            let right = lowering.pop_value(builder);
-            let left = lowering.pop_value(builder);
-            let call = builder
-                .ins()
-                .call(lowering.runtime.add, &[lowering.ctx_param, left, right]);
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
+            emit_binary_operation(builder, lowering, lowering.runtime.add);
             Ok(false)
         }
         Instruction::Sub => {
-            let right = lowering.pop_value(builder);
-            let left = lowering.pop_value(builder);
-            let call = builder
-                .ins()
-                .call(lowering.runtime.sub, &[lowering.ctx_param, left, right]);
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
+            emit_binary_operation(builder, lowering, lowering.runtime.sub);
             Ok(false)
         }
         Instruction::LessThan => {
-            let right = lowering.pop_value(builder);
-            let left = lowering.pop_value(builder);
-            let call = builder.ins().call(
-                lowering.runtime.less_than,
-                &[lowering.ctx_param, left, right],
-            );
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
+            emit_binary_operation(builder, lowering, lowering.runtime.less_than);
             Ok(false)
         }
         Instruction::LoadIndex => {
             let index = lowering.pop_value(builder);
             let object = lowering.pop_value(builder);
-            let call = builder.ins().call(
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
                 lowering.runtime.load_index,
                 &[lowering.ctx_param, object, index],
             );
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
             Ok(false)
         }
         Instruction::StoreIndex(name) => {
@@ -953,14 +990,12 @@ fn emit_instruction(
                 "attr",
                 attribute,
             )?;
-            let call = builder.ins().call(
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
                 lowering.runtime.load_attr,
                 &[lowering.ctx_param, object, attribute_ptr, attribute_len_val],
             );
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
             Ok(false)
         }
         Instruction::StoreAttr(attribute) => {
@@ -987,17 +1022,12 @@ fn emit_instruction(
             Ok(false)
         }
         Instruction::Call { argc } => {
-            for arg_index in (0..*argc).rev() {
-                let arg_value = lowering.pop_value(builder);
-                let arg_addr = builder.ins().iadd_imm(
-                    lowering.call_args_base,
-                    (arg_index as i64) * lowering.ptr_size,
-                );
-                builder.ins().store(MemFlags::new(), arg_value, arg_addr, 0);
-            }
+            store_stack_values_for_call_args(builder, lowering, *argc);
             let callee = lowering.pop_value(builder);
             let argc_val = builder.ins().iconst(types::I64, *argc as i64);
-            let call = builder.ins().call(
+            emit_checked_runtime_call_and_push(
+                builder,
+                lowering,
                 lowering.runtime.call_value,
                 &[
                     lowering.ctx_param,
@@ -1006,10 +1036,6 @@ fn emit_instruction(
                     argc_val,
                 ],
             );
-            let result = builder.inst_results(call)[0];
-            let ok_block = lowering.check_null(builder, result);
-            builder.switch_to_block(ok_block);
-            lowering.push_value(builder, result);
             Ok(false)
         }
         Instruction::JumpIfFalse(target) => {
@@ -1036,10 +1062,11 @@ fn emit_instruction(
             Ok(false)
         }
         Instruction::Return => {
-            let call = builder
-                .ins()
-                .call(lowering.runtime.make_none, &[lowering.ctx_param]);
-            let result = builder.inst_results(call)[0];
+            let result = emit_runtime_call_result(
+                builder,
+                lowering.runtime.make_none,
+                &[lowering.ctx_param],
+            );
             builder.ins().return_(&[result]);
             Ok(true)
         }
