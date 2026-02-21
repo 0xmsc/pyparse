@@ -1,4 +1,3 @@
-use crate::builtins::BuiltinFunction;
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -9,46 +8,7 @@ use crate::runtime::value::Value;
 
 /// Stable identifier for a callable target used by runtime dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct CallableId(u32);
-
-pub(crate) const FIRST_USER_CALLABLE_ID: u32 = 1024;
-
-impl CallableId {
-    pub(crate) fn builtin(builtin: BuiltinFunction) -> Self {
-        Self(builtin.callable_id())
-    }
-
-    pub(crate) fn from_u32(callable_id: u32) -> Self {
-        Self(callable_id)
-    }
-
-    pub(crate) fn as_u32(self) -> u32 {
-        self.0
-    }
-}
-
-pub(crate) fn assign_user_callable_ids<'a, I>(function_names: I) -> Vec<(String, CallableId)>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut names = function_names
-        .into_iter()
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-    names
-        .into_iter()
-        .enumerate()
-        .map(|(offset, name)| {
-            let offset = u32::try_from(offset).expect("callable id offset overflow");
-            let callable_id = FIRST_USER_CALLABLE_ID
-                .checked_add(offset)
-                .expect("callable id overflow");
-            (name, CallableId::from_u32(callable_id))
-        })
-        .collect()
-}
+pub(crate) struct CallableId(pub(crate) u32);
 
 /// Backend callback interface used by runtime values for indirect calls.
 ///

@@ -94,7 +94,7 @@ impl RuntimeObject for BuiltinFunctionObject {
         match attribute {
             "__call__" => {
                 let builtin = self.builtin;
-                let callable_id = CallableId::builtin(builtin);
+                let callable_id = CallableId(builtin.callable_id());
                 Ok(bound_method(move |context, args| {
                     context.call_callable(&callable_id, args)
                 }))
@@ -119,7 +119,7 @@ impl RuntimeObject for BuiltinFunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_callable(&CallableId::builtin(self.builtin), args)
+        context.call_callable(&CallableId(self.builtin.callable_id()), args)
     }
 }
 

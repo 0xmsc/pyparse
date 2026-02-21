@@ -4,11 +4,12 @@ use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
-use crate::runtime::object::{CallContext, CallableId, assign_user_callable_ids};
+use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 use thiserror::Error;
 
 pub(super) type VmResult<T> = std::result::Result<T, VmError>;
+const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
 /// VM execution errors produced while running compiled bytecode.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -53,7 +54,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let callable_id = callable_id.as_u32();
+        let callable_id = callable_id.0;
         if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
             return call_builtin_with_output(builtin, args, &mut self.runtime.output);
         }
@@ -95,14 +96,8 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 
 impl<'a> VmRuntime<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        let mut function_ids_by_name = HashMap::new();
-        let mut function_names_by_id = HashMap::new();
-        for (name, callable_id) in
-            assign_user_callable_ids(program.functions.keys().map(String::as_str))
-        {
-            function_names_by_id.insert(callable_id.as_u32(), name.clone());
-            function_ids_by_name.insert(name, callable_id);
-        }
+        let (function_ids_by_name, function_names_by_id) =
+            build_function_id_maps(program.functions.keys().map(String::as_str));
         Self {
             program,
             function_ids_by_name,
@@ -304,6 +299,34 @@ impl<'a> VmRuntime<'a> {
         };
         callee.call(&mut context, args).map_err(Into::into)
     }
+}
+
+fn build_function_id_maps<'a, I>(
+    function_names: I,
+) -> (HashMap<String, CallableId>, HashMap<u32, String>)
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut names = function_names
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut ids_by_name = HashMap::new();
+    let mut names_by_id = HashMap::new();
+    for (offset, name) in names.into_iter().enumerate() {
+        let offset = u32::try_from(offset).expect("callable id offset overflow");
+        let callable_id = CallableId(
+            FIRST_USER_CALLABLE_ID
+                .checked_add(offset)
+                .expect("callable id overflow"),
+        );
+        names_by_id.insert(callable_id.0, name.clone());
+        ids_by_name.insert(name, callable_id);
+    }
+    (ids_by_name, names_by_id)
 }
 
 fn map_vm_error_to_runtime_error(error: VmError) -> RuntimeError {

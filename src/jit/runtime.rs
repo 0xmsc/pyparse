@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::{CallContext, CallableId, assign_user_callable_ids};
+use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -51,6 +51,7 @@ pub(super) enum RuntimeAbiType {
 
 const MIN_INTERNED_INT: i64 = -1_000_000;
 const MAX_INTERNED_INT: i64 = 1_000_000;
+const FIRST_USER_CALLABLE_ID: u32 = 1024;
 
 pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
@@ -125,14 +126,38 @@ fn resolve_name(
     NameResolution::Missing
 }
 
+fn build_function_id_maps<'a, I>(
+    function_names: I,
+) -> (FxHashMap<String, CallableId>, FxHashMap<u32, String>)
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut names = function_names
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+
+    let mut ids_by_name = FxHashMap::default();
+    let mut names_by_id = FxHashMap::default();
+    for (offset, name) in names.into_iter().enumerate() {
+        let offset = u32::try_from(offset).expect("callable id offset overflow");
+        let callable_id = CallableId(
+            FIRST_USER_CALLABLE_ID
+                .checked_add(offset)
+                .expect("callable id overflow"),
+        );
+        names_by_id.insert(callable_id.0, name.clone());
+        ids_by_name.insert(name, callable_id);
+    }
+    (ids_by_name, names_by_id)
+}
+
 impl Runtime {
     fn new(functions: Arc<FxHashMap<String, CompiledFunctionPointer>>) -> Self {
-        let mut function_ids_by_name = FxHashMap::default();
-        let mut function_names_by_id = FxHashMap::default();
-        for (name, callable_id) in assign_user_callable_ids(functions.keys().map(String::as_str)) {
-            function_names_by_id.insert(callable_id.as_u32(), name.clone());
-            function_ids_by_name.insert(name, callable_id);
-        }
+        let (function_ids_by_name, function_names_by_id) =
+            build_function_id_maps(functions.keys().map(String::as_str));
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
@@ -292,7 +317,7 @@ impl CallContext for Runtime {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
-        let callable_id = callable_id.as_u32();
+        let callable_id = callable_id.0;
         if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
             return match builtin {
                 BuiltinFunction::Print => {

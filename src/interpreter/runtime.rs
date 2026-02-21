@@ -34,7 +34,7 @@ impl CallContext for InterpreterCallContext<'_, '_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let callable_id = callable_id.as_u32();
+        let callable_id = callable_id.0;
         if let Some(builtin) = BuiltinFunction::from_callable_id(callable_id) {
             return call_builtin_with_output(builtin, args, &mut self.runtime.output);
         }
