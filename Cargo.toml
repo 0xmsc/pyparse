@@ -40,9 +40,5 @@ name = "jit"
 harness = false
 
 [[bench]]
-name = "transpiler"
-harness = false
-
-[[bench]]
 name = "python"
 harness = false

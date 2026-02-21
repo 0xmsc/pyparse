@@ -18,12 +18,4 @@ impl BuiltinFunction {
             Self::Len => 2,
         }
     }
-
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "print" => Some(Self::Print),
-            "len" => Some(Self::Len),
-            _ => None,
-        }
-    }
 }

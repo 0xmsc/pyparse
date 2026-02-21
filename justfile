@@ -12,7 +12,7 @@ bench:
 bench-parallel:
     cargo bench --no-run
     parallel --jobs 0 --group --keep-order 'cargo bench --bench "{}" -- --quick --noplot' \
-        ::: frontend interpreter vm jit transpiler python
+        ::: frontend interpreter vm jit python
 
 bench-summary: bench-parallel
     python3 scripts/bench_summary.py

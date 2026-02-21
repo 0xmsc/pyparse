@@ -8,7 +8,6 @@
 - Interpreter backend: direct AST execution.
 - VM backend: bytecode compiler + virtual machine.
 - JIT backend: Cranelift-based execution.
-- Transpiler backend: C code generation/runtime path.
 - Fixture-driven runtime tests under `tests/programs/`.
 
 ## Development

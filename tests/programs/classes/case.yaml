@@ -1,6 +1,5 @@
 class: runtime_success
 parity: true
-unsupported_backends: [transpiler]
 bench:
   enabled: false
   tags: [small, class_protocol]

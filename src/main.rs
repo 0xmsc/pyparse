@@ -48,15 +48,6 @@ fn main() -> Result<()> {
     }
     backend::jit::set_dump_clif(dump_clif);
 
-    if backend_name == "transpiler" {
-        let transpiler = backend::transpiler::Transpiler;
-        let output = transpiler.transpile(&program)?;
-        if !output.is_empty() {
-            print!("{output}");
-        }
-        return Ok(());
-    }
-
     for backend in backend::backends() {
         if backend.name() == backend_name {
             let output = backend.run(&program)?;
