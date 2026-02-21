@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, Signature, types};
+use cranelift_codegen::ir::{
+    AbiParam, Block, FuncRef, InstBuilder, MemFlags, Signature, StackSlot, Type, Value, types,
+};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
@@ -261,6 +263,155 @@ fn declare_runtime_functions(
     Ok(RuntimeFunctions { by_id })
 }
 
+#[derive(Clone, Copy)]
+struct RuntimeCalls {
+    make_int: FuncRef,
+    make_bool: FuncRef,
+    make_string: FuncRef,
+    make_none: FuncRef,
+    make_function: FuncRef,
+    make_list: FuncRef,
+    define_class: FuncRef,
+    add: FuncRef,
+    sub: FuncRef,
+    less_than: FuncRef,
+    less_than_truthy: FuncRef,
+    is_truthy: FuncRef,
+    call_value: FuncRef,
+    load_name: FuncRef,
+    store_name: FuncRef,
+    load_attr: FuncRef,
+    store_attr: FuncRef,
+    load_index: FuncRef,
+    store_index_value: FuncRef,
+    store_index_name: FuncRef,
+}
+
+struct LoweringContext {
+    ptr_type: Type,
+    ptr_size: i64,
+    ctx_param: Value,
+    runtime: RuntimeCalls,
+    sp_var: Variable,
+    stack_base: Value,
+    call_args_base: Value,
+    tmp_addr: Value,
+    locals_slot: Option<StackSlot>,
+    locals_set_slot: Option<StackSlot>,
+    local_indices: HashMap<String, i64>,
+    blocks: Vec<Block>,
+    error_block: Block,
+    code_len: usize,
+}
+
+impl LoweringContext {
+    fn block(&self, index: usize) -> Block {
+        self.blocks[index]
+    }
+
+    fn load_sp(&self, builder: &mut FunctionBuilder) -> Value {
+        builder.use_var(self.sp_var)
+    }
+
+    fn stack_addr(&self, builder: &mut FunctionBuilder, index: Value) -> Value {
+        let offset = builder.ins().imul_imm(index, self.ptr_size);
+        builder.ins().iadd(self.stack_base, offset)
+    }
+
+    fn push_value(&self, builder: &mut FunctionBuilder, value: Value) {
+        let sp_value = self.load_sp(builder);
+        let addr = self.stack_addr(builder, sp_value);
+        builder.ins().store(MemFlags::new(), value, addr, 0);
+        let new_sp = builder.ins().iadd_imm(sp_value, 1);
+        builder.def_var(self.sp_var, new_sp);
+    }
+
+    fn pop_value(&self, builder: &mut FunctionBuilder) -> Value {
+        let sp_value = self.load_sp(builder);
+        let new_sp = builder.ins().iadd_imm(sp_value, -1);
+        builder.def_var(self.sp_var, new_sp);
+        let addr = self.stack_addr(builder, new_sp);
+        builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0)
+    }
+
+    fn check_null(&self, builder: &mut FunctionBuilder, value: Value) -> Block {
+        let ok_block = builder.create_block();
+        let is_null = builder.ins().icmp_imm(IntCC::Equal, value, 0);
+        builder
+            .ins()
+            .brif(is_null, self.error_block, &[], ok_block, &[]);
+        ok_block
+    }
+
+    fn local_index(&self, name: &str) -> Option<i64> {
+        self.local_indices.get(name).copied()
+    }
+
+    fn resolve_target(&self, ip: usize, offset: isize) -> Result<usize> {
+        resolve_relative_target(ip, offset, self.code_len)
+    }
+
+    fn local_bases(&self, builder: &mut FunctionBuilder) -> Result<(Value, Value)> {
+        let locals_slot = self
+            .locals_slot
+            .ok_or_else(|| anyhow::anyhow!("Missing locals storage"))?;
+        let locals_set_slot = self
+            .locals_set_slot
+            .ok_or_else(|| anyhow::anyhow!("Missing locals set storage"))?;
+        let locals_base = builder.ins().stack_addr(self.ptr_type, locals_slot, 0);
+        let locals_set_base = builder.ins().stack_addr(self.ptr_type, locals_set_slot, 0);
+        Ok((locals_base, locals_set_base))
+    }
+
+    fn store_local(
+        &self,
+        builder: &mut FunctionBuilder,
+        local_idx: i64,
+        value: Value,
+    ) -> Result<()> {
+        let (locals_base, locals_set_base) = self.local_bases(builder)?;
+        let local_addr = builder
+            .ins()
+            .iadd_imm(locals_base, local_idx * self.ptr_size);
+        builder.ins().store(MemFlags::new(), value, local_addr, 0);
+        let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
+        let one = builder.ins().iconst(types::I8, 1);
+        builder.ins().store(MemFlags::new(), one, set_addr, 0);
+        Ok(())
+    }
+
+    fn load_local(&self, builder: &mut FunctionBuilder, local_idx: i64) -> Result<Value> {
+        let (locals_base, _) = self.local_bases(builder)?;
+        let local_addr = builder
+            .ins()
+            .iadd_imm(locals_base, local_idx * self.ptr_size);
+        Ok(builder
+            .ins()
+            .load(self.ptr_type, MemFlags::new(), local_addr, 0))
+    }
+
+    fn local_is_set_flag(&self, builder: &mut FunctionBuilder, local_idx: i64) -> Result<Value> {
+        let (_, locals_set_base) = self.local_bases(builder)?;
+        let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
+        Ok(builder.ins().load(types::I8, MemFlags::new(), set_addr, 0))
+    }
+}
+
+fn declare_string_literal(
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    builder: &mut FunctionBuilder,
+    ptr_type: Type,
+    prefix: &str,
+    value: &str,
+) -> Result<(Value, Value)> {
+    let (data_id, len) = string_data.declare(module, prefix, value)?;
+    let gv = module.declare_data_in_func(data_id, builder.func);
+    let data_ptr = builder.ins().global_value(ptr_type, gv);
+    let len_val = builder.ins().iconst(types::I64, len);
+    Ok((data_ptr, len_val))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn define_function(
     module: &mut JITModule,
@@ -365,6 +516,28 @@ fn define_function(
         runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
         &mut ctx.func,
     );
+    let runtime_calls = RuntimeCalls {
+        make_int,
+        make_bool,
+        make_string,
+        make_none,
+        make_function,
+        make_list,
+        define_class,
+        add,
+        sub,
+        less_than,
+        less_than_truthy,
+        is_truthy,
+        call_value,
+        load_name,
+        store_name,
+        load_attr,
+        store_attr,
+        load_index,
+        store_index_value,
+        store_index_name,
+    };
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -468,578 +641,50 @@ fn define_function(
     }
     let error_block = builder.create_block();
 
-    builder.ins().jump(blocks[0], &[]);
+    let lowering = LoweringContext {
+        ptr_type,
+        ptr_size,
+        ctx_param,
+        runtime: runtime_calls,
+        sp_var,
+        stack_base,
+        call_args_base,
+        tmp_addr,
+        locals_slot,
+        locals_set_slot,
+        local_indices,
+        blocks,
+        error_block,
+        code_len: code.len(),
+    };
+
+    builder.ins().jump(lowering.block(0), &[]);
 
     // Translate bytecode instructions into Cranelift IR.
     for (idx, instruction) in code.iter().enumerate() {
-        let block = blocks[idx];
-        builder.switch_to_block(block);
-        let mut terminated = false;
-
-        let _load_sp = |builder: &mut FunctionBuilder| builder.use_var(sp_var);
-        // Read current logical stack depth.
-        let load_sp = |builder: &mut FunctionBuilder| builder.use_var(sp_var);
-        // Translate a logical stack index to an address in `stack_slot`.
-        let stack_addr = |builder: &mut FunctionBuilder, index| {
-            let offset = builder.ins().imul_imm(index, ptr_size);
-            builder.ins().iadd(stack_base, offset)
-        };
-        // Push: store at current SP, then increment SP.
-        let push_value = |builder: &mut FunctionBuilder, value| {
-            let sp_value = load_sp(builder);
-            let addr = stack_addr(builder, sp_value);
-            builder.ins().store(MemFlags::new(), value, addr, 0);
-            let new_sp = builder.ins().iadd_imm(sp_value, 1);
-            builder.def_var(sp_var, new_sp);
-        };
-        // Pop: decrement SP first, then load the new top value.
-        let pop_value = |builder: &mut FunctionBuilder| {
-            let sp_value = load_sp(builder);
-            let new_sp = builder.ins().iadd_imm(sp_value, -1);
-            builder.def_var(sp_var, new_sp);
-            let addr = stack_addr(builder, new_sp);
-            builder.ins().load(ptr_type, MemFlags::new(), addr, 0)
-        };
-        // Runtime helpers return null on error; branch to shared error block.
-        let check_null = |builder: &mut FunctionBuilder, value| {
-            let ok_block = builder.create_block();
-            let is_null = builder.ins().icmp_imm(IntCC::Equal, value, 0);
-            builder.ins().brif(is_null, error_block, &[], ok_block, &[]);
-            ok_block
-        };
-
-        match instruction {
-            Instruction::PushInt(value) => {
-                let imm = builder.ins().iconst(types::I64, *value);
-                let call = builder.ins().call(make_int, &[ctx_param, imm]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
-            Instruction::PushBool(value) => {
-                let imm = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
-                let call = builder.ins().call(make_bool, &[ctx_param, imm]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
-            Instruction::PushString(value) => {
-                let (data_id, len) = string_data.declare(module, "str", value)?;
-                let gv = module.declare_data_in_func(data_id, builder.func);
-                let data_ptr = builder.ins().global_value(ptr_type, gv);
-                let len_val = builder.ins().iconst(types::I64, len);
-                let call = builder
-                    .ins()
-                    .call(make_string, &[ctx_param, data_ptr, len_val]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
-            Instruction::BuildList(count) => {
-                for element_index in (0..*count).rev() {
-                    let element = pop_value(&mut builder);
-                    let element_addr = builder
-                        .ins()
-                        .iadd_imm(call_args_base, (element_index as i64) * ptr_size);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), element, element_addr, 0);
-                }
-                let count_val = builder.ins().iconst(types::I64, *count as i64);
-                let call = builder
-                    .ins()
-                    .call(make_list, &[ctx_param, call_args_base, count_val]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::PushNone => {
-                let call = builder.ins().call(make_none, &[ctx_param]);
-                let result = builder.inst_results(call)[0];
-                push_value(&mut builder, result);
-            }
-            Instruction::DefineClass { name, methods } => {
-                let (name_data_id, name_len) = string_data.declare(module, "class_name", name)?;
-                let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                let name_len_val = builder.ins().iconst(types::I64, name_len);
-
-                let method_count = methods.len();
-                let method_count_val = builder.ins().iconst(types::I64, method_count as i64);
-                let zero_ptr = builder.ins().iconst(ptr_type, 0);
-
-                let (
-                    method_name_ptrs_base,
-                    method_name_lens_base,
-                    method_symbol_ptrs_base,
-                    method_symbol_lens_base,
-                ) = if method_count == 0 {
-                    (zero_ptr, zero_ptr, zero_ptr, zero_ptr)
-                } else {
-                    let len_align_shift =
-                        (std::mem::size_of::<i64>() as u32).trailing_zeros() as u8;
-                    let method_name_ptrs_slot =
-                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            (method_count as u32) * (ptr_size as u32),
-                            ptr_align_shift,
-                        ));
-                    let method_name_lens_slot =
-                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            (method_count as u32) * (std::mem::size_of::<i64>() as u32),
-                            len_align_shift,
-                        ));
-                    let method_symbol_ptrs_slot =
-                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            (method_count as u32) * (ptr_size as u32),
-                            ptr_align_shift,
-                        ));
-                    let method_symbol_lens_slot =
-                        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            (method_count as u32) * (std::mem::size_of::<i64>() as u32),
-                            len_align_shift,
-                        ));
-
-                    let method_name_ptrs_base =
-                        builder.ins().stack_addr(ptr_type, method_name_ptrs_slot, 0);
-                    let method_name_lens_base =
-                        builder.ins().stack_addr(ptr_type, method_name_lens_slot, 0);
-                    let method_symbol_ptrs_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, method_symbol_ptrs_slot, 0);
-                    let method_symbol_lens_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, method_symbol_lens_slot, 0);
-
-                    for (method_index, (method_name, method_symbol)) in methods.iter().enumerate() {
-                        let (method_name_data_id, method_name_len) =
-                            string_data.declare(module, "method_name", method_name)?;
-                        let method_name_gv =
-                            module.declare_data_in_func(method_name_data_id, builder.func);
-                        let method_name_ptr = builder.ins().global_value(ptr_type, method_name_gv);
-                        let method_name_len_val = builder.ins().iconst(types::I64, method_name_len);
-                        let method_name_ptr_addr = builder
-                            .ins()
-                            .iadd_imm(method_name_ptrs_base, (method_index as i64) * ptr_size);
-                        let method_name_len_addr = builder.ins().iadd_imm(
-                            method_name_lens_base,
-                            (method_index as i64) * (std::mem::size_of::<i64>() as i64),
-                        );
-                        builder.ins().store(
-                            MemFlags::new(),
-                            method_name_ptr,
-                            method_name_ptr_addr,
-                            0,
-                        );
-                        builder.ins().store(
-                            MemFlags::new(),
-                            method_name_len_val,
-                            method_name_len_addr,
-                            0,
-                        );
-
-                        let (method_symbol_data_id, method_symbol_len) =
-                            string_data.declare(module, "method_symbol", method_symbol)?;
-                        let method_symbol_gv =
-                            module.declare_data_in_func(method_symbol_data_id, builder.func);
-                        let method_symbol_ptr =
-                            builder.ins().global_value(ptr_type, method_symbol_gv);
-                        let method_symbol_len_val =
-                            builder.ins().iconst(types::I64, method_symbol_len);
-                        let method_symbol_ptr_addr = builder
-                            .ins()
-                            .iadd_imm(method_symbol_ptrs_base, (method_index as i64) * ptr_size);
-                        let method_symbol_len_addr = builder.ins().iadd_imm(
-                            method_symbol_lens_base,
-                            (method_index as i64) * (std::mem::size_of::<i64>() as i64),
-                        );
-                        builder.ins().store(
-                            MemFlags::new(),
-                            method_symbol_ptr,
-                            method_symbol_ptr_addr,
-                            0,
-                        );
-                        builder.ins().store(
-                            MemFlags::new(),
-                            method_symbol_len_val,
-                            method_symbol_len_addr,
-                            0,
-                        );
-                    }
-
-                    (
-                        method_name_ptrs_base,
-                        method_name_lens_base,
-                        method_symbol_ptrs_base,
-                        method_symbol_lens_base,
-                    )
-                };
-
-                let call = builder.ins().call(
-                    define_class,
-                    &[
-                        ctx_param,
-                        name_ptr,
-                        name_len_val,
-                        method_name_ptrs_base,
-                        method_name_lens_base,
-                        method_symbol_ptrs_base,
-                        method_symbol_lens_base,
-                        method_count_val,
-                    ],
-                );
-                let class_value = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, class_value);
-                builder.switch_to_block(ok_block);
-
-                if let Some(local_idx) = local_indices.get(name).copied() {
-                    if locals_set_slot.is_none() || locals_slot.is_none() {
-                        bail!("Missing locals storage for '{name}'");
-                    }
-                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-                    let locals_set_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-                    let local_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), class_value, local_addr, 0);
-                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-                    let one = builder.ins().iconst(types::I8, 1);
-                    builder.ins().store(MemFlags::new(), one, set_addr, 0);
-                } else {
-                    builder.ins().call(
-                        store_name,
-                        &[ctx_param, name_ptr, name_len_val, class_value],
-                    );
-                }
-            }
-            Instruction::DefineFunction { name, symbol } => {
-                let (symbol_data_id, symbol_len) =
-                    string_data.declare(module, "fn_symbol", symbol)?;
-                let symbol_gv = module.declare_data_in_func(symbol_data_id, builder.func);
-                let symbol_ptr = builder.ins().global_value(ptr_type, symbol_gv);
-                let symbol_len_val = builder.ins().iconst(types::I64, symbol_len);
-                let call = builder
-                    .ins()
-                    .call(make_function, &[ctx_param, symbol_ptr, symbol_len_val]);
-                let function_value = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, function_value);
-                builder.switch_to_block(ok_block);
-
-                if let Some(local_idx) = local_indices.get(name).copied() {
-                    if locals_set_slot.is_none() || locals_slot.is_none() {
-                        bail!("Missing locals storage for '{name}'");
-                    }
-                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-                    let locals_set_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-                    let local_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
-                    builder
-                        .ins()
-                        .store(MemFlags::new(), function_value, local_addr, 0);
-                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-                    let one = builder.ins().iconst(types::I8, 1);
-                    builder.ins().store(MemFlags::new(), one, set_addr, 0);
-                } else {
-                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
-                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                    let name_len_val = builder.ins().iconst(types::I64, name_len);
-                    builder.ins().call(
-                        store_name,
-                        &[ctx_param, name_ptr, name_len_val, function_value],
-                    );
-                }
-            }
-            Instruction::LoadName(name) => {
-                let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
-                let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                let name_len_val = builder.ins().iconst(types::I64, name_len);
-
-                if let Some(local_idx) = local_indices.get(name).copied() {
-                    if locals_set_slot.is_none() || locals_slot.is_none() {
-                        bail!("Missing locals storage for '{name}'");
-                    }
-                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-                    let locals_set_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-                    let is_set = builder.ins().load(types::I8, MemFlags::new(), set_addr, 0);
-                    let local_block = builder.create_block();
-                    let global_block = builder.create_block();
-                    let cont_block = builder.create_block();
-                    builder
-                        .ins()
-                        .brif(is_set, local_block, &[], global_block, &[]);
-
-                    builder.switch_to_block(local_block);
-                    let local_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
-                    let local_val = builder.ins().load(ptr_type, MemFlags::new(), local_addr, 0);
-                    builder.ins().store(MemFlags::new(), local_val, tmp_addr, 0);
-                    builder.ins().jump(cont_block, &[]);
-
-                    builder.switch_to_block(global_block);
-                    let call = builder
-                        .ins()
-                        .call(load_name, &[ctx_param, name_ptr, name_len_val]);
-                    let result = builder.inst_results(call)[0];
-                    let ok_block = check_null(&mut builder, result);
-                    builder.switch_to_block(ok_block);
-                    builder.ins().store(MemFlags::new(), result, tmp_addr, 0);
-                    builder.ins().jump(cont_block, &[]);
-
-                    builder.switch_to_block(cont_block);
-                    let value = builder.ins().load(ptr_type, MemFlags::new(), tmp_addr, 0);
-                    push_value(&mut builder, value);
-                } else {
-                    let call = builder
-                        .ins()
-                        .call(load_name, &[ctx_param, name_ptr, name_len_val]);
-                    let result = builder.inst_results(call)[0];
-                    let ok_block = check_null(&mut builder, result);
-                    builder.switch_to_block(ok_block);
-                    push_value(&mut builder, result);
-                }
-            }
-            Instruction::StoreName(name) => {
-                let value = pop_value(&mut builder);
-                if let Some(local_idx) = local_indices.get(name).copied() {
-                    if locals_set_slot.is_none() || locals_slot.is_none() {
-                        bail!("Missing locals storage for '{name}'");
-                    }
-                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-                    let locals_set_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-                    let local_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
-                    builder.ins().store(MemFlags::new(), value, local_addr, 0);
-                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-                    let one = builder.ins().iconst(types::I8, 1);
-                    builder.ins().store(MemFlags::new(), one, set_addr, 0);
-                } else {
-                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
-                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                    let name_len_val = builder.ins().iconst(types::I64, name_len);
-                    builder
-                        .ins()
-                        .call(store_name, &[ctx_param, name_ptr, name_len_val, value]);
-                }
-            }
-            Instruction::Add => {
-                let right = pop_value(&mut builder);
-                let left = pop_value(&mut builder);
-                let call = builder.ins().call(add, &[ctx_param, left, right]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::Sub => {
-                let right = pop_value(&mut builder);
-                let left = pop_value(&mut builder);
-                let call = builder.ins().call(sub, &[ctx_param, left, right]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::LessThan => {
-                let right = pop_value(&mut builder);
-                let left = pop_value(&mut builder);
-                if let Some(Instruction::JumpIfFalse(target)) = code.get(idx + 1) {
-                    let call = builder
-                        .ins()
-                        .call(less_than_truthy, &[ctx_param, left, right]);
-                    let truthy_or_error = builder.inst_results(call)[0];
-                    let non_error_block = builder.create_block();
-                    let is_error = builder.ins().icmp_imm(IntCC::Equal, truthy_or_error, 2);
-                    builder
-                        .ins()
-                        .brif(is_error, error_block, &[], non_error_block, &[]);
-                    builder.switch_to_block(non_error_block);
-                    let target_index = resolve_relative_target(idx + 1, *target, code.len())?;
-                    builder.ins().brif(
-                        truthy_or_error,
-                        blocks[idx + 2],
-                        &[],
-                        blocks[target_index],
-                        &[],
-                    );
-                    terminated = true;
-                } else {
-                    let call = builder.ins().call(less_than, &[ctx_param, left, right]);
-                    let result = builder.inst_results(call)[0];
-                    let ok_block = check_null(&mut builder, result);
-                    builder.switch_to_block(ok_block);
-                    push_value(&mut builder, result);
-                }
-            }
-            Instruction::LoadIndex => {
-                let index = pop_value(&mut builder);
-                let object = pop_value(&mut builder);
-                let call = builder.ins().call(load_index, &[ctx_param, object, index]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::StoreIndex(name) => {
-                let value = pop_value(&mut builder);
-                let index = pop_value(&mut builder);
-                if let Some(local_idx) = local_indices.get(name).copied() {
-                    if locals_set_slot.is_none() || locals_slot.is_none() {
-                        bail!("Missing locals storage for '{name}'");
-                    }
-                    let locals_base = builder.ins().stack_addr(ptr_type, locals_slot.unwrap(), 0);
-                    let locals_set_base =
-                        builder
-                            .ins()
-                            .stack_addr(ptr_type, locals_set_slot.unwrap(), 0);
-                    let set_addr = builder.ins().iadd_imm(locals_set_base, local_idx);
-                    let is_set = builder.ins().load(types::I8, MemFlags::new(), set_addr, 0);
-                    let local_block = builder.create_block();
-                    let global_block = builder.create_block();
-                    let cont_block = builder.create_block();
-                    builder
-                        .ins()
-                        .brif(is_set, local_block, &[], global_block, &[]);
-
-                    builder.switch_to_block(local_block);
-                    let target_addr = builder.ins().iadd_imm(locals_base, local_idx * ptr_size);
-                    let target_value =
-                        builder
-                            .ins()
-                            .load(ptr_type, MemFlags::new(), target_addr, 0);
-                    builder
-                        .ins()
-                        .call(store_index_value, &[ctx_param, target_value, index, value]);
-                    builder.ins().jump(cont_block, &[]);
-
-                    builder.switch_to_block(global_block);
-                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
-                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                    let name_len_val = builder.ins().iconst(types::I64, name_len);
-                    builder.ins().call(
-                        store_index_name,
-                        &[ctx_param, name_ptr, name_len_val, index, value],
-                    );
-                    builder.ins().jump(cont_block, &[]);
-
-                    builder.switch_to_block(cont_block);
-                } else {
-                    let (name_data_id, name_len) = string_data.declare(module, "name", name)?;
-                    let name_gv = module.declare_data_in_func(name_data_id, builder.func);
-                    let name_ptr = builder.ins().global_value(ptr_type, name_gv);
-                    let name_len_val = builder.ins().iconst(types::I64, name_len);
-                    builder.ins().call(
-                        store_index_name,
-                        &[ctx_param, name_ptr, name_len_val, index, value],
-                    );
-                }
-            }
-            Instruction::LoadAttr(attribute) => {
-                let object = pop_value(&mut builder);
-                let (attribute_data_id, attribute_len) =
-                    string_data.declare(module, "attr", attribute)?;
-                let attribute_gv = module.declare_data_in_func(attribute_data_id, builder.func);
-                let attribute_ptr = builder.ins().global_value(ptr_type, attribute_gv);
-                let attribute_len_val = builder.ins().iconst(types::I64, attribute_len);
-                let call = builder.ins().call(
-                    load_attr,
-                    &[ctx_param, object, attribute_ptr, attribute_len_val],
-                );
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::StoreAttr(attribute) => {
-                let object = pop_value(&mut builder);
-                let value = pop_value(&mut builder);
-                let (attribute_data_id, attribute_len) =
-                    string_data.declare(module, "attr", attribute)?;
-                let attribute_gv = module.declare_data_in_func(attribute_data_id, builder.func);
-                let attribute_ptr = builder.ins().global_value(ptr_type, attribute_gv);
-                let attribute_len_val = builder.ins().iconst(types::I64, attribute_len);
-                builder.ins().call(
-                    store_attr,
-                    &[ctx_param, object, attribute_ptr, attribute_len_val, value],
-                );
-            }
-            Instruction::Call { argc } => {
-                for arg_index in (0..*argc).rev() {
-                    let arg_value = pop_value(&mut builder);
-                    let arg_addr = builder
-                        .ins()
-                        .iadd_imm(call_args_base, (arg_index as i64) * ptr_size);
-                    builder.ins().store(MemFlags::new(), arg_value, arg_addr, 0);
-                }
-                let callee = pop_value(&mut builder);
-                let argc_val = builder.ins().iconst(types::I64, *argc as i64);
-                let call = builder
-                    .ins()
-                    .call(call_value, &[ctx_param, callee, call_args_base, argc_val]);
-                let result = builder.inst_results(call)[0];
-                let ok_block = check_null(&mut builder, result);
-                builder.switch_to_block(ok_block);
-                push_value(&mut builder, result);
-            }
-            Instruction::JumpIfFalse(target) => {
-                let target_index = resolve_relative_target(idx, *target, code.len())?;
-                let value = pop_value(&mut builder);
-                let call = builder.ins().call(is_truthy, &[value]);
-                let truthy = builder.inst_results(call)[0];
-                builder
-                    .ins()
-                    .brif(truthy, blocks[idx + 1], &[], blocks[target_index], &[]);
-                terminated = true;
-            }
-            Instruction::Jump(target) => {
-                let target_index = resolve_relative_target(idx, *target, code.len())?;
-                builder.ins().jump(blocks[target_index], &[]);
-                terminated = true;
-            }
-            Instruction::Pop => {
-                pop_value(&mut builder);
-            }
-            Instruction::Return => {
-                let call = builder.ins().call(make_none, &[ctx_param]);
-                let result = builder.inst_results(call)[0];
-                builder.ins().return_(&[result]);
-                terminated = true;
-            }
-            Instruction::ReturnValue => {
-                let value = pop_value(&mut builder);
-                builder.ins().return_(&[value]);
-                terminated = true;
-            }
-        }
-
+        builder.switch_to_block(lowering.block(idx));
+        let terminated = emit_instruction(
+            &mut builder,
+            module,
+            string_data,
+            &lowering,
+            code,
+            idx,
+            instruction,
+        )?;
         if !terminated {
-            builder.ins().jump(blocks[idx + 1], &[]);
+            builder.ins().jump(lowering.block(idx + 1), &[]);
         }
     }
 
-    let exit_block = blocks[code.len()];
-    builder.switch_to_block(exit_block);
-    let call = builder.ins().call(make_none, &[ctx_param]);
+    builder.switch_to_block(lowering.block(code.len()));
+    let call = builder
+        .ins()
+        .call(lowering.runtime.make_none, &[lowering.ctx_param]);
     let result = builder.inst_results(call)[0];
     builder.ins().return_(&[result]);
 
-    builder.switch_to_block(error_block);
+    builder.switch_to_block(lowering.error_block);
     let null_ptr = builder.ins().iconst(ptr_type, 0);
     builder.ins().return_(&[null_ptr]);
 
@@ -1053,6 +698,636 @@ fn define_function(
     module.clear_context(&mut ctx);
 
     Ok(())
+}
+
+fn store_to_scope_with_name_ptr(
+    builder: &mut FunctionBuilder,
+    lowering: &LoweringContext,
+    name: &str,
+    name_ptr: Value,
+    name_len: Value,
+    value: Value,
+) -> Result<()> {
+    if let Some(local_idx) = lowering.local_index(name) {
+        lowering.store_local(builder, local_idx, value)?;
+    } else {
+        builder.ins().call(
+            lowering.runtime.store_name,
+            &[lowering.ctx_param, name_ptr, name_len, value],
+        );
+    }
+    Ok(())
+}
+
+fn store_to_scope(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+    value: Value,
+) -> Result<()> {
+    let (name_ptr, name_len) = declare_string_literal(
+        module,
+        string_data,
+        builder,
+        lowering.ptr_type,
+        "name",
+        name,
+    )?;
+    store_to_scope_with_name_ptr(builder, lowering, name, name_ptr, name_len, value)
+}
+
+fn emit_define_class(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+    methods: &[(String, String)],
+) -> Result<()> {
+    let (name_ptr, name_len_val) = declare_string_literal(
+        module,
+        string_data,
+        builder,
+        lowering.ptr_type,
+        "class_name",
+        name,
+    )?;
+
+    let method_count = methods.len();
+    let method_count_val = builder.ins().iconst(types::I64, method_count as i64);
+    let zero_ptr = builder.ins().iconst(lowering.ptr_type, 0);
+
+    let (
+        method_name_ptrs_base,
+        method_name_lens_base,
+        method_symbol_ptrs_base,
+        method_symbol_lens_base,
+    ) = if method_count == 0 {
+        (zero_ptr, zero_ptr, zero_ptr, zero_ptr)
+    } else {
+        let len_align_shift = (std::mem::size_of::<i64>() as u32).trailing_zeros() as u8;
+        let method_name_ptrs_slot =
+            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                (method_count as u32) * (lowering.ptr_size as u32),
+                (lowering.ptr_size as u32).trailing_zeros() as u8,
+            ));
+        let method_name_lens_slot =
+            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                (method_count as u32) * (std::mem::size_of::<i64>() as u32),
+                len_align_shift,
+            ));
+        let method_symbol_ptrs_slot =
+            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                (method_count as u32) * (lowering.ptr_size as u32),
+                (lowering.ptr_size as u32).trailing_zeros() as u8,
+            ));
+        let method_symbol_lens_slot =
+            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                (method_count as u32) * (std::mem::size_of::<i64>() as u32),
+                len_align_shift,
+            ));
+
+        let method_name_ptrs_base =
+            builder
+                .ins()
+                .stack_addr(lowering.ptr_type, method_name_ptrs_slot, 0);
+        let method_name_lens_base =
+            builder
+                .ins()
+                .stack_addr(lowering.ptr_type, method_name_lens_slot, 0);
+        let method_symbol_ptrs_base =
+            builder
+                .ins()
+                .stack_addr(lowering.ptr_type, method_symbol_ptrs_slot, 0);
+        let method_symbol_lens_base =
+            builder
+                .ins()
+                .stack_addr(lowering.ptr_type, method_symbol_lens_slot, 0);
+
+        for (method_index, (method_name, method_symbol)) in methods.iter().enumerate() {
+            let (method_name_ptr, method_name_len_val) = declare_string_literal(
+                module,
+                string_data,
+                builder,
+                lowering.ptr_type,
+                "method_name",
+                method_name,
+            )?;
+            let method_name_ptr_addr = builder.ins().iadd_imm(
+                method_name_ptrs_base,
+                (method_index as i64) * lowering.ptr_size,
+            );
+            let method_name_len_addr = builder.ins().iadd_imm(
+                method_name_lens_base,
+                (method_index as i64) * (std::mem::size_of::<i64>() as i64),
+            );
+            builder
+                .ins()
+                .store(MemFlags::new(), method_name_ptr, method_name_ptr_addr, 0);
+            builder.ins().store(
+                MemFlags::new(),
+                method_name_len_val,
+                method_name_len_addr,
+                0,
+            );
+
+            let (method_symbol_ptr, method_symbol_len_val) = declare_string_literal(
+                module,
+                string_data,
+                builder,
+                lowering.ptr_type,
+                "method_symbol",
+                method_symbol,
+            )?;
+            let method_symbol_ptr_addr = builder.ins().iadd_imm(
+                method_symbol_ptrs_base,
+                (method_index as i64) * lowering.ptr_size,
+            );
+            let method_symbol_len_addr = builder.ins().iadd_imm(
+                method_symbol_lens_base,
+                (method_index as i64) * (std::mem::size_of::<i64>() as i64),
+            );
+            builder.ins().store(
+                MemFlags::new(),
+                method_symbol_ptr,
+                method_symbol_ptr_addr,
+                0,
+            );
+            builder.ins().store(
+                MemFlags::new(),
+                method_symbol_len_val,
+                method_symbol_len_addr,
+                0,
+            );
+        }
+
+        (
+            method_name_ptrs_base,
+            method_name_lens_base,
+            method_symbol_ptrs_base,
+            method_symbol_lens_base,
+        )
+    };
+
+    let call = builder.ins().call(
+        lowering.runtime.define_class,
+        &[
+            lowering.ctx_param,
+            name_ptr,
+            name_len_val,
+            method_name_ptrs_base,
+            method_name_lens_base,
+            method_symbol_ptrs_base,
+            method_symbol_lens_base,
+            method_count_val,
+        ],
+    );
+    let class_value = builder.inst_results(call)[0];
+    let ok_block = lowering.check_null(builder, class_value);
+    builder.switch_to_block(ok_block);
+    store_to_scope_with_name_ptr(builder, lowering, name, name_ptr, name_len_val, class_value)
+}
+
+fn emit_define_function(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+    symbol: &str,
+) -> Result<()> {
+    let (symbol_ptr, symbol_len_val) = declare_string_literal(
+        module,
+        string_data,
+        builder,
+        lowering.ptr_type,
+        "fn_symbol",
+        symbol,
+    )?;
+    let call = builder.ins().call(
+        lowering.runtime.make_function,
+        &[lowering.ctx_param, symbol_ptr, symbol_len_val],
+    );
+    let function_value = builder.inst_results(call)[0];
+    let ok_block = lowering.check_null(builder, function_value);
+    builder.switch_to_block(ok_block);
+    store_to_scope(builder, module, string_data, lowering, name, function_value)
+}
+
+fn emit_load_name(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+) -> Result<()> {
+    let (name_ptr, name_len_val) = declare_string_literal(
+        module,
+        string_data,
+        builder,
+        lowering.ptr_type,
+        "name",
+        name,
+    )?;
+
+    if let Some(local_idx) = lowering.local_index(name) {
+        let is_set = lowering.local_is_set_flag(builder, local_idx)?;
+        let local_block = builder.create_block();
+        let global_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_set, local_block, &[], global_block, &[]);
+
+        builder.switch_to_block(local_block);
+        let local_val = lowering.load_local(builder, local_idx)?;
+        builder
+            .ins()
+            .store(MemFlags::new(), local_val, lowering.tmp_addr, 0);
+        builder.ins().jump(cont_block, &[]);
+
+        builder.switch_to_block(global_block);
+        let call = builder.ins().call(
+            lowering.runtime.load_name,
+            &[lowering.ctx_param, name_ptr, name_len_val],
+        );
+        let result = builder.inst_results(call)[0];
+        let ok_block = lowering.check_null(builder, result);
+        builder.switch_to_block(ok_block);
+        builder
+            .ins()
+            .store(MemFlags::new(), result, lowering.tmp_addr, 0);
+        builder.ins().jump(cont_block, &[]);
+
+        builder.switch_to_block(cont_block);
+        let value = builder
+            .ins()
+            .load(lowering.ptr_type, MemFlags::new(), lowering.tmp_addr, 0);
+        lowering.push_value(builder, value);
+    } else {
+        let call = builder.ins().call(
+            lowering.runtime.load_name,
+            &[lowering.ctx_param, name_ptr, name_len_val],
+        );
+        let result = builder.inst_results(call)[0];
+        let ok_block = lowering.check_null(builder, result);
+        builder.switch_to_block(ok_block);
+        lowering.push_value(builder, result);
+    }
+    Ok(())
+}
+
+fn emit_store_name(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+) -> Result<()> {
+    let value = lowering.pop_value(builder);
+    store_to_scope(builder, module, string_data, lowering, name, value)
+}
+
+fn emit_store_index(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    name: &str,
+) -> Result<()> {
+    let value = lowering.pop_value(builder);
+    let index = lowering.pop_value(builder);
+    if let Some(local_idx) = lowering.local_index(name) {
+        let is_set = lowering.local_is_set_flag(builder, local_idx)?;
+        let local_block = builder.create_block();
+        let global_block = builder.create_block();
+        let cont_block = builder.create_block();
+        builder
+            .ins()
+            .brif(is_set, local_block, &[], global_block, &[]);
+
+        builder.switch_to_block(local_block);
+        let target_value = lowering.load_local(builder, local_idx)?;
+        builder.ins().call(
+            lowering.runtime.store_index_value,
+            &[lowering.ctx_param, target_value, index, value],
+        );
+        builder.ins().jump(cont_block, &[]);
+
+        builder.switch_to_block(global_block);
+        let (name_ptr, name_len_val) = declare_string_literal(
+            module,
+            string_data,
+            builder,
+            lowering.ptr_type,
+            "name",
+            name,
+        )?;
+        builder.ins().call(
+            lowering.runtime.store_index_name,
+            &[lowering.ctx_param, name_ptr, name_len_val, index, value],
+        );
+        builder.ins().jump(cont_block, &[]);
+
+        builder.switch_to_block(cont_block);
+    } else {
+        let (name_ptr, name_len_val) = declare_string_literal(
+            module,
+            string_data,
+            builder,
+            lowering.ptr_type,
+            "name",
+            name,
+        )?;
+        builder.ins().call(
+            lowering.runtime.store_index_name,
+            &[lowering.ctx_param, name_ptr, name_len_val, index, value],
+        );
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_instruction(
+    builder: &mut FunctionBuilder,
+    module: &mut JITModule,
+    string_data: &mut StringData,
+    lowering: &LoweringContext,
+    code: &[Instruction],
+    idx: usize,
+    instruction: &Instruction,
+) -> Result<bool> {
+    match instruction {
+        Instruction::PushInt(value) => {
+            let imm = builder.ins().iconst(types::I64, *value);
+            let call = builder
+                .ins()
+                .call(lowering.runtime.make_int, &[lowering.ctx_param, imm]);
+            let result = builder.inst_results(call)[0];
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::PushBool(value) => {
+            let imm = builder.ins().iconst(types::I8, if *value { 1 } else { 0 });
+            let call = builder
+                .ins()
+                .call(lowering.runtime.make_bool, &[lowering.ctx_param, imm]);
+            let result = builder.inst_results(call)[0];
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::PushString(value) => {
+            let (data_ptr, len_val) = declare_string_literal(
+                module,
+                string_data,
+                builder,
+                lowering.ptr_type,
+                "str",
+                value,
+            )?;
+            let call = builder.ins().call(
+                lowering.runtime.make_string,
+                &[lowering.ctx_param, data_ptr, len_val],
+            );
+            let result = builder.inst_results(call)[0];
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::BuildList(count) => {
+            for element_index in (0..*count).rev() {
+                let element = lowering.pop_value(builder);
+                let element_addr = builder.ins().iadd_imm(
+                    lowering.call_args_base,
+                    (element_index as i64) * lowering.ptr_size,
+                );
+                builder
+                    .ins()
+                    .store(MemFlags::new(), element, element_addr, 0);
+            }
+            let count_val = builder.ins().iconst(types::I64, *count as i64);
+            let call = builder.ins().call(
+                lowering.runtime.make_list,
+                &[lowering.ctx_param, lowering.call_args_base, count_val],
+            );
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::PushNone => {
+            let call = builder
+                .ins()
+                .call(lowering.runtime.make_none, &[lowering.ctx_param]);
+            let result = builder.inst_results(call)[0];
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::DefineClass { name, methods } => {
+            emit_define_class(builder, module, string_data, lowering, name, methods)?;
+            Ok(false)
+        }
+        Instruction::DefineFunction { name, symbol } => {
+            emit_define_function(builder, module, string_data, lowering, name, symbol)?;
+            Ok(false)
+        }
+        Instruction::LoadName(name) => {
+            emit_load_name(builder, module, string_data, lowering, name)?;
+            Ok(false)
+        }
+        Instruction::StoreName(name) => {
+            emit_store_name(builder, module, string_data, lowering, name)?;
+            Ok(false)
+        }
+        Instruction::Add => {
+            let right = lowering.pop_value(builder);
+            let left = lowering.pop_value(builder);
+            let call = builder
+                .ins()
+                .call(lowering.runtime.add, &[lowering.ctx_param, left, right]);
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::Sub => {
+            let right = lowering.pop_value(builder);
+            let left = lowering.pop_value(builder);
+            let call = builder
+                .ins()
+                .call(lowering.runtime.sub, &[lowering.ctx_param, left, right]);
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::LessThan => {
+            let right = lowering.pop_value(builder);
+            let left = lowering.pop_value(builder);
+            if let Some(Instruction::JumpIfFalse(target)) = code.get(idx + 1) {
+                let call = builder.ins().call(
+                    lowering.runtime.less_than_truthy,
+                    &[lowering.ctx_param, left, right],
+                );
+                let truthy_or_error = builder.inst_results(call)[0];
+                let non_error_block = builder.create_block();
+                let is_error = builder.ins().icmp_imm(IntCC::Equal, truthy_or_error, 2);
+                builder
+                    .ins()
+                    .brif(is_error, lowering.error_block, &[], non_error_block, &[]);
+                builder.switch_to_block(non_error_block);
+                let target_index = lowering.resolve_target(idx + 1, *target)?;
+                builder.ins().brif(
+                    truthy_or_error,
+                    lowering.block(idx + 2),
+                    &[],
+                    lowering.block(target_index),
+                    &[],
+                );
+                Ok(true)
+            } else {
+                let call = builder.ins().call(
+                    lowering.runtime.less_than,
+                    &[lowering.ctx_param, left, right],
+                );
+                let result = builder.inst_results(call)[0];
+                let ok_block = lowering.check_null(builder, result);
+                builder.switch_to_block(ok_block);
+                lowering.push_value(builder, result);
+                Ok(false)
+            }
+        }
+        Instruction::LoadIndex => {
+            let index = lowering.pop_value(builder);
+            let object = lowering.pop_value(builder);
+            let call = builder.ins().call(
+                lowering.runtime.load_index,
+                &[lowering.ctx_param, object, index],
+            );
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::StoreIndex(name) => {
+            emit_store_index(builder, module, string_data, lowering, name)?;
+            Ok(false)
+        }
+        Instruction::LoadAttr(attribute) => {
+            let object = lowering.pop_value(builder);
+            let (attribute_ptr, attribute_len_val) = declare_string_literal(
+                module,
+                string_data,
+                builder,
+                lowering.ptr_type,
+                "attr",
+                attribute,
+            )?;
+            let call = builder.ins().call(
+                lowering.runtime.load_attr,
+                &[lowering.ctx_param, object, attribute_ptr, attribute_len_val],
+            );
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::StoreAttr(attribute) => {
+            let object = lowering.pop_value(builder);
+            let value = lowering.pop_value(builder);
+            let (attribute_ptr, attribute_len_val) = declare_string_literal(
+                module,
+                string_data,
+                builder,
+                lowering.ptr_type,
+                "attr",
+                attribute,
+            )?;
+            builder.ins().call(
+                lowering.runtime.store_attr,
+                &[
+                    lowering.ctx_param,
+                    object,
+                    attribute_ptr,
+                    attribute_len_val,
+                    value,
+                ],
+            );
+            Ok(false)
+        }
+        Instruction::Call { argc } => {
+            for arg_index in (0..*argc).rev() {
+                let arg_value = lowering.pop_value(builder);
+                let arg_addr = builder.ins().iadd_imm(
+                    lowering.call_args_base,
+                    (arg_index as i64) * lowering.ptr_size,
+                );
+                builder.ins().store(MemFlags::new(), arg_value, arg_addr, 0);
+            }
+            let callee = lowering.pop_value(builder);
+            let argc_val = builder.ins().iconst(types::I64, *argc as i64);
+            let call = builder.ins().call(
+                lowering.runtime.call_value,
+                &[
+                    lowering.ctx_param,
+                    callee,
+                    lowering.call_args_base,
+                    argc_val,
+                ],
+            );
+            let result = builder.inst_results(call)[0];
+            let ok_block = lowering.check_null(builder, result);
+            builder.switch_to_block(ok_block);
+            lowering.push_value(builder, result);
+            Ok(false)
+        }
+        Instruction::JumpIfFalse(target) => {
+            let target_index = lowering.resolve_target(idx, *target)?;
+            let value = lowering.pop_value(builder);
+            let call = builder.ins().call(lowering.runtime.is_truthy, &[value]);
+            let truthy = builder.inst_results(call)[0];
+            builder.ins().brif(
+                truthy,
+                lowering.block(idx + 1),
+                &[],
+                lowering.block(target_index),
+                &[],
+            );
+            Ok(true)
+        }
+        Instruction::Jump(target) => {
+            let target_index = lowering.resolve_target(idx, *target)?;
+            builder.ins().jump(lowering.block(target_index), &[]);
+            Ok(true)
+        }
+        Instruction::Pop => {
+            lowering.pop_value(builder);
+            Ok(false)
+        }
+        Instruction::Return => {
+            let call = builder
+                .ins()
+                .call(lowering.runtime.make_none, &[lowering.ctx_param]);
+            let result = builder.inst_results(call)[0];
+            builder.ins().return_(&[result]);
+            Ok(true)
+        }
+        Instruction::ReturnValue => {
+            let value = lowering.pop_value(builder);
+            builder.ins().return_(&[value]);
+            Ok(true)
+        }
+    }
 }
 
 fn function_symbol(name: &str) -> String {
