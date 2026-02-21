@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledCallable, CompiledProgram, Instruction};
+use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
 use crate::runtime::object::{CallContext, CallableId};
@@ -15,12 +15,6 @@ struct RegisteredFunction {
     name: String,
     params: Vec<String>,
     code: Vec<Instruction>,
-}
-
-#[derive(Clone)]
-enum RegisteredCallable {
-    Builtin(BuiltinFunction),
-    Function(RegisteredFunction),
 }
 
 /// VM execution errors produced while running compiled bytecode.
@@ -49,8 +43,7 @@ pub(super) fn run_compiled_program(
 /// Stateful bytecode executor shared across nested VM function calls.
 struct VmRuntime<'a> {
     program: &'a CompiledProgram,
-    next_callable_id: u32,
-    callables_by_id: HashMap<u32, RegisteredCallable>,
+    call_registry: CallRegistry<RegisteredFunction>,
     output: Vec<String>,
     stack: Vec<Value>,
 }
@@ -67,15 +60,7 @@ impl CallContext for VmCallContext<'_, '_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let callable_id = callable_id.0;
-        let callable = self
-            .runtime
-            .callables_by_id
-            .get(&callable_id)
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: format!("<callable:{callable_id}>"),
-            })?
-            .clone();
+        let callable = self.runtime.call_registry.resolve(callable_id)?;
         let callable_function = match callable {
             RegisteredCallable::Builtin(builtin) => {
                 return call_builtin_with_output(builtin, args, &mut self.runtime.output);
@@ -103,21 +88,9 @@ impl CallContext for VmCallContext<'_, '_, '_> {
 
 impl<'a> VmRuntime<'a> {
     fn new(program: &'a CompiledProgram) -> Self {
-        let mut callables_by_id = HashMap::new();
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
-            callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
-        }
-        let next_callable_id = callables_by_id
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .expect("callable id overflow");
         Self {
             program,
-            next_callable_id,
-            callables_by_id,
+            call_registry: CallRegistry::new(),
             output: Vec::new(),
             stack: Vec::new(),
         }
@@ -135,14 +108,8 @@ impl<'a> VmRuntime<'a> {
                 name: format!("<callable:{compiled_callable_id}>"),
             })?;
         let function = registered_function_from_compiled(callable);
-        let callable_id = CallableId(self.next_callable_id);
-        self.next_callable_id = self
-            .next_callable_id
-            .checked_add(1)
-            .expect("callable id overflow");
+        let callable_id = self.call_registry.register_function(function.clone());
         let function_name = function.name.clone();
-        self.callables_by_id
-            .insert(callable_id.0, RegisteredCallable::Function(function));
         Ok((function_name, callable_id))
     }
 

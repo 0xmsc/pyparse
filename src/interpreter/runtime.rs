@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
-use crate::builtins::BuiltinFunction;
+use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::{CallContext, CallableId};
@@ -15,12 +15,6 @@ struct RegisteredFunction {
     body: Vec<Statement>,
 }
 
-#[derive(Clone)]
-enum RegisteredCallable {
-    Builtin(BuiltinFunction),
-    Function(RegisteredFunction),
-}
-
 /// Control-flow marker for statement execution.
 pub(super) enum ExecResult {
     Continue,
@@ -29,8 +23,7 @@ pub(super) enum ExecResult {
 
 /// Runtime executor for interpreted statements and expressions.
 pub(super) struct InterpreterRuntime {
-    next_callable_id: u32,
-    callables_by_id: HashMap<u32, RegisteredCallable>,
+    call_registry: CallRegistry<RegisteredFunction>,
     pub(super) output: Vec<String>,
 }
 
@@ -46,15 +39,7 @@ impl CallContext for InterpreterCallContext<'_, '_> {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        let callable_id = callable_id.0;
-        let callable = self
-            .runtime
-            .callables_by_id
-            .get(&callable_id)
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: format!("<callable:{callable_id}>"),
-            })?
-            .clone();
+        let callable = self.runtime.call_registry.resolve(callable_id)?;
         let callable_function = match callable {
             RegisteredCallable::Builtin(builtin) => {
                 return call_builtin_with_output(builtin, args, &mut self.runtime.output);
@@ -84,20 +69,8 @@ impl CallContext for InterpreterCallContext<'_, '_> {
 
 impl InterpreterRuntime {
     pub(super) fn new() -> Self {
-        let mut callables_by_id = HashMap::new();
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
-            callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
-        }
-        let next_callable_id = callables_by_id
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .expect("callable id overflow");
         Self {
-            next_callable_id,
-            callables_by_id,
+            call_registry: CallRegistry::new(),
             output: Vec::new(),
         }
     }
@@ -108,16 +81,8 @@ impl InterpreterRuntime {
         params: Vec<String>,
         body: Vec<Statement>,
     ) -> CallableId {
-        let callable_id = CallableId(self.next_callable_id);
-        self.next_callable_id = self
-            .next_callable_id
-            .checked_add(1)
-            .expect("callable id overflow");
-        self.callables_by_id.insert(
-            callable_id.0,
-            RegisteredCallable::Function(RegisteredFunction { name, params, body }),
-        );
-        callable_id
+        self.call_registry
+            .register_function(RegisteredFunction { name, params, body })
     }
 
     pub(super) fn exec_block(

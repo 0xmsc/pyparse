@@ -39,6 +39,12 @@ pub enum Instruction {
 
 type CompiledBlock = Vec<Instruction>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompileScope {
+    TopLevel,
+    FunctionBody,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledFunction {
     pub params: Vec<String>,
@@ -84,7 +90,7 @@ pub fn compile(program: &Program) -> Result<CompiledProgram> {
                     methods,
                 });
             }
-            _ => main.extend(compile_statement(statement, false)?),
+            _ => main.extend(compile_statement(statement, CompileScope::TopLevel)?),
         }
     }
 
@@ -113,7 +119,7 @@ fn define_callable(
 }
 
 fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFunction> {
-    let mut code = compile_block(body, true)?;
+    let mut code = compile_block(body, CompileScope::FunctionBody)?;
     code.push(Instruction::Return);
 
     Ok(CompiledFunction {
@@ -122,19 +128,19 @@ fn compile_function(params: &[String], body: &[Statement]) -> Result<CompiledFun
     })
 }
 
-fn compile_block(statements: &[Statement], in_function: bool) -> Result<CompiledBlock> {
+fn compile_block(statements: &[Statement], scope: CompileScope) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     for statement in statements {
-        code.extend(compile_statement(statement, in_function)?);
+        code.extend(compile_statement(statement, scope)?);
     }
     Ok(code)
 }
 
-fn compile_statement(statement: &Statement, in_function: bool) -> Result<CompiledBlock> {
+fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<CompiledBlock> {
     let mut code = Vec::new();
     match statement {
         Statement::ClassDef { .. } => {
-            if in_function {
+            if scope == CompileScope::FunctionBody {
                 bail!("Class definitions inside functions are not supported in the VM");
             } else {
                 bail!("Unexpected class definition during statement compilation");
@@ -162,8 +168,8 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
             else_body,
         } => {
             let condition_code = compile_expression(condition)?;
-            let then_code = compile_block(then_body, in_function)?;
-            let else_code = compile_block(else_body, in_function)?;
+            let then_code = compile_block(then_body, scope)?;
+            let else_code = compile_block(else_body, scope)?;
             let then_len = then_code.len();
             let else_len = else_code.len();
 
@@ -182,7 +188,7 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
         }
         Statement::While { condition, body } => {
             let condition_code = compile_expression(condition)?;
-            let body_code = compile_block(body, in_function)?;
+            let body_code = compile_block(body, scope)?;
             let condition_len = condition_code.len();
             let body_len = body_code.len();
 
@@ -193,7 +199,7 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
             code.push(Instruction::Jump(jump_back_offset));
         }
         Statement::Return(value) => {
-            if !in_function {
+            if scope != CompileScope::FunctionBody {
                 bail!("Return outside of function is not supported in the VM");
             }
             if let Some(value) = value {
@@ -209,7 +215,7 @@ fn compile_statement(statement: &Statement, in_function: bool) -> Result<Compile
             code.push(Instruction::Pop);
         }
         Statement::FunctionDef { .. } => {
-            if in_function {
+            if scope == CompileScope::FunctionBody {
                 bail!("Nested function definitions are not supported in the VM");
             } else {
                 bail!("Unexpected function definition during compilation");

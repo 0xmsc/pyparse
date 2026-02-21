@@ -7,6 +7,7 @@ use cranelift_jit::JITBuilder;
 use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
+use crate::runtime::call_registry::{CallRegistry, RegisteredCallable};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::call_builtin_with_output;
 use crate::runtime::object::{CallContext, CallableId};
@@ -69,12 +70,6 @@ struct RegisteredFunction {
     function: CompiledFunctionPointer,
 }
 
-#[derive(Clone)]
-enum RegisteredCallable {
-    Builtin(BuiltinFunction),
-    Function(RegisteredFunction),
-}
-
 /// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
     globals: FxHashMap<u32, Value>,
@@ -86,8 +81,7 @@ pub(super) struct Runtime {
     interned_values: Vec<Box<Value>>,
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<Vec<CompiledFunctionPointer>>,
-    next_callable_id: u32,
-    callables_by_id: FxHashMap<u32, RegisteredCallable>,
+    call_registry: CallRegistry<RegisteredFunction>,
     symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
     symbol_ids_by_name: FxHashMap<String, u32>,
     symbol_names: Vec<String>,
@@ -131,17 +125,6 @@ fn resolve_name(local_value: Option<Value>, global_value: Option<Value>) -> Name
 
 impl Runtime {
     fn new(functions: Arc<Vec<CompiledFunctionPointer>>) -> Self {
-        let mut callables_by_id = FxHashMap::default();
-        for builtin in [BuiltinFunction::Print, BuiltinFunction::Len] {
-            callables_by_id.insert(builtin.callable_id(), RegisteredCallable::Builtin(builtin));
-        }
-        let next_callable_id = callables_by_id
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .expect("callable id overflow");
         let interned_values = vec![
             Box::new(Value::bool_object(false)),
             Box::new(Value::bool_object(true)),
@@ -155,8 +138,7 @@ impl Runtime {
             interned_values,
             int_intern: FxHashMap::default(),
             functions,
-            next_callable_id,
-            callables_by_id,
+            call_registry: CallRegistry::new(),
             symbol_ids_by_ptr: FxHashMap::default(),
             symbol_ids_by_name: FxHashMap::default(),
             symbol_names: Vec::new(),
@@ -187,16 +169,10 @@ impl Runtime {
             .ok_or_else(|| RuntimeError::UndefinedFunction {
                 name: format!("<callable:{compiled_callable_id}>"),
             })?;
-        let callable_id = CallableId(self.next_callable_id);
-        self.next_callable_id = self
-            .next_callable_id
-            .checked_add(1)
-            .expect("callable id overflow");
+        let callable_id = self.call_registry.register_function(RegisteredFunction {
+            function: function.clone(),
+        });
         let function_name = function.name.clone();
-        self.callables_by_id.insert(
-            callable_id.0,
-            RegisteredCallable::Function(RegisteredFunction { function }),
-        );
         Ok((function_name, callable_id))
     }
 
@@ -326,14 +302,7 @@ impl CallContext for Runtime {
         callable_id: &CallableId,
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
-        let callable_id = callable_id.0;
-        let callable = self
-            .callables_by_id
-            .get(&callable_id)
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: format!("<callable:{callable_id}>"),
-            })?
-            .clone();
+        let callable = self.call_registry.resolve(callable_id)?;
         let callable_function = match callable {
             RegisteredCallable::Builtin(builtin) => {
                 return call_builtin_with_output(builtin, args, &mut self.output);
