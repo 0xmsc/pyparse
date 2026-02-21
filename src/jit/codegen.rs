@@ -222,6 +222,83 @@ struct RuntimeCalls {
     store_index_name: FuncRef,
 }
 
+impl RuntimeCalls {
+    fn import(
+        module: &mut JITModule,
+        runtime_funcs: &RuntimeFunctions,
+        func: &mut cranelift_codegen::ir::Function,
+    ) -> Result<Self> {
+        Ok(Self {
+            make_int: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeInt)?,
+                func,
+            ),
+            make_bool: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeBool)?,
+                func,
+            ),
+            make_string: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeString)?,
+                func,
+            ),
+            make_none: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeNone)?,
+                func,
+            ),
+            make_function: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeFunction)?,
+                func,
+            ),
+            make_list: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::MakeList)?,
+                func,
+            ),
+            define_class: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::DefineClass)?,
+                func,
+            ),
+            add: module
+                .declare_func_in_func(runtime_funcs.get(runtime::RuntimeFunctionId::Add)?, func),
+            sub: module
+                .declare_func_in_func(runtime_funcs.get(runtime::RuntimeFunctionId::Sub)?, func),
+            less_than: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::LessThan)?,
+                func,
+            ),
+            is_truthy: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::IsTruthy)?,
+                func,
+            ),
+            call_value: module
+                .declare_func_in_func(runtime_funcs.get(runtime::RuntimeFunctionId::Call)?, func),
+            load_name: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::LoadName)?,
+                func,
+            ),
+            store_name: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::StoreName)?,
+                func,
+            ),
+            load_attr: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::LoadAttr)?,
+                func,
+            ),
+            store_attr: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::StoreAttr)?,
+                func,
+            ),
+            load_index: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::LoadIndex)?,
+                func,
+            ),
+            store_index_name: module.declare_func_in_func(
+                runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
+                func,
+            ),
+        })
+    }
+}
+
 struct LoweringContext {
     ptr_type: Type,
     ptr_size: i64,
@@ -282,6 +359,18 @@ impl LoweringContext {
     }
 }
 
+fn create_explicit_stack_slot(
+    builder: &mut FunctionBuilder,
+    byte_size: u32,
+    align_shift: u8,
+) -> cranelift_codegen::ir::StackSlot {
+    builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+        byte_size,
+        align_shift,
+    ))
+}
+
 /// Materializes a string literal as readonly data and returns `(ptr, len)` IR values.
 ///
 /// Lowering pattern:
@@ -327,98 +416,7 @@ fn define_function(
     // Build this function in an isolated Cranelift compilation context.
     let mut ctx = module.make_context();
     ctx.func.signature = value_function_signature(module, ptr_type);
-    let make_int = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeInt)?,
-        &mut ctx.func,
-    );
-    let make_bool = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeBool)?,
-        &mut ctx.func,
-    );
-    let make_string = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeString)?,
-        &mut ctx.func,
-    );
-    let make_none = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeNone)?,
-        &mut ctx.func,
-    );
-    let make_function = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeFunction)?,
-        &mut ctx.func,
-    );
-    let make_list = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::MakeList)?,
-        &mut ctx.func,
-    );
-    let define_class = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::DefineClass)?,
-        &mut ctx.func,
-    );
-    let add = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::Add)?,
-        &mut ctx.func,
-    );
-    let sub = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::Sub)?,
-        &mut ctx.func,
-    );
-    let less_than = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::LessThan)?,
-        &mut ctx.func,
-    );
-    let is_truthy = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::IsTruthy)?,
-        &mut ctx.func,
-    );
-    let call_value = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::Call)?,
-        &mut ctx.func,
-    );
-    let load_name = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::LoadName)?,
-        &mut ctx.func,
-    );
-    let store_name = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::StoreName)?,
-        &mut ctx.func,
-    );
-    let load_attr = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::LoadAttr)?,
-        &mut ctx.func,
-    );
-    let store_attr = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::StoreAttr)?,
-        &mut ctx.func,
-    );
-    let load_index = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::LoadIndex)?,
-        &mut ctx.func,
-    );
-    let store_index_name = module.declare_func_in_func(
-        runtime_funcs.get(runtime::RuntimeFunctionId::StoreIndexName)?,
-        &mut ctx.func,
-    );
-    let runtime_calls = RuntimeCalls {
-        make_int,
-        make_bool,
-        make_string,
-        make_none,
-        make_function,
-        make_list,
-        define_class,
-        add,
-        sub,
-        less_than,
-        is_truthy,
-        call_value,
-        load_name,
-        store_name,
-        load_attr,
-        store_attr,
-        load_index,
-        store_index_name,
-    };
+    let runtime_calls = RuntimeCalls::import(module, runtime_funcs, &mut ctx.func)?;
 
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
@@ -432,17 +430,10 @@ fn define_function(
 
     // Reserve stack slots for the VM operand stack and call scratch space.
     let ptr_align_shift = (ptr_size as u32).trailing_zeros() as u8;
-    let stack_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-        cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-        (stack_size as u32) * (ptr_size as u32),
-        ptr_align_shift,
-    ));
+    let stack_slot_bytes = (stack_size as u32) * (ptr_size as u32);
+    let stack_slot = create_explicit_stack_slot(&mut builder, stack_slot_bytes, ptr_align_shift);
     let call_args_slot =
-        builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-            (stack_size as u32) * (ptr_size as u32),
-            ptr_align_shift,
-        ));
+        create_explicit_stack_slot(&mut builder, stack_slot_bytes, ptr_align_shift);
 
     // `stack_addr` returns a frame-relative pointer to the start of a stack slot.
     // These are the base addresses for our VM operand stack and call scratch space.
@@ -584,31 +575,18 @@ fn emit_define_class(
     ) = if method_count == 0 {
         (zero_ptr, zero_ptr, zero_ptr, zero_ptr)
     } else {
+        let ptr_align_shift = (lowering.ptr_size as u32).trailing_zeros() as u8;
         let len_align_shift = (std::mem::size_of::<i64>() as u32).trailing_zeros() as u8;
+        let pointer_array_bytes = (method_count as u32) * (lowering.ptr_size as u32);
+        let length_array_bytes = (method_count as u32) * (std::mem::size_of::<i64>() as u32);
         let method_name_ptrs_slot =
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                (method_count as u32) * (lowering.ptr_size as u32),
-                (lowering.ptr_size as u32).trailing_zeros() as u8,
-            ));
+            create_explicit_stack_slot(builder, pointer_array_bytes, ptr_align_shift);
         let method_name_lens_slot =
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                (method_count as u32) * (std::mem::size_of::<i64>() as u32),
-                len_align_shift,
-            ));
+            create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
         let method_symbol_ptrs_slot =
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                (method_count as u32) * (lowering.ptr_size as u32),
-                (lowering.ptr_size as u32).trailing_zeros() as u8,
-            ));
+            create_explicit_stack_slot(builder, pointer_array_bytes, ptr_align_shift);
         let method_symbol_lens_slot =
-            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
-                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                (method_count as u32) * (std::mem::size_of::<i64>() as u32),
-                len_align_shift,
-            ));
+            create_explicit_stack_slot(builder, length_array_bytes, len_align_shift);
 
         let method_name_ptrs_base =
             builder

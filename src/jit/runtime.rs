@@ -51,9 +51,7 @@ pub(super) enum RuntimeAbiType {
 const MIN_INTERNED_INT: i64 = -4096;
 const MAX_INTERNED_INT: i64 = 16384;
 
-pub(super) type RuntimeValue = Value;
-pub(super) type EntryFunction =
-    extern "C" fn(*mut Runtime, *const *mut RuntimeValue) -> *mut RuntimeValue;
+pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
 #[derive(Clone)]
 pub(super) struct CompiledFunctionPointer {
@@ -63,13 +61,13 @@ pub(super) struct CompiledFunctionPointer {
 }
 
 pub(super) struct Runtime {
-    globals: HashMap<String, RuntimeValue>,
-    call_frames: Vec<HashMap<String, RuntimeValue>>,
+    globals: HashMap<String, Value>,
+    call_frames: Vec<HashMap<String, Value>>,
     output: Vec<String>,
     #[allow(clippy::vec_box)]
-    values: Vec<Box<RuntimeValue>>,
+    values: Vec<Box<Value>>,
     #[allow(clippy::vec_box)]
-    interned_values: Vec<Box<RuntimeValue>>,
+    interned_values: Vec<Box<Value>>,
     int_intern: HashMap<i64, usize>,
     functions: Arc<HashMap<String, CompiledFunctionPointer>>,
     symbol_cache: HashMap<(usize, i64), String>,
@@ -79,12 +77,12 @@ pub(super) struct Runtime {
 
 #[derive(Debug, Clone)]
 enum NameResolution {
-    Value(RuntimeValue),
+    Value(Value),
     Builtin(BuiltinFunction),
     Missing,
 }
 
-fn bind_call_frame(params: &[String], args: &[RuntimeValue]) -> HashMap<String, RuntimeValue> {
+fn bind_call_frame(params: &[String], args: &[Value]) -> HashMap<String, Value> {
     params
         .iter()
         .cloned()
@@ -93,8 +91,8 @@ fn bind_call_frame(params: &[String], args: &[RuntimeValue]) -> HashMap<String, 
 }
 
 fn resolve_name(
-    local_value: Option<RuntimeValue>,
-    global_value: Option<RuntimeValue>,
+    local_value: Option<Value>,
+    global_value: Option<Value>,
     builtin: Option<BuiltinFunction>,
 ) -> NameResolution {
     if let Some(value) = local_value {
@@ -130,26 +128,26 @@ impl Runtime {
         }
     }
 
-    fn alloc_value(&mut self, value: RuntimeValue) -> *mut RuntimeValue {
+    fn alloc_value(&mut self, value: Value) -> *mut Value {
         let mut boxed = Box::new(value);
-        let ptr = &mut *boxed as *mut RuntimeValue;
+        let ptr = &mut *boxed as *mut Value;
         self.values.push(boxed);
         ptr
     }
 
-    fn interned_ptr(&mut self, index: usize) -> *mut RuntimeValue {
-        &mut *self.interned_values[index] as *mut RuntimeValue
+    fn interned_ptr(&mut self, index: usize) -> *mut Value {
+        &mut *self.interned_values[index] as *mut Value
     }
 
-    fn bool_ptr(&mut self, value: bool) -> *mut RuntimeValue {
+    fn bool_ptr(&mut self, value: bool) -> *mut Value {
         self.interned_ptr(if value { 1 } else { 0 })
     }
 
-    fn none_ptr(&mut self) -> *mut RuntimeValue {
+    fn none_ptr(&mut self) -> *mut Value {
         self.interned_ptr(2)
     }
 
-    fn int_ptr(&mut self, value: i64) -> *mut RuntimeValue {
+    fn int_ptr(&mut self, value: i64) -> *mut Value {
         if !(MIN_INTERNED_INT..=MAX_INTERNED_INT).contains(&value) {
             return self.alloc_value(Value::int_object(value));
         }
@@ -163,7 +161,7 @@ impl Runtime {
         self.interned_ptr(index)
     }
 
-    fn alloc_or_intern_value(&mut self, value: RuntimeValue) -> *mut RuntimeValue {
+    fn alloc_or_intern_value(&mut self, value: Value) -> *mut Value {
         if let Some(integer) = value.as_int() {
             return self.int_ptr(integer);
         }
@@ -199,7 +197,7 @@ impl Runtime {
         symbol
     }
 
-    fn load_named_value(&self, name: &str) -> Option<RuntimeValue> {
+    fn load_named_value(&self, name: &str) -> Option<Value> {
         if let Some(frame) = self.call_frames.last()
             && let Some(value) = frame.get(name)
         {
@@ -208,7 +206,7 @@ impl Runtime {
         self.globals.get(name).cloned()
     }
 
-    fn store_named_value(&mut self, name: String, value: RuntimeValue) {
+    fn store_named_value(&mut self, name: String, value: Value) {
         if let Some(frame) = self.call_frames.last_mut() {
             frame.insert(name, value);
         } else {
@@ -221,8 +219,8 @@ impl CallContext for Runtime {
     fn call_builtin(
         &mut self,
         builtin: BuiltinFunction,
-        args: Vec<RuntimeValue>,
-    ) -> std::result::Result<RuntimeValue, RuntimeError> {
+        args: Vec<Value>,
+    ) -> std::result::Result<Value, RuntimeError> {
         match builtin {
             BuiltinFunction::Print => {
                 let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
@@ -239,8 +237,8 @@ impl CallContext for Runtime {
     fn call_function_named(
         &mut self,
         name: &str,
-        args: Vec<RuntimeValue>,
-    ) -> std::result::Result<RuntimeValue, RuntimeError> {
+        args: Vec<Value>,
+    ) -> std::result::Result<Value, RuntimeError> {
         let function =
             self.functions
                 .get(name)
@@ -278,12 +276,12 @@ fn decode_runtime_string(ptr: *const u8, len: i64) -> String {
     String::from_utf8_lossy(slice).to_string()
 }
 
-unsafe extern "C" fn runtime_make_int(ctx: *mut Runtime, value: i64) -> *mut RuntimeValue {
+unsafe extern "C" fn runtime_make_int(ctx: *mut Runtime, value: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     runtime.int_ptr(value)
 }
 
-unsafe extern "C" fn runtime_make_bool(ctx: *mut Runtime, value: u8) -> *mut RuntimeValue {
+unsafe extern "C" fn runtime_make_bool(ctx: *mut Runtime, value: u8) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     runtime.bool_ptr(value != 0)
 }
@@ -292,12 +290,12 @@ unsafe extern "C" fn runtime_make_string(
     ctx: *mut Runtime,
     ptr: *const u8,
     len: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     runtime.alloc_value(Value::string_object(decode_runtime_string(ptr, len)))
 }
 
-unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut RuntimeValue {
+unsafe extern "C" fn runtime_make_none(ctx: *mut Runtime) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     runtime.none_ptr()
 }
@@ -306,7 +304,7 @@ unsafe extern "C" fn runtime_make_function(
     ctx: *mut Runtime,
     ptr: *const u8,
     len: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let symbol = runtime.decode_symbol(ptr, len);
     runtime.alloc_value(Value::function_object(symbol))
@@ -314,9 +312,9 @@ unsafe extern "C" fn runtime_make_function(
 
 unsafe extern "C" fn runtime_make_list(
     ctx: *mut Runtime,
-    values: *const *mut RuntimeValue,
+    values: *const *mut Value,
     count: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     if count < 0 {
         runtime.set_error_message("List element count cannot be negative".to_string());
@@ -349,7 +347,7 @@ unsafe extern "C" fn runtime_define_class(
     method_symbol_ptrs: *const *const u8,
     method_symbol_lens: *const i64,
     count: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     if count < 0 {
         runtime.set_error_message("Class method count cannot be negative".to_string());
@@ -388,9 +386,9 @@ unsafe extern "C" fn runtime_define_class(
 
 unsafe extern "C" fn runtime_add(
     ctx: *mut Runtime,
-    left: *mut RuntimeValue,
-    right: *mut RuntimeValue,
-) -> *mut RuntimeValue {
+    left: *mut Value,
+    right: *mut Value,
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let left = unsafe { &*left };
     let right = unsafe { &*right };
@@ -410,9 +408,9 @@ unsafe extern "C" fn runtime_add(
 
 unsafe extern "C" fn runtime_sub(
     ctx: *mut Runtime,
-    left: *mut RuntimeValue,
-    right: *mut RuntimeValue,
-) -> *mut RuntimeValue {
+    left: *mut Value,
+    right: *mut Value,
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let left = unsafe { &*left };
     let right = unsafe { &*right };
@@ -432,9 +430,9 @@ unsafe extern "C" fn runtime_sub(
 
 unsafe extern "C" fn runtime_less_than(
     ctx: *mut Runtime,
-    left: *mut RuntimeValue,
-    right: *mut RuntimeValue,
-) -> *mut RuntimeValue {
+    left: *mut Value,
+    right: *mut Value,
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let left = unsafe { &*left };
     let right = unsafe { &*right };
@@ -452,7 +450,7 @@ unsafe extern "C" fn runtime_less_than(
     }
 }
 
-unsafe extern "C" fn runtime_is_truthy(value: *mut RuntimeValue) -> u8 {
+unsafe extern "C" fn runtime_is_truthy(value: *mut Value) -> u8 {
     if value.is_null() {
         return 0;
     }
@@ -462,10 +460,10 @@ unsafe extern "C" fn runtime_is_truthy(value: *mut RuntimeValue) -> u8 {
 
 unsafe extern "C" fn runtime_call(
     ctx: *mut Runtime,
-    callee: *mut RuntimeValue,
-    args: *const *mut RuntimeValue,
+    callee: *mut Value,
+    args: *const *mut Value,
     count: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     if count < 0 {
         runtime.set_error_message("Call argument count cannot be negative".to_string());
@@ -503,11 +501,7 @@ unsafe extern "C" fn runtime_call(
 }
 
 /// Runtime hook for name lookup (current call-frame locals, then globals, then builtins).
-unsafe extern "C" fn runtime_load_name(
-    ctx: *mut Runtime,
-    ptr: *const u8,
-    len: i64,
-) -> *mut RuntimeValue {
+unsafe extern "C" fn runtime_load_name(ctx: *mut Runtime, ptr: *const u8, len: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     let name = runtime.decode_symbol(ptr, len);
     let local_value = runtime
@@ -533,7 +527,7 @@ unsafe extern "C" fn runtime_store_name(
     ctx: *mut Runtime,
     ptr: *const u8,
     len: i64,
-    value: *mut RuntimeValue,
+    value: *mut Value,
 ) {
     let runtime = unsafe { &mut *ctx };
     if value.is_null() {
@@ -546,10 +540,10 @@ unsafe extern "C" fn runtime_store_name(
 
 unsafe extern "C" fn runtime_load_attr(
     ctx: *mut Runtime,
-    object: *mut RuntimeValue,
+    object: *mut Value,
     ptr: *const u8,
     len: i64,
-) -> *mut RuntimeValue {
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     if object.is_null() {
         runtime.set_error_message("Cannot load attribute from null value".to_string());
@@ -568,10 +562,10 @@ unsafe extern "C" fn runtime_load_attr(
 
 unsafe extern "C" fn runtime_store_attr(
     ctx: *mut Runtime,
-    object: *mut RuntimeValue,
+    object: *mut Value,
     ptr: *const u8,
     len: i64,
-    value: *mut RuntimeValue,
+    value: *mut Value,
 ) {
     let runtime = unsafe { &mut *ctx };
     if object.is_null() {
@@ -592,9 +586,9 @@ unsafe extern "C" fn runtime_store_attr(
 
 unsafe extern "C" fn runtime_load_index(
     ctx: *mut Runtime,
-    object: *mut RuntimeValue,
-    index: *mut RuntimeValue,
-) -> *mut RuntimeValue {
+    object: *mut Value,
+    index: *mut Value,
+) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
     if object.is_null() {
         runtime.set_error_message("Cannot index null value".to_string());
@@ -621,8 +615,8 @@ unsafe extern "C" fn runtime_store_index_name(
     ctx: *mut Runtime,
     ptr: *const u8,
     len: i64,
-    index: *mut RuntimeValue,
-    value: *mut RuntimeValue,
+    index: *mut Value,
+    value: *mut Value,
 ) {
     let runtime = unsafe { &mut *ctx };
     if index.is_null() {
