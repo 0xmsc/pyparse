@@ -1,7 +1,9 @@
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::method::bound_method;
-use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, RuntimeObject};
+use crate::runtime::object::{
+    BoundMethodCallable, CallContext, CallableId, ObjectRef, RuntimeObject,
+};
 use crate::runtime::value::Value;
 use std::any::Any;
 use std::fmt;
@@ -91,8 +93,9 @@ impl RuntimeObject for BuiltinFunctionObject {
         match attribute {
             "__call__" => {
                 let builtin = self.builtin;
+                let callable_id = CallableId::Builtin(builtin);
                 Ok(bound_method(move |context, args| {
-                    context.call_builtin(builtin, args)
+                    context.call_callable(&callable_id, args)
                 }))
             }
             "__str__" | "__repr__" => {
@@ -115,7 +118,7 @@ impl RuntimeObject for BuiltinFunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_builtin(self.builtin, args)
+        context.call_callable(&CallableId::Builtin(self.builtin), args)
     }
 }
 
@@ -135,9 +138,9 @@ impl RuntimeObject for FunctionObject {
     fn get_attribute(&self, _receiver: ObjectRef, attribute: &str) -> Result<Value, RuntimeError> {
         match attribute {
             "__call__" => {
-                let function_name = self.name.clone();
+                let callable_id = CallableId::Function(self.name.clone());
                 Ok(bound_method(move |context, args| {
-                    context.call_function_named(&function_name, args)
+                    context.call_callable(&callable_id, args)
                 }))
             }
             "__str__" | "__repr__" => {
@@ -161,7 +164,7 @@ impl RuntimeObject for FunctionObject {
         context: &mut dyn CallContext,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        context.call_function_named(&self.name, args)
+        context.call_callable(&CallableId::Function(self.name.clone()), args)
     }
 }
 
@@ -237,20 +240,12 @@ mod tests {
     struct TestCallContext;
 
     impl CallContext for TestCallContext {
-        fn call_builtin(
+        fn call_callable(
             &mut self,
-            _builtin: crate::builtins::BuiltinFunction,
+            _callable_id: &crate::runtime::object::CallableId,
             _args: Vec<Value>,
         ) -> Result<Value, RuntimeError> {
-            panic!("unexpected builtin call in callable tests")
-        }
-
-        fn call_function_named(
-            &mut self,
-            _name: &str,
-            _args: Vec<Value>,
-        ) -> Result<Value, RuntimeError> {
-            panic!("unexpected function call in callable tests")
+            panic!("unexpected call in callable tests")
         }
     }
 

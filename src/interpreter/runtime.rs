@@ -4,7 +4,7 @@ use crate::ast::{AssignTarget, BinaryOperator, Expression, Statement};
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
-use crate::runtime::object::CallContext;
+use crate::runtime::object::{CallContext, CallableId};
 
 use super::{Function, InterpreterError, Value};
 
@@ -27,33 +27,37 @@ struct InterpreterCallContext<'runtime, 'functions, 'env> {
 }
 
 impl CallContext for InterpreterCallContext<'_, '_, '_> {
-    fn call_builtin(
+    fn call_callable(
         &mut self,
-        builtin: BuiltinFunction,
+        callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        call_builtin_with_output(builtin, args, &mut self.runtime.output)
-    }
-
-    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let function = self.runtime.functions.get(name).cloned().ok_or_else(|| {
-            RuntimeError::UndefinedFunction {
-                name: name.to_string(),
+        match callable_id {
+            CallableId::Builtin(builtin) => {
+                call_builtin_with_output(*builtin, args, &mut self.runtime.output)
             }
-        })?;
-        RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
-        let mut local_scope = HashMap::new();
-        for (param, value) in function.params.iter().zip(args) {
-            local_scope.insert(param.clone(), value);
-        }
-        let mut local_environment = self.environment.child_with_locals(&mut local_scope);
-        match self
-            .runtime
-            .exec_block(&function.body, &mut local_environment)
-            .map_err(runtime_error_from_interpreter)?
-        {
-            ExecResult::Continue => Ok(Value::none_object()),
-            ExecResult::Return(value) => Ok(value),
+            CallableId::Function(name) => {
+                let function = self
+                    .runtime
+                    .functions
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?;
+                RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
+                let mut local_scope = HashMap::new();
+                for (param, value) in function.params.iter().zip(args) {
+                    local_scope.insert(param.clone(), value);
+                }
+                let mut local_environment = self.environment.child_with_locals(&mut local_scope);
+                match self
+                    .runtime
+                    .exec_block(&function.body, &mut local_environment)
+                    .map_err(runtime_error_from_interpreter)?
+                {
+                    ExecResult::Continue => Ok(Value::none_object()),
+                    ExecResult::Return(value) => Ok(value),
+                }
+            }
         }
     }
 }

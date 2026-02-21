@@ -7,20 +7,24 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::list::ListObject;
 use crate::runtime::value::Value;
 
+/// Stable identifier for a callable target used by runtime dispatch.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CallableId {
+    Builtin(BuiltinFunction),
+    Function(String),
+}
+
 /// Backend callback interface used by runtime values for indirect calls.
 ///
-/// `Value`/`RuntimeObject` use this to invoke builtins and user-defined
-/// functions without depending on a specific execution backend.
+/// `Value`/`RuntimeObject` use this to invoke callable targets without
+/// depending on a specific execution backend.
 pub(crate) trait CallContext {
-    /// Calls a builtin with already-evaluated arguments.
-    fn call_builtin(
+    /// Calls a resolved callable target with already-evaluated arguments.
+    fn call_callable(
         &mut self,
-        builtin: BuiltinFunction,
+        callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError>;
-
-    /// Calls a user-defined function by its symbol/name.
-    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError>;
 }
 
 /// Shared closure type used for bound methods and method wrappers.

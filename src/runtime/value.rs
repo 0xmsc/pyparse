@@ -6,7 +6,9 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::int::{self, IntObject};
 use crate::runtime::list::ListObject;
 use crate::runtime::none::NoneObject;
-use crate::runtime::object::{BoundMethodCallable, CallContext, ObjectRef, new_list_object};
+use crate::runtime::object::{
+    BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
+};
 use crate::runtime::string::{self, StringObject};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -352,20 +354,12 @@ impl Value {
 struct NoopCallContext;
 
 impl CallContext for NoopCallContext {
-    fn call_builtin(
+    fn call_callable(
         &mut self,
-        _builtin: BuiltinFunction,
+        _callable_id: &CallableId,
         _args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        panic!("builtin call requested without runtime call context")
-    }
-
-    fn call_function_named(
-        &mut self,
-        _name: &str,
-        _args: Vec<Value>,
-    ) -> Result<Value, RuntimeError> {
-        panic!("function call requested without runtime call context")
+        panic!("call requested without runtime call context")
     }
 }
 

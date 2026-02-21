@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::object::CallContext;
+use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -277,65 +277,60 @@ impl Runtime {
 }
 
 impl CallContext for Runtime {
-    fn call_builtin(
+    fn call_callable(
         &mut self,
-        builtin: BuiltinFunction,
+        callable_id: &CallableId,
         args: Vec<Value>,
     ) -> std::result::Result<Value, RuntimeError> {
-        match builtin {
-            BuiltinFunction::Print => {
-                let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
-                self.output.push(rendered.join(" "));
-                Ok(Value::none_object())
+        match callable_id {
+            CallableId::Builtin(builtin) => match builtin {
+                BuiltinFunction::Print => {
+                    let rendered = args.iter().map(Value::to_output).collect::<Vec<_>>();
+                    self.output.push(rendered.join(" "));
+                    Ok(Value::none_object())
+                }
+                BuiltinFunction::Len => {
+                    RuntimeError::expect_function_arity("len", 1, args.len())?;
+                    args[0].len()
+                }
+            },
+            CallableId::Function(name) => {
+                let function = self
+                    .functions
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?;
+                RuntimeError::expect_function_arity(name, function.arity, args.len())?;
+
+                let mut arg_values = args;
+                let mut frame =
+                    FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
+                for (param, arg) in function.params.iter().zip(arg_values.iter()) {
+                    let symbol = self.intern_symbol_name(param);
+                    frame.insert(symbol, arg.clone());
+                }
+
+                let mut arg_ptrs = Vec::with_capacity(arg_values.len());
+                for arg in &mut arg_values {
+                    arg_ptrs.push(arg as *mut Value);
+                }
+
+                self.call_frames.push(frame);
+                let runtime_ptr = self as *mut Runtime;
+                let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
+                self.call_frames.pop();
+                if result.is_null() {
+                    if let Some(error) = self.runtime_error.clone() {
+                        return Err(error);
+                    }
+                    return Err(RuntimeError::UnsupportedOperation {
+                        operation: "call".to_string(),
+                        type_name: "function".to_string(),
+                    });
+                }
+                Ok(unsafe { (&*result).clone() })
             }
-            BuiltinFunction::Len => {
-                RuntimeError::expect_function_arity("len", 1, args.len())?;
-                args[0].len()
-            }
         }
-    }
-
-    fn call_function_named(
-        &mut self,
-        name: &str,
-        args: Vec<Value>,
-    ) -> std::result::Result<Value, RuntimeError> {
-        let function =
-            self.functions
-                .get(name)
-                .cloned()
-                .ok_or_else(|| RuntimeError::UndefinedFunction {
-                    name: name.to_string(),
-                })?;
-        RuntimeError::expect_function_arity(name, function.arity, args.len())?;
-
-        let mut arg_values = args;
-        let mut frame =
-            FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
-        for (param, arg) in function.params.iter().zip(arg_values.iter()) {
-            let symbol = self.intern_symbol_name(param);
-            frame.insert(symbol, arg.clone());
-        }
-
-        let mut arg_ptrs = Vec::with_capacity(arg_values.len());
-        for arg in &mut arg_values {
-            arg_ptrs.push(arg as *mut Value);
-        }
-
-        self.call_frames.push(frame);
-        let runtime_ptr = self as *mut Runtime;
-        let result = (function.entry)(runtime_ptr, arg_ptrs.as_ptr());
-        self.call_frames.pop();
-        if result.is_null() {
-            if let Some(error) = self.runtime_error.clone() {
-                return Err(error);
-            }
-            return Err(RuntimeError::UnsupportedOperation {
-                operation: "call".to_string(),
-                type_name: "function".to_string(),
-            });
-        }
-        Ok(unsafe { (&*result).clone() })
     }
 }
 

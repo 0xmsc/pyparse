@@ -4,7 +4,7 @@ use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledProgram, Instruction};
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
-use crate::runtime::object::CallContext;
+use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
 use thiserror::Error;
 
@@ -46,36 +46,37 @@ struct VmCallContext<'runtime, 'program, 'env> {
 }
 
 impl CallContext for VmCallContext<'_, '_, '_> {
-    fn call_builtin(
+    fn call_callable(
         &mut self,
-        builtin: BuiltinFunction,
+        callable_id: &CallableId,
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
-        call_builtin_with_output(builtin, args, &mut self.runtime.output)
-    }
-
-    fn call_function_named(&mut self, name: &str, args: Vec<Value>) -> Result<Value, RuntimeError> {
-        let function = self
-            .runtime
-            .program
-            .functions
-            .get(name)
-            .ok_or_else(|| RuntimeError::UndefinedFunction {
-                name: name.to_string(),
-            })?
-            .clone();
-        RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
-        let mut locals_map = HashMap::new();
-        for (param, value) in function.params.iter().zip(args) {
-            locals_map.insert(param.to_string(), value);
+        match callable_id {
+            CallableId::Builtin(builtin) => {
+                call_builtin_with_output(*builtin, args, &mut self.runtime.output)
+            }
+            CallableId::Function(name) => {
+                let function = self
+                    .runtime
+                    .program
+                    .functions
+                    .get(name)
+                    .ok_or_else(|| RuntimeError::UndefinedFunction { name: name.clone() })?
+                    .clone();
+                RuntimeError::expect_function_arity(name, function.params.len(), args.len())?;
+                let mut locals_map = HashMap::new();
+                for (param, value) in function.params.iter().zip(args) {
+                    locals_map.insert(param.to_string(), value);
+                }
+                let mut child_environment = self.environment.child_with_locals(&mut locals_map);
+                let parent_stack = std::mem::take(&mut self.runtime.stack);
+                let result = self
+                    .runtime
+                    .execute_code(&function.code, &mut child_environment);
+                self.runtime.stack = parent_stack;
+                result.map_err(map_vm_error_to_runtime_error)
+            }
         }
-        let mut child_environment = self.environment.child_with_locals(&mut locals_map);
-        let parent_stack = std::mem::take(&mut self.runtime.stack);
-        let result = self
-            .runtime
-            .execute_code(&function.code, &mut child_environment);
-        self.runtime.stack = parent_stack;
-        result.map_err(map_vm_error_to_runtime_error)
     }
 }
 
