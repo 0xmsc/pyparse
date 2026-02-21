@@ -49,8 +49,8 @@ pub(super) enum RuntimeAbiType {
     I8,
 }
 
-const MIN_INTERNED_INT: i64 = -4096;
-const MAX_INTERNED_INT: i64 = 16384;
+const MIN_INTERNED_INT: i64 = -1_000_000;
+const MAX_INTERNED_INT: i64 = 1_000_000;
 
 pub(super) type EntryFunction = extern "C" fn(*mut Runtime, *const *mut Value) -> *mut Value;
 
@@ -64,8 +64,8 @@ pub(super) struct CompiledFunctionPointer {
 
 /// Runtime state used by JIT-emitted code and runtime hooks.
 pub(super) struct Runtime {
-    globals: FxHashMap<String, Value>,
-    call_frames: Vec<FxHashMap<String, Value>>,
+    globals: FxHashMap<u32, Value>,
+    call_frames: Vec<FxHashMap<u32, Value>>,
     output: Vec<String>,
     #[allow(clippy::vec_box)]
     values: Vec<Box<Value>>,
@@ -73,11 +73,22 @@ pub(super) struct Runtime {
     interned_values: Vec<Box<Value>>,
     int_intern: FxHashMap<i64, usize>,
     functions: Arc<FxHashMap<String, CompiledFunctionPointer>>,
-    symbol_cache: FxHashMap<(usize, i64), Arc<str>>,
+    symbol_ids_by_ptr: FxHashMap<(usize, i64), u32>,
+    symbol_ids_by_name: FxHashMap<String, u32>,
+    symbol_names: Vec<String>,
+    builtin_cache: FxHashMap<u32, Option<BuiltinFunction>>,
     error: Option<String>,
     runtime_error: Option<RuntimeError>,
 }
 
+enum RuntimeValueSnapshot {
+    Int(i64),
+    Bool(bool),
+    None,
+    Owned(Value),
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum NameResolution {
     Value(Value),
@@ -94,6 +105,7 @@ fn bind_call_frame(params: &[String], args: &[Value]) -> FxHashMap<String, Value
         .collect::<FxHashMap<_, _>>()
 }
 
+#[cfg(test)]
 fn resolve_name(
     local_value: Option<Value>,
     global_value: Option<Value>,
@@ -126,7 +138,10 @@ impl Runtime {
             interned_values,
             int_intern: FxHashMap::default(),
             functions,
-            symbol_cache: FxHashMap::default(),
+            symbol_ids_by_ptr: FxHashMap::default(),
+            symbol_ids_by_name: FxHashMap::default(),
+            symbol_names: Vec::new(),
+            builtin_cache: FxHashMap::default(),
             error: None,
             runtime_error: None,
         }
@@ -178,17 +193,13 @@ impl Runtime {
         self.alloc_value(value)
     }
 
-    fn alloc_or_intern_value_ref(&mut self, value: &Value) -> *mut Value {
-        if let Some(integer) = value.as_int() {
-            return self.int_ptr(integer);
+    fn alloc_snapshot(&mut self, value: RuntimeValueSnapshot) -> *mut Value {
+        match value {
+            RuntimeValueSnapshot::Int(integer) => self.int_ptr(integer),
+            RuntimeValueSnapshot::Bool(boolean) => self.bool_ptr(boolean),
+            RuntimeValueSnapshot::None => self.none_ptr(),
+            RuntimeValueSnapshot::Owned(value) => self.alloc_value(value),
         }
-        if let Some(boolean) = value.as_bool() {
-            return self.bool_ptr(boolean);
-        }
-        if value.is_none() {
-            return self.none_ptr();
-        }
-        self.alloc_value(value.clone())
     }
 
     fn set_error_message(&mut self, message: String) {
@@ -204,36 +215,63 @@ impl Runtime {
         self.set_error_message(error.to_string());
     }
 
-    fn decode_symbol(&mut self, ptr: *const u8, len: i64) -> Arc<str> {
-        let key = (ptr as usize, len);
-        if let Some(symbol) = self.symbol_cache.get(&key) {
-            return symbol.clone();
+    fn intern_symbol_name(&mut self, name: &str) -> u32 {
+        if let Some(symbol) = self.symbol_ids_by_name.get(name) {
+            return *symbol;
         }
-        let symbol: Arc<str> = decode_runtime_string(ptr, len).into();
-        self.symbol_cache.insert(key, symbol.clone());
+        let symbol = self.symbol_names.len() as u32;
+        self.symbol_names.push(name.to_string());
+        self.symbol_ids_by_name.insert(name.to_string(), symbol);
         symbol
     }
 
-    fn load_named_value(&self, name: &str) -> Option<Value> {
+    fn intern_symbol_ptr(&mut self, ptr: *const u8, len: i64) -> u32 {
+        let key = (ptr as usize, len);
+        if let Some(symbol) = self.symbol_ids_by_ptr.get(&key) {
+            return *symbol;
+        }
+        let name = decode_runtime_string(ptr, len);
+        let symbol = self.intern_symbol_name(&name);
+        self.symbol_ids_by_ptr.insert(key, symbol);
+        symbol
+    }
+
+    fn symbol_name(&self, symbol: u32) -> &str {
+        self.symbol_names
+            .get(symbol as usize)
+            .expect("symbol id must exist")
+            .as_str()
+    }
+
+    fn builtin_for_symbol(&mut self, symbol: u32) -> Option<BuiltinFunction> {
+        if let Some(cached) = self.builtin_cache.get(&symbol) {
+            return *cached;
+        }
+        let builtin = BuiltinFunction::from_name(self.symbol_name(symbol));
+        self.builtin_cache.insert(symbol, builtin);
+        builtin
+    }
+
+    fn load_named_value(&self, symbol: u32) -> Option<Value> {
         if let Some(frame) = self.call_frames.last()
-            && let Some(value) = frame.get(name)
+            && let Some(value) = frame.get(&symbol)
         {
             return Some(value.clone());
         }
-        self.globals.get(name).cloned()
+        self.globals.get(&symbol).cloned()
     }
 
-    fn store_named_value(&mut self, name: &str, value: Value) {
+    fn store_named_value(&mut self, symbol: u32, value: Value) {
         if let Some(frame) = self.call_frames.last_mut() {
-            if let Some(existing) = frame.get_mut(name) {
+            if let Some(existing) = frame.get_mut(&symbol) {
                 *existing = value;
             } else {
-                frame.insert(name.to_string(), value);
+                frame.insert(symbol, value);
             }
-        } else if let Some(existing) = self.globals.get_mut(name) {
+        } else if let Some(existing) = self.globals.get_mut(&symbol) {
             *existing = value;
         } else {
-            self.globals.insert(name.to_string(), value);
+            self.globals.insert(symbol, value);
         }
     }
 }
@@ -271,12 +309,17 @@ impl CallContext for Runtime {
                 })?;
         RuntimeError::expect_function_arity(name, function.arity, args.len())?;
 
+        let mut arg_values = args;
         let mut frame =
             FxHashMap::with_capacity_and_hasher(function.params.len(), Default::default());
-        let mut arg_ptrs = Vec::with_capacity(args.len());
-        for (param, arg) in function.params.iter().zip(args.into_iter()) {
-            arg_ptrs.push(self.alloc_or_intern_value_ref(&arg));
-            frame.insert(param.clone(), arg);
+        for (param, arg) in function.params.iter().zip(arg_values.iter()) {
+            let symbol = self.intern_symbol_name(param);
+            frame.insert(symbol, arg.clone());
+        }
+
+        let mut arg_ptrs = Vec::with_capacity(arg_values.len());
+        for arg in &mut arg_values {
+            arg_ptrs.push(arg as *mut Value);
         }
 
         self.call_frames.push(frame);
@@ -299,6 +342,19 @@ impl CallContext for Runtime {
 fn decode_runtime_string(ptr: *const u8, len: i64) -> String {
     let slice = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
     String::from_utf8_lossy(slice).to_string()
+}
+
+fn snapshot_value(value: &Value) -> RuntimeValueSnapshot {
+    if let Some(integer) = value.as_int() {
+        return RuntimeValueSnapshot::Int(integer);
+    }
+    if let Some(boolean) = value.as_bool() {
+        return RuntimeValueSnapshot::Bool(boolean);
+    }
+    if value.is_none() {
+        return RuntimeValueSnapshot::None;
+    }
+    RuntimeValueSnapshot::Owned(value.clone())
 }
 
 unsafe extern "C" fn runtime_make_int(ctx: *mut Runtime, value: i64) -> *mut Value {
@@ -331,7 +387,8 @@ unsafe extern "C" fn runtime_make_function(
     len: i64,
 ) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
-    let symbol = runtime.decode_symbol(ptr, len).to_string();
+    let symbol_id = runtime.intern_symbol_ptr(ptr, len);
+    let symbol = runtime.symbol_name(symbol_id).to_string();
     runtime.alloc_value(Value::function_object(symbol))
 }
 
@@ -389,9 +446,8 @@ unsafe extern "C" fn runtime_define_class(
         return ptr::null_mut();
     }
 
-    let class_name = runtime
-        .decode_symbol(class_name_ptr, class_name_len)
-        .to_string();
+    let class_symbol = runtime.intern_symbol_ptr(class_name_ptr, class_name_len);
+    let class_name = runtime.symbol_name(class_symbol).to_string();
     let mut methods = HashMap::with_capacity(count);
     for index in 0..count {
         let method_name_ptr = unsafe { *method_name_ptrs.add(index) };
@@ -404,12 +460,10 @@ unsafe extern "C" fn runtime_define_class(
             return ptr::null_mut();
         }
 
-        let method_name = runtime
-            .decode_symbol(method_name_ptr, method_name_len)
-            .to_string();
-        let method_symbol = runtime
-            .decode_symbol(method_symbol_ptr, method_symbol_len)
-            .to_string();
+        let method_name_symbol = runtime.intern_symbol_ptr(method_name_ptr, method_name_len);
+        let method_symbol_symbol = runtime.intern_symbol_ptr(method_symbol_ptr, method_symbol_len);
+        let method_name = runtime.symbol_name(method_name_symbol).to_string();
+        let method_symbol = runtime.symbol_name(method_symbol_symbol).to_string();
         methods.insert(method_name, Value::function_object(method_symbol));
     }
     runtime.alloc_value(Value::class_object(class_name, methods))
@@ -534,38 +588,29 @@ unsafe extern "C" fn runtime_call(
 /// Runtime hook for name lookup (current call-frame locals, then globals, then builtins).
 unsafe extern "C" fn runtime_load_name(ctx: *mut Runtime, ptr: *const u8, len: i64) -> *mut Value {
     let runtime = unsafe { &mut *ctx };
-    let (resolution, missing_name) = {
-        let name = runtime.decode_symbol(ptr, len);
-        let local_value = runtime
-            .call_frames
-            .last()
-            .and_then(|frame| frame.get(name.as_ref()))
-            .cloned();
-        let global_value = runtime.globals.get(name.as_ref()).cloned();
-        let resolution = resolve_name(
-            local_value,
-            global_value,
-            BuiltinFunction::from_name(name.as_ref()),
-        );
-        let missing_name = if matches!(resolution, NameResolution::Missing) {
-            Some(name.to_string())
-        } else {
-            None
-        };
-        (resolution, missing_name)
-    };
-    match resolution {
-        NameResolution::Value(value) => runtime.alloc_or_intern_value_ref(&value),
-        NameResolution::Builtin(builtin) => {
-            runtime.alloc_value(Value::builtin_function_object(builtin))
-        }
-        NameResolution::Missing => {
-            runtime.set_runtime_error(RuntimeError::UndefinedVariable {
-                name: missing_name.expect("missing resolution must include missing name"),
-            });
-            ptr::null_mut()
-        }
+    let symbol = runtime.intern_symbol_ptr(ptr, len);
+
+    let local_value = runtime
+        .call_frames
+        .last()
+        .and_then(|frame| frame.get(&symbol))
+        .map(snapshot_value);
+    if let Some(local_value) = local_value {
+        return runtime.alloc_snapshot(local_value);
     }
+
+    if let Some(global_value) = runtime.globals.get(&symbol).map(snapshot_value) {
+        return runtime.alloc_snapshot(global_value);
+    }
+
+    if let Some(builtin) = runtime.builtin_for_symbol(symbol) {
+        return runtime.alloc_value(Value::builtin_function_object(builtin));
+    }
+
+    runtime.set_runtime_error(RuntimeError::UndefinedVariable {
+        name: runtime.symbol_name(symbol).to_string(),
+    });
+    ptr::null_mut()
 }
 
 /// Runtime hook for name assignment (current call-frame locals or globals).
@@ -580,8 +625,8 @@ unsafe extern "C" fn runtime_store_name(
         runtime.set_error_message("Cannot store null value".to_string());
         return;
     }
-    let name = runtime.decode_symbol(ptr, len);
-    runtime.store_named_value(name.as_ref(), unsafe { (&*value).clone() });
+    let symbol = runtime.intern_symbol_ptr(ptr, len);
+    runtime.store_named_value(symbol, unsafe { (&*value).clone() });
 }
 
 unsafe extern "C" fn runtime_load_attr(
@@ -595,9 +640,10 @@ unsafe extern "C" fn runtime_load_attr(
         runtime.set_error_message("Cannot load attribute from null value".to_string());
         return ptr::null_mut();
     }
-    let attribute = runtime.decode_symbol(ptr, len);
+    let attribute_symbol = runtime.intern_symbol_ptr(ptr, len);
     let object = unsafe { (&*object).clone() };
-    match object.get_attribute(attribute.as_ref()) {
+    let result = object.get_attribute(runtime.symbol_name(attribute_symbol));
+    match result {
         Ok(value) => runtime.alloc_or_intern_value(value),
         Err(error) => {
             runtime.set_runtime_error(error);
@@ -622,10 +668,10 @@ unsafe extern "C" fn runtime_store_attr(
         runtime.set_error_message("Cannot store null attribute value".to_string());
         return;
     }
-    let attribute = runtime.decode_symbol(ptr, len);
+    let attribute_symbol = runtime.intern_symbol_ptr(ptr, len);
     let object = unsafe { (&*object).clone() };
     let value = unsafe { (&*value).clone() };
-    if let Err(error) = object.set_attribute(attribute.as_ref(), value) {
+    if let Err(error) = object.set_attribute(runtime.symbol_name(attribute_symbol), value) {
         runtime.set_runtime_error(error);
     }
 }
@@ -674,10 +720,10 @@ unsafe extern "C" fn runtime_store_index_name(
         return;
     }
 
-    let name = runtime.decode_symbol(ptr, len);
-    let Some(target) = runtime.load_named_value(name.as_ref()) else {
+    let symbol = runtime.intern_symbol_ptr(ptr, len);
+    let Some(target) = runtime.load_named_value(symbol) else {
         runtime.set_runtime_error(RuntimeError::UndefinedVariable {
-            name: name.to_string(),
+            name: runtime.symbol_name(symbol).to_string(),
         });
         return;
     };
