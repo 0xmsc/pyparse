@@ -178,7 +178,7 @@ fn with_dict_mut<R>(receiver: &ObjectRef, f: impl FnOnce(&mut DictObject) -> R) 
 fn render_value_repr(context: &mut dyn CallContext, value: &Value) -> Result<String, RuntimeError> {
     let repr_method = value.get_attribute("__repr__")?;
     let repr_value = repr_method.call(context, vec![])?;
-    let Some(rendered) = crate::runtime::string::downcast_string(&repr_value) else {
+    let Some(rendered) = repr_value.as_str() else {
         return Err(RuntimeError::InvalidArgumentType {
             operation: "__repr__".to_string(),
             argument: "return".to_string(),
@@ -186,7 +186,7 @@ fn render_value_repr(context: &mut dyn CallContext, value: &Value) -> Result<Str
             got: repr_value.type_name().to_string(),
         });
     };
-    Ok(rendered)
+    Ok(rendered.to_string())
 }
 
 #[cfg(test)]

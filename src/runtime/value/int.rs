@@ -1,6 +1,5 @@
 use super::{Value, expect_unary_method_args, invalid_argument_type, numeric_key_value};
 use crate::runtime::error::RuntimeError;
-use crate::runtime::int as runtime_int;
 use crate::runtime::method::bound_method;
 
 pub(super) fn attribute(value: i64, attribute: &str) -> Result<Value, RuntimeError> {
@@ -48,7 +47,7 @@ pub(super) fn attribute(value: i64, attribute: &str) -> Result<Value, RuntimeErr
 
 fn expect_unary_int_arg(method: &str, args: &[Value]) -> Result<i64, RuntimeError> {
     let rhs = expect_unary_method_args(method, args)?;
-    let Some(rhs_int) = runtime_int::downcast_i64(rhs) else {
+    let Some(rhs_int) = rhs.as_int() else {
         return Err(invalid_argument_type(method, "rhs", "int", rhs));
     };
     Ok(rhs_int)

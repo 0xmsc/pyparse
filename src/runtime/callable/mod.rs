@@ -9,7 +9,6 @@ pub(crate) use function_object::FunctionObject;
 #[cfg(test)]
 mod tests {
     use crate::runtime::error::RuntimeError;
-    use crate::runtime::int::downcast_i64;
     use crate::runtime::object::CallContext;
     use crate::runtime::value::Value;
     use std::rc::Rc;
@@ -40,6 +39,6 @@ mod tests {
         let result = method_call
             .call(&mut context, vec![])
             .expect("call should work");
-        assert_eq!(downcast_i64(&result), Some(7));
+        assert_eq!(result.as_int(), Some(7));
     }
 }

@@ -1,13 +1,10 @@
-pub(crate) mod bool;
 pub(crate) mod call_registry;
 pub(crate) mod callable;
 pub(crate) mod class;
 pub(crate) mod dict;
 pub(crate) mod error;
 pub(crate) mod execution;
-pub(crate) mod int;
 pub(crate) mod list;
 pub(crate) mod method;
 pub(crate) mod object;
-pub(crate) mod string;
 pub(crate) mod value;

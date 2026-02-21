@@ -1,10 +1,8 @@
 use crate::builtins::BuiltinFunction;
-use crate::runtime::bool as runtime_bool;
 use crate::runtime::callable::{BuiltinFunctionObject, CallableObject, FunctionObject};
 use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::dict::DictObject;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::int as runtime_int;
 use crate::runtime::list::ListObject;
 use crate::runtime::object::{
     BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
@@ -121,11 +119,11 @@ impl Value {
         }
 
         if let Some(bool_value) = self.try_call_magic_method("__bool__", "__bool__") {
-            return runtime_bool::downcast_bool(&bool_value).expect("__bool__ must return bool");
+            return bool_value.as_bool().expect("__bool__ must return bool");
         }
 
         if let Some(length_value) = self.try_call_magic_method("__len__", "__len__") {
-            return runtime_int::downcast_i64(&length_value).expect("__len__ must return int") != 0;
+            return length_value.as_int().expect("__len__ must return int") != 0;
         }
 
         true
@@ -189,10 +187,7 @@ impl Value {
         context: &mut dyn CallContext,
         rhs: Value,
     ) -> Result<Value, RuntimeError> {
-        if let (Some(left_int), Some(right_int)) = (
-            runtime_int::downcast_i64(self),
-            runtime_int::downcast_i64(&rhs),
-        ) {
+        if let (Some(left_int), Some(right_int)) = (self.as_int(), rhs.as_int()) {
             return Ok(Value::int_object(left_int + right_int));
         }
         self.call_binary_operator(context, "__add__", rhs)
@@ -203,10 +198,7 @@ impl Value {
         context: &mut dyn CallContext,
         rhs: Value,
     ) -> Result<Value, RuntimeError> {
-        if let (Some(left_int), Some(right_int)) = (
-            runtime_int::downcast_i64(self),
-            runtime_int::downcast_i64(&rhs),
-        ) {
+        if let (Some(left_int), Some(right_int)) = (self.as_int(), rhs.as_int()) {
             return Ok(Value::int_object(left_int - right_int));
         }
         self.call_binary_operator(context, "__sub__", rhs)
@@ -217,10 +209,7 @@ impl Value {
         context: &mut dyn CallContext,
         rhs: Value,
     ) -> Result<Value, RuntimeError> {
-        if let (Some(left_int), Some(right_int)) = (
-            runtime_int::downcast_i64(self),
-            runtime_int::downcast_i64(&rhs),
-        ) {
+        if let (Some(left_int), Some(right_int)) = (self.as_int(), rhs.as_int()) {
             return Ok(Value::bool_object(left_int < right_int));
         }
         self.call_binary_operator(context, "__lt__", rhs)

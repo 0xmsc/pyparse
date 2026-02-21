@@ -1,5 +1,4 @@
 use crate::runtime::error::RuntimeError;
-use crate::runtime::int::downcast_i64;
 use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
@@ -138,7 +137,7 @@ impl ListObject {
     }
 
     pub(crate) fn get_item_value(&self, index: Value) -> Result<Value, RuntimeError> {
-        let Some(index) = downcast_i64(&index) else {
+        let Some(index) = index.as_int() else {
             return Err(RuntimeError::InvalidArgumentType {
                 operation: "__getitem__".to_string(),
                 argument: "index".to_string(),
@@ -154,7 +153,7 @@ impl ListObject {
         index: Value,
         value: Value,
     ) -> Result<(), RuntimeError> {
-        let Some(index) = downcast_i64(&index) else {
+        let Some(index) = index.as_int() else {
             return Err(RuntimeError::InvalidArgumentType {
                 operation: "__setitem__".to_string(),
                 argument: "index".to_string(),
