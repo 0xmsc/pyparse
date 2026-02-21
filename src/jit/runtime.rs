@@ -32,28 +32,20 @@ pub(super) enum RuntimeFunctionId {
     StoreIndexName,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) enum RuntimeFunctionSignature {
-    CtxI64ToValue,
-    CtxI8ToValue,
-    CtxPtrI64ToValue,
-    CtxToValue,
-    CtxPtrPtrI64ToValue,
-    CtxDefineClassToValue,
-    CtxValueValueToValue,
-    ValueToI8,
-    CtxPtrI64ValueToVoid,
-    CtxValuePtrI64ToValue,
-    CtxValuePtrI64ValueToVoid,
-    CtxPtrI64ValueValueToVoid,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RuntimeFunctionSpec {
     pub(super) id: RuntimeFunctionId,
     pub(super) symbol: &'static str,
     pub(super) function: *const u8,
-    pub(super) signature: RuntimeFunctionSignature,
+    pub(super) param_types: &'static [RuntimeAbiType],
+    pub(super) return_types: &'static [RuntimeAbiType],
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum RuntimeAbiType {
+    Ptr,
+    I64,
+    I8,
 }
 
 const MIN_INTERNED_INT: i64 = -4096;
@@ -656,114 +648,134 @@ unsafe extern "C" fn runtime_store_index_name(
 
 /// Returns the runtime hook table imported by JIT codegen.
 pub(super) fn runtime_function_specs() -> [RuntimeFunctionSpec; 18] {
+    use RuntimeAbiType::{I8, I64, Ptr};
+
     [
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeInt,
             symbol: "runtime_make_int",
             function: runtime_make_int as *const u8,
-            signature: RuntimeFunctionSignature::CtxI64ToValue,
+            param_types: &[Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeBool,
             symbol: "runtime_make_bool",
             function: runtime_make_bool as *const u8,
-            signature: RuntimeFunctionSignature::CtxI8ToValue,
+            param_types: &[Ptr, I8],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeString,
             symbol: "runtime_make_string",
             function: runtime_make_string as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+            param_types: &[Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeNone,
             symbol: "runtime_make_none",
             function: runtime_make_none as *const u8,
-            signature: RuntimeFunctionSignature::CtxToValue,
+            param_types: &[Ptr],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeFunction,
             symbol: "runtime_make_function",
             function: runtime_make_function as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+            param_types: &[Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::MakeList,
             symbol: "runtime_make_list",
             function: runtime_make_list as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+            param_types: &[Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::DefineClass,
             symbol: "runtime_define_class",
             function: runtime_define_class as *const u8,
-            signature: RuntimeFunctionSignature::CtxDefineClassToValue,
+            param_types: &[Ptr, Ptr, I64, Ptr, Ptr, Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::Add,
             symbol: "runtime_add",
             function: runtime_add as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+            param_types: &[Ptr, Ptr, Ptr],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::Sub,
             symbol: "runtime_sub",
             function: runtime_sub as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+            param_types: &[Ptr, Ptr, Ptr],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::LessThan,
             symbol: "runtime_less_than",
             function: runtime_less_than as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+            param_types: &[Ptr, Ptr, Ptr],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::IsTruthy,
             symbol: "runtime_is_truthy",
             function: runtime_is_truthy as *const u8,
-            signature: RuntimeFunctionSignature::ValueToI8,
+            param_types: &[Ptr],
+            return_types: &[I8],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::Call,
             symbol: "runtime_call",
             function: runtime_call as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrPtrI64ToValue,
+            param_types: &[Ptr, Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::LoadName,
             symbol: "runtime_load_name",
             function: runtime_load_name as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ToValue,
+            param_types: &[Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::StoreName,
             symbol: "runtime_store_name",
             function: runtime_store_name as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ValueToVoid,
+            param_types: &[Ptr, Ptr, I64, Ptr],
+            return_types: &[],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::LoadAttr,
             symbol: "runtime_load_attr",
             function: runtime_load_attr as *const u8,
-            signature: RuntimeFunctionSignature::CtxValuePtrI64ToValue,
+            param_types: &[Ptr, Ptr, Ptr, I64],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::StoreAttr,
             symbol: "runtime_store_attr",
             function: runtime_store_attr as *const u8,
-            signature: RuntimeFunctionSignature::CtxValuePtrI64ValueToVoid,
+            param_types: &[Ptr, Ptr, Ptr, I64, Ptr],
+            return_types: &[],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::LoadIndex,
             symbol: "runtime_load_index",
             function: runtime_load_index as *const u8,
-            signature: RuntimeFunctionSignature::CtxValueValueToValue,
+            param_types: &[Ptr, Ptr, Ptr],
+            return_types: &[Ptr],
         },
         RuntimeFunctionSpec {
             id: RuntimeFunctionId::StoreIndexName,
             symbol: "runtime_store_index_name",
             function: runtime_store_index_name as *const u8,
-            signature: RuntimeFunctionSignature::CtxPtrI64ValueValueToVoid,
+            param_types: &[Ptr, Ptr, I64, Ptr, Ptr],
+            return_types: &[],
         },
     ]
 }

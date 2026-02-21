@@ -155,89 +155,32 @@ fn value_function_signature(
     sig
 }
 
-/// Maps each runtime helper ABI shape to a Cranelift call signature.
+fn abi_type_to_ir_type(
+    ptr_type: cranelift_codegen::ir::Type,
+    abi_type: runtime::RuntimeAbiType,
+) -> cranelift_codegen::ir::Type {
+    match abi_type {
+        runtime::RuntimeAbiType::Ptr => ptr_type,
+        runtime::RuntimeAbiType::I64 => types::I64,
+        runtime::RuntimeAbiType::I8 => types::I8,
+    }
+}
+
+/// Builds a Cranelift call signature from explicit runtime ABI parameter/return type lists.
 fn runtime_function_signature(
     module: &mut JITModule,
     ptr_type: cranelift_codegen::ir::Type,
-    signature: runtime::RuntimeFunctionSignature,
+    param_types: &[runtime::RuntimeAbiType],
+    return_types: &[runtime::RuntimeAbiType],
 ) -> Signature {
     let mut sig = module.make_signature();
-    match signature {
-        runtime::RuntimeFunctionSignature::CtxI64ToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxI8ToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I8));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxPtrI64ToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxPtrPtrI64ToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxDefineClassToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxValueValueToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::ValueToI8 => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.returns.push(AbiParam::new(types::I8));
-        }
-        runtime::RuntimeFunctionSignature::CtxPtrI64ValueToVoid => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxValuePtrI64ToValue => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.returns.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxValuePtrI64ValueToVoid => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(ptr_type));
-        }
-        runtime::RuntimeFunctionSignature::CtxPtrI64ValueValueToVoid => {
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(types::I64));
-            sig.params.push(AbiParam::new(ptr_type));
-            sig.params.push(AbiParam::new(ptr_type));
-        }
+    for abi_type in param_types {
+        sig.params
+            .push(AbiParam::new(abi_type_to_ir_type(ptr_type, *abi_type)));
+    }
+    for abi_type in return_types {
+        sig.returns
+            .push(AbiParam::new(abi_type_to_ir_type(ptr_type, *abi_type)));
     }
     sig
 }
@@ -249,7 +192,8 @@ fn declare_runtime_functions(
 ) -> Result<RuntimeFunctions> {
     let mut by_id = HashMap::new();
     for spec in runtime::runtime_function_specs() {
-        let signature = runtime_function_signature(module, ptr_type, spec.signature);
+        let signature =
+            runtime_function_signature(module, ptr_type, spec.param_types, spec.return_types);
         let func_id = module.declare_function(spec.symbol, Linkage::Import, &signature)?;
         by_id.insert(spec.id, func_id);
     }
