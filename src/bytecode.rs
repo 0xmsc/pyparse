@@ -7,6 +7,12 @@ use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 ///
 /// Instructions follow a Python-like operand-stack model where expression
 /// evaluation pushes values and operators/calls consume them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExceptionHandlerKind {
+    Except,
+    Finally,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     PushInt(i64),
@@ -34,9 +40,16 @@ pub enum Instruction {
     StoreIndex(String),
     GetIter,
     ForIter(isize),
+    PushExceptionHandler {
+        target: isize,
+        kind: ExceptionHandlerKind,
+    },
+    PopExceptionHandler,
     Call {
         argc: usize,
     },
+    Raise,
+    ResumeUnwind,
     JumpIfFalse(isize),
     Jump(isize),
     Pop,
@@ -218,6 +231,22 @@ fn compile_statement(statement: &Statement, scope: CompileScope) -> Result<Compi
         } => {
             code.extend(compile_for_loop(target, iterable, body, scope)?);
         }
+        Statement::Try {
+            body,
+            except_body,
+            finally_body,
+        } => {
+            code.extend(compile_try_statement(
+                body,
+                except_body.as_deref(),
+                finally_body.as_deref(),
+                scope,
+            )?);
+        }
+        Statement::Raise(value) => {
+            code.extend(compile_expression(value)?);
+            code.push(Instruction::Raise);
+        }
         Statement::Return(value) => {
             if scope != CompileScope::FunctionBody {
                 bail!("Return outside of function is not supported in the VM");
@@ -261,6 +290,78 @@ fn compile_for_loop(
     code.push(Instruction::ForIter((body_len + 1) as isize));
     code.extend(body_code);
     code.push(Instruction::Jump(-((body_len + 2) as isize)));
+    Ok(code)
+}
+
+fn compile_try_statement(
+    body: &[Statement],
+    except_body: Option<&[Statement]>,
+    finally_body: Option<&[Statement]>,
+    scope: CompileScope,
+) -> Result<CompiledBlock> {
+    let try_code = compile_block(body, scope)?;
+    let except_code = except_body
+        .map(|body| compile_block(body, scope))
+        .transpose()?;
+    let finally_code = finally_body
+        .map(|body| compile_block(body, scope))
+        .transpose()?;
+
+    let mut code = Vec::new();
+    match (except_code, finally_code) {
+        (Some(except_code), Some(finally_code)) => {
+            let try_len = try_code.len();
+            let except_len = except_code.len();
+            let finally_len = finally_code.len();
+
+            code.push(Instruction::PushExceptionHandler {
+                target: (try_len + except_len + 5) as isize,
+                kind: ExceptionHandlerKind::Finally,
+            });
+            code.push(Instruction::PushExceptionHandler {
+                target: (try_len + 2) as isize,
+                kind: ExceptionHandlerKind::Except,
+            });
+            code.extend(try_code);
+            code.push(Instruction::PopExceptionHandler);
+            code.push(Instruction::Jump(except_len as isize));
+            code.extend(except_code);
+            code.push(Instruction::PopExceptionHandler);
+            code.push(Instruction::Jump((finally_len + 1) as isize));
+            code.extend(finally_code.clone());
+            code.push(Instruction::ResumeUnwind);
+            code.extend(finally_code);
+        }
+        (Some(except_code), None) => {
+            let try_len = try_code.len();
+            let except_len = except_code.len();
+
+            code.push(Instruction::PushExceptionHandler {
+                target: (try_len + 2) as isize,
+                kind: ExceptionHandlerKind::Except,
+            });
+            code.extend(try_code);
+            code.push(Instruction::PopExceptionHandler);
+            code.push(Instruction::Jump(except_len as isize));
+            code.extend(except_code);
+        }
+        (None, Some(finally_code)) => {
+            let try_len = try_code.len();
+            let finally_len = finally_code.len();
+
+            code.push(Instruction::PushExceptionHandler {
+                target: (try_len + 2) as isize,
+                kind: ExceptionHandlerKind::Finally,
+            });
+            code.extend(try_code);
+            code.push(Instruction::PopExceptionHandler);
+            code.push(Instruction::Jump((finally_len + 1) as isize));
+            code.extend(finally_code.clone());
+            code.push(Instruction::ResumeUnwind);
+            code.extend(finally_code);
+        }
+        (None, None) => bail!("Try statement must include except or finally"),
+    }
     Ok(code)
 }
 
@@ -359,7 +460,7 @@ fn compile_expression(expr: &Expression) -> Result<CompiledBlock> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Instruction, compile};
+    use super::{ExceptionHandlerKind, Instruction, compile};
     use crate::ast::{AssignTarget, Expression, Program, Statement};
 
     fn function(name: &str, body: Vec<Statement>) -> Statement {
@@ -614,6 +715,53 @@ mod tests {
                 Instruction::Call { argc: 1 },
                 Instruction::Pop,
                 Instruction::Jump(-7),
+            ]
+        );
+    }
+
+    #[test]
+    fn compiles_raise_statement() {
+        let program = Program {
+            statements: vec![Statement::Raise(Expression::String("boom".to_string()))],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::PushString("boom".to_string()),
+                Instruction::Raise
+            ]
+        );
+    }
+
+    #[test]
+    fn compiles_try_except_finally() {
+        let program = Program {
+            statements: vec![Statement::Try {
+                body: vec![Statement::Pass],
+                except_body: Some(vec![Statement::Pass]),
+                finally_body: Some(vec![Statement::Pass]),
+            }],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        assert_eq!(
+            compiled.main,
+            vec![
+                Instruction::PushExceptionHandler {
+                    target: 5,
+                    kind: ExceptionHandlerKind::Finally,
+                },
+                Instruction::PushExceptionHandler {
+                    target: 2,
+                    kind: ExceptionHandlerKind::Except,
+                },
+                Instruction::PopExceptionHandler,
+                Instruction::Jump(0),
+                Instruction::PopExceptionHandler,
+                Instruction::Jump(1),
+                Instruction::ResumeUnwind,
             ]
         );
     }

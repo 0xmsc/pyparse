@@ -109,6 +109,7 @@ impl InterpreterRuntime {
             BuiltinFunction::Print,
             BuiltinFunction::Len,
             BuiltinFunction::Range,
+            BuiltinFunction::Exception,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -285,6 +286,40 @@ impl InterpreterRuntime {
                     }
                 }
                 Ok(ExecResult::Continue)
+            }
+            Statement::Try {
+                body,
+                except_body,
+                finally_body,
+            } => {
+                let mut outcome = match self.exec_block(body, environment) {
+                    Ok(result) => Ok(result),
+                    Err(InterpreterError::Runtime(error)) => {
+                        if let Some(except_body) = except_body {
+                            self.exec_block(except_body, environment)
+                        } else {
+                            Err(InterpreterError::Runtime(error))
+                        }
+                    }
+                };
+
+                if let Some(finally_body) = finally_body {
+                    let finally_outcome = self.exec_block(finally_body, environment);
+                    match finally_outcome {
+                        Ok(ExecResult::Continue) => {}
+                        Ok(flow) => outcome = Ok(flow),
+                        Err(error) => outcome = Err(error),
+                    }
+                }
+
+                outcome
+            }
+            Statement::Raise(value) => {
+                let exception = self.eval_expression(value, environment)?;
+                Err(RuntimeError::Raised {
+                    exception: exception.to_output(),
+                }
+                .into())
             }
             Statement::Return(value) => {
                 let value = if let Some(value) = value {

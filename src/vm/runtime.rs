@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::builtins::BuiltinFunction;
-use crate::bytecode::{CompiledCallable, CompiledProgram, Instruction};
+use crate::bytecode::{CompiledCallable, CompiledProgram, ExceptionHandlerKind, Instruction};
 use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
@@ -59,8 +59,12 @@ impl RegisteredFunction {
                 }
                 let mut child_environment = environment.child_with_locals(&mut locals_map);
                 let parent_stack = std::mem::take(&mut runtime.stack);
+                let parent_exception_handlers = std::mem::take(&mut runtime.exception_handlers);
+                let parent_pending_unwind = runtime.pending_unwind.take();
                 let result = runtime.execute_code(&code, &mut child_environment);
                 runtime.stack = parent_stack;
+                runtime.exception_handlers = parent_exception_handlers;
+                runtime.pending_unwind = parent_pending_unwind;
                 result
             }
         }
@@ -99,6 +103,26 @@ struct VmRuntime<'a> {
     call_registry: CallRegistry<RegisteredFunction>,
     output: Vec<String>,
     stack: Vec<Value>,
+    exception_handlers: Vec<ExceptionHandler>,
+    pending_unwind: Option<UnwindReason>,
+}
+
+#[derive(Debug)]
+enum UnwindReason {
+    Return(Value),
+    Exception(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ExceptionHandler {
+    target_ip: usize,
+    kind: ExceptionHandlerKind,
+    stack_depth: usize,
+}
+
+enum VmStepOutcome {
+    Continue,
+    Return(Value),
 }
 
 /// Call adapter passed into `Value` operations while running in the VM backend.
@@ -128,6 +152,7 @@ impl<'a> VmRuntime<'a> {
             BuiltinFunction::Print,
             BuiltinFunction::Len,
             BuiltinFunction::Range,
+            BuiltinFunction::Exception,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -137,6 +162,8 @@ impl<'a> VmRuntime<'a> {
             call_registry,
             output: Vec::new(),
             stack: Vec::new(),
+            exception_handlers: Vec::new(),
+            pending_unwind: None,
         }
     }
 
@@ -175,193 +202,279 @@ impl<'a> VmRuntime<'a> {
                 None => return Ok(Value::none_object()),
             };
             ip += 1;
-            match instruction {
-                Instruction::PushInt(value) => self.stack.push(Value::int_object(value)),
-                Instruction::PushBool(value) => self.stack.push(Value::bool_object(value)),
-                Instruction::PushString(value) => self.stack.push(Value::string_object(value)),
-                Instruction::BuildList(count) => {
-                    let mut values = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        let value = self.pop_stack()?;
-                        values.push(value);
+            let step_result = self.execute_instruction(&instruction, &mut ip, code, environment);
+            match step_result {
+                Ok(VmStepOutcome::Continue) => {}
+                Ok(VmStepOutcome::Return(value)) => {
+                    if let Some(reason) = self.start_unwind(UnwindReason::Return(value), &mut ip)? {
+                        return self.finish_unwind(reason);
                     }
-                    values.reverse();
-                    self.stack.push(Value::list_object(values));
                 }
-                Instruction::BuildDict(count) => {
-                    let mut entries = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        let value = self.pop_stack()?;
-                        let key = self.pop_stack()?;
-                        entries.push((key, value));
+                Err(VmError::Runtime(error)) => {
+                    if let Some(reason) =
+                        self.start_unwind(UnwindReason::Exception(error), &mut ip)?
+                    {
+                        return self.finish_unwind(reason);
                     }
-                    entries.reverse();
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let dict = Value::dict_object_with_context(entries, &mut context)?;
-                    self.stack.push(dict);
                 }
-                Instruction::PushNone => self.stack.push(Value::none_object()),
-                Instruction::LoadName(name) => {
-                    let value = if let Some(value) = environment.load_cloned(&name) {
-                        value
-                    } else {
-                        return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
-                    };
-                    self.stack.push(value);
-                }
-                Instruction::DefineFunction { name, callable_id } => {
-                    let (function_name, callable_id) = self.register_function(callable_id)?;
-                    environment.store(name, Value::function_object(function_name, callable_id));
-                }
-                Instruction::StoreName(name) => {
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn execute_instruction(
+        &mut self,
+        instruction: &Instruction,
+        ip: &mut usize,
+        code: &[Instruction],
+        environment: &mut Environment<'_>,
+    ) -> VmResult<VmStepOutcome> {
+        match instruction {
+            Instruction::PushInt(value) => self.stack.push(Value::int_object(*value)),
+            Instruction::PushBool(value) => self.stack.push(Value::bool_object(*value)),
+            Instruction::PushString(value) => self.stack.push(Value::string_object(value.clone())),
+            Instruction::BuildList(count) => {
+                let mut values = Vec::with_capacity(*count);
+                for _ in 0..*count {
                     let value = self.pop_stack()?;
-                    environment.store(name, value);
+                    values.push(value);
                 }
-                Instruction::DefineClass { name, methods } => {
-                    let mut class_methods = HashMap::with_capacity(methods.len());
-                    for (method_name, method_callable_id) in methods {
-                        let (function_name, callable_id) =
-                            self.register_function(method_callable_id)?;
-                        class_methods.insert(
-                            method_name,
-                            Value::function_object(function_name, callable_id),
-                        );
-                    }
-                    let class_value = Value::class_object(name.clone(), class_methods);
-                    environment.store(name, class_value);
-                }
-                Instruction::LoadAttr(attribute) => {
-                    let object = self.pop_stack()?;
-                    let attribute_value = object.get_attribute(&attribute)?;
-                    self.stack.push(attribute_value);
-                }
-                Instruction::StoreAttr(attribute) => {
-                    let object = self.pop_stack()?;
+                values.reverse();
+                self.stack.push(Value::list_object(values));
+            }
+            Instruction::BuildDict(count) => {
+                let mut entries = Vec::with_capacity(*count);
+                for _ in 0..*count {
                     let value = self.pop_stack()?;
-                    object.set_attribute(&attribute, value)?;
+                    let key = self.pop_stack()?;
+                    entries.push((key, value));
                 }
-                Instruction::Add => {
-                    let right = self.pop_stack()?;
-                    let left = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let result = left.add(&mut context, right)?;
-                    self.stack.push(result);
+                entries.reverse();
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let dict = Value::dict_object_with_context(entries, &mut context)?;
+                self.stack.push(dict);
+            }
+            Instruction::PushNone => self.stack.push(Value::none_object()),
+            Instruction::LoadName(name) => {
+                let value = if let Some(value) = environment.load_cloned(name) {
+                    value
+                } else {
+                    return Err(RuntimeError::UndefinedVariable { name: name.clone() }.into());
+                };
+                self.stack.push(value);
+            }
+            Instruction::DefineFunction { name, callable_id } => {
+                let (function_name, callable_id) = self.register_function(*callable_id)?;
+                environment.store(
+                    name.clone(),
+                    Value::function_object(function_name, callable_id),
+                );
+            }
+            Instruction::StoreName(name) => {
+                let value = self.pop_stack()?;
+                environment.store(name.clone(), value);
+            }
+            Instruction::DefineClass { name, methods } => {
+                let mut class_methods = HashMap::with_capacity(methods.len());
+                for (method_name, method_callable_id) in methods {
+                    let (function_name, callable_id) =
+                        self.register_function(*method_callable_id)?;
+                    class_methods.insert(
+                        method_name.clone(),
+                        Value::function_object(function_name, callable_id),
+                    );
                 }
-                Instruction::Sub => {
-                    let right = self.pop_stack()?;
-                    let left = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let result = left.sub(&mut context, right)?;
-                    self.stack.push(result);
-                }
-                Instruction::LessThan => {
-                    let right = self.pop_stack()?;
-                    let left = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let result = left.less_than(&mut context, right)?;
-                    self.stack.push(result);
-                }
-                Instruction::LoadIndex => {
-                    let index_value = self.pop_stack()?;
-                    let object_value = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let value = object_value.get_item_with_context(&mut context, index_value)?;
-                    self.stack.push(value);
-                }
-                Instruction::StoreIndex(name) => {
-                    let value = self.pop_stack()?;
-                    let index_value = self.pop_stack()?;
-                    let target = environment
-                        .load_cloned(&name)
-                        .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    target.set_item_with_context(&mut context, index_value, value)?;
-                }
-                Instruction::GetIter => {
-                    let iterable = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    let iterator = iterable.iter_with_context(&mut context)?;
-                    self.stack.push(iterator);
-                }
-                Instruction::ForIter(target) => {
-                    let iterator = self.pop_stack()?;
-                    let mut context = VmCallContext {
-                        runtime: self,
-                        environment,
-                    };
-                    match iterator.next_with_context(&mut context) {
-                        Ok(value) => {
-                            self.stack.push(iterator);
-                            self.stack.push(value);
-                        }
-                        Err(RuntimeError::StopIteration) => {
-                            let next_ip = (ip as isize) + target;
-                            if next_ip < 0 || (next_ip as usize) > code.len() {
-                                return Err(VmError::InvalidJumpTarget);
-                            }
-                            ip = next_ip as usize;
-                        }
-                        Err(error) => return Err(error.into()),
+                let class_value = Value::class_object(name.clone(), class_methods);
+                environment.store(name.clone(), class_value);
+            }
+            Instruction::LoadAttr(attribute) => {
+                let object = self.pop_stack()?;
+                let attribute_value = object.get_attribute(attribute)?;
+                self.stack.push(attribute_value);
+            }
+            Instruction::StoreAttr(attribute) => {
+                let object = self.pop_stack()?;
+                let value = self.pop_stack()?;
+                object.set_attribute(attribute, value)?;
+            }
+            Instruction::Add => {
+                let right = self.pop_stack()?;
+                let left = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let result = left.add(&mut context, right)?;
+                self.stack.push(result);
+            }
+            Instruction::Sub => {
+                let right = self.pop_stack()?;
+                let left = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let result = left.sub(&mut context, right)?;
+                self.stack.push(result);
+            }
+            Instruction::LessThan => {
+                let right = self.pop_stack()?;
+                let left = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let result = left.less_than(&mut context, right)?;
+                self.stack.push(result);
+            }
+            Instruction::LoadIndex => {
+                let index_value = self.pop_stack()?;
+                let object_value = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let value = object_value.get_item_with_context(&mut context, index_value)?;
+                self.stack.push(value);
+            }
+            Instruction::StoreIndex(name) => {
+                let value = self.pop_stack()?;
+                let index_value = self.pop_stack()?;
+                let target = environment
+                    .load_cloned(name)
+                    .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                target.set_item_with_context(&mut context, index_value, value)?;
+            }
+            Instruction::GetIter => {
+                let iterable = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                let iterator = iterable.iter_with_context(&mut context)?;
+                self.stack.push(iterator);
+            }
+            Instruction::ForIter(target) => {
+                let iterator = self.pop_stack()?;
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                match iterator.next_with_context(&mut context) {
+                    Ok(value) => {
+                        self.stack.push(iterator);
+                        self.stack.push(value);
                     }
-                }
-                Instruction::Call { argc } => {
-                    let mut args = Vec::with_capacity(argc);
-                    for _ in 0..argc {
-                        let value = self.pop_stack()?;
-                        args.push(value);
+                    Err(RuntimeError::StopIteration) => {
+                        *ip = resolve_jump_target(*ip, *target, code.len())?;
                     }
-                    args.reverse();
-                    let callee = self.pop_stack()?;
-                    let value = self.call_value(callee, args, environment)?;
-                    self.stack.push(value);
-                }
-                Instruction::JumpIfFalse(target) => {
-                    let value = self.pop_stack()?;
-                    if !value.is_truthy() {
-                        let next_ip = (ip as isize) + target;
-                        if next_ip < 0 || (next_ip as usize) > code.len() {
-                            return Err(VmError::InvalidJumpTarget);
-                        }
-                        ip = next_ip as usize;
-                    }
-                }
-                Instruction::Jump(target) => {
-                    let next_ip = (ip as isize) + target;
-                    if next_ip < 0 || (next_ip as usize) > code.len() {
-                        return Err(VmError::InvalidJumpTarget);
-                    }
-                    ip = next_ip as usize;
-                }
-                Instruction::Pop => {
-                    self.pop_stack()?;
-                }
-                Instruction::Return => return Ok(Value::none_object()),
-                Instruction::ReturnValue => {
-                    let value = self.pop_stack()?;
-                    return Ok(value);
+                    Err(error) => return Err(error.into()),
                 }
             }
+            Instruction::PushExceptionHandler { target, kind } => {
+                let target_ip = resolve_jump_target(*ip, *target, code.len())?;
+                self.exception_handlers.push(ExceptionHandler {
+                    target_ip,
+                    kind: *kind,
+                    stack_depth: self.stack.len(),
+                });
+            }
+            Instruction::PopExceptionHandler => {
+                let _ = self
+                    .exception_handlers
+                    .pop()
+                    .expect("exception handler stack must not underflow");
+            }
+            Instruction::Call { argc } => {
+                let mut args = Vec::with_capacity(*argc);
+                for _ in 0..*argc {
+                    let value = self.pop_stack()?;
+                    args.push(value);
+                }
+                args.reverse();
+                let callee = self.pop_stack()?;
+                let value = self.call_value(callee, args, environment)?;
+                self.stack.push(value);
+            }
+            Instruction::Raise => {
+                let exception = self.pop_stack()?;
+                return Err(RuntimeError::Raised {
+                    exception: exception.to_output(),
+                }
+                .into());
+            }
+            Instruction::ResumeUnwind => {
+                let reason = self
+                    .pending_unwind
+                    .take()
+                    .ok_or(RuntimeError::NoActiveUnwind)?;
+                if let Some(reason) = self.start_unwind(reason, ip)? {
+                    return Ok(match reason {
+                        UnwindReason::Return(value) => VmStepOutcome::Return(value),
+                        UnwindReason::Exception(error) => {
+                            return Err(error.into());
+                        }
+                    });
+                }
+            }
+            Instruction::JumpIfFalse(target) => {
+                let value = self.pop_stack()?;
+                if !value.is_truthy() {
+                    *ip = resolve_jump_target(*ip, *target, code.len())?;
+                }
+            }
+            Instruction::Jump(target) => {
+                *ip = resolve_jump_target(*ip, *target, code.len())?;
+            }
+            Instruction::Pop => {
+                self.pop_stack()?;
+            }
+            Instruction::Return => return Ok(VmStepOutcome::Return(Value::none_object())),
+            Instruction::ReturnValue => {
+                let value = self.pop_stack()?;
+                return Ok(VmStepOutcome::Return(value));
+            }
+        }
+
+        Ok(VmStepOutcome::Continue)
+    }
+
+    fn start_unwind(
+        &mut self,
+        reason: UnwindReason,
+        ip: &mut usize,
+    ) -> VmResult<Option<UnwindReason>> {
+        let reason = reason;
+        while let Some(handler) = self.exception_handlers.pop() {
+            self.stack.truncate(handler.stack_depth);
+            match handler.kind {
+                ExceptionHandlerKind::Except => {
+                    if matches!(reason, UnwindReason::Exception(_)) {
+                        *ip = handler.target_ip;
+                        return Ok(None);
+                    }
+                }
+                ExceptionHandlerKind::Finally => {
+                    self.pending_unwind = Some(reason);
+                    *ip = handler.target_ip;
+                    return Ok(None);
+                }
+            }
+        }
+        Ok(Some(reason))
+    }
+
+    fn finish_unwind(&mut self, reason: UnwindReason) -> VmResult<Value> {
+        match reason {
+            UnwindReason::Return(value) => Ok(value),
+            UnwindReason::Exception(error) => Err(error.into()),
         }
     }
 
@@ -382,6 +495,14 @@ impl<'a> VmRuntime<'a> {
         };
         callee.call(&mut context, args).map_err(Into::into)
     }
+}
+
+fn resolve_jump_target(ip: usize, offset: isize, code_len: usize) -> VmResult<usize> {
+    let next_ip = (ip as isize) + offset;
+    if next_ip < 0 || (next_ip as usize) > code_len {
+        return Err(VmError::InvalidJumpTarget);
+    }
+    Ok(next_ip as usize)
 }
 
 /// Converts VM-internal errors surfaced from nested calls into runtime errors.

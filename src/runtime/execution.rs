@@ -98,6 +98,20 @@ pub(crate) fn call_builtin_with_output(
             }
             Ok(Value::list_object(values))
         }
+        BuiltinFunction::Exception => {
+            let message = match args.len() {
+                0 => String::new(),
+                1 => args[0].to_output(),
+                _ => format!(
+                    "({})",
+                    args.iter()
+                        .map(Value::to_output)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            };
+            Ok(Value::string_object(message))
+        }
     }
 }
 
@@ -107,6 +121,7 @@ pub(crate) fn seed_builtin_globals(globals: &mut HashMap<String, Value>) {
         BuiltinFunction::Print,
         BuiltinFunction::Len,
         BuiltinFunction::Range,
+        BuiltinFunction::Exception,
     ] {
         globals
             .entry(builtin.name().to_string())

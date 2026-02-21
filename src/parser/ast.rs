@@ -61,6 +61,12 @@ pub enum Statement {
         then_body: Vec<Statement>,
         else_body: Vec<Statement>,
     },
+    Try {
+        body: Vec<Statement>,
+        except_body: Option<Vec<Statement>>,
+        finally_body: Option<Vec<Statement>>,
+    },
+    Raise(Expression),
     Return(Option<Expression>),
     Pass,
     Expr(Expression),

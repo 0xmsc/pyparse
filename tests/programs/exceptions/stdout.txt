@@ -1,0 +1,7 @@
+finally
+2
+caught
+finally
+7
+outer-caught
+outer-finally

@@ -21,6 +21,10 @@ pub enum TokenKind<'a> {
     Def,
     Class,
     Return,
+    Raise,
+    Try,
+    Except,
+    Finally,
     Pass,
 
     // Operators

@@ -204,6 +204,72 @@ mod tests {
     }
 
     #[test]
+    fn handles_try_except_and_finally() {
+        let program = Program {
+            statements: vec![
+                Statement::Try {
+                    body: vec![Statement::Raise(Expression::String("boom".to_string()))],
+                    except_body: Some(vec![Statement::Expr(call(
+                        "print",
+                        vec![Expression::String("caught".to_string())],
+                    ))]),
+                    finally_body: Some(vec![Statement::Expr(call(
+                        "print",
+                        vec![Expression::String("finally".to_string())],
+                    ))]),
+                },
+                Statement::Expr(call("print", vec![Expression::String("after".to_string())])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                caught
+                finally
+                after
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
+    fn runs_finally_before_returning_from_function() {
+        let program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec![],
+                    body: vec![Statement::Try {
+                        body: vec![Statement::Return(Some(Expression::Integer(1)))],
+                        except_body: None,
+                        finally_body: Some(vec![Statement::Expr(call(
+                            "print",
+                            vec![Expression::String("cleanup".to_string())],
+                        ))]),
+                    }],
+                },
+                Statement::Expr(call("print", vec![call("f", vec![])])),
+            ],
+        };
+
+        let compiled = compile(&program).expect("compile should succeed");
+        let mut vm = VM::new();
+        let output = vm.run_compiled(&compiled).expect("run should succeed");
+        assert_eq!(
+            output,
+            indoc! {"
+                cleanup
+                1
+            "}
+            .trim_end()
+        );
+    }
+
+    #[test]
     fn list_append_mutates_receiver_and_returns_none() {
         let program = Program {
             statements: vec![

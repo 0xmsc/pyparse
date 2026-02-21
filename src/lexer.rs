@@ -220,6 +220,10 @@ impl<'a> Lexer<'a> {
             "def" => TokenKind::Def,
             "class" => TokenKind::Class,
             "return" => TokenKind::Return,
+            "raise" => TokenKind::Raise,
+            "try" => TokenKind::Try,
+            "except" => TokenKind::Except,
+            "finally" => TokenKind::Finally,
             "pass" => TokenKind::Pass,
             "True" => TokenKind::True,
             "False" => TokenKind::False,
@@ -566,6 +570,49 @@ mod tests {
             TokenKind::LParen,
             TokenKind::Identifier("x"),
             TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::EOF,
+        ];
+        assert_eq!(actual_kinds, expected_kinds);
+    }
+
+    #[test]
+    fn tokenizes_exception_keywords() {
+        let input = indoc! {"
+            try:
+                raise \"boom\"
+            except:
+                pass
+            finally:
+                pass
+        "};
+        let actual_tokens = tokenize(input).expect("tokenize should succeed");
+        let actual_kinds = actual_tokens
+            .into_iter()
+            .map(|token| token.kind)
+            .collect::<Vec<_>>();
+        let expected_kinds = vec![
+            TokenKind::Try,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Raise,
+            TokenKind::String("boom"),
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Except,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Pass,
+            TokenKind::Newline,
+            TokenKind::Dedent,
+            TokenKind::Finally,
+            TokenKind::Colon,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Pass,
             TokenKind::Newline,
             TokenKind::Dedent,
             TokenKind::EOF,

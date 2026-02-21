@@ -226,6 +226,50 @@ mod tests {
     }
 
     #[test]
+    fn handles_try_except_and_finally() {
+        let program = Program {
+            statements: vec![
+                Statement::Try {
+                    body: vec![Statement::Raise(Expression::String("boom".to_string()))],
+                    except_body: Some(vec![print(vec![Expression::String("caught".to_string())])]),
+                    finally_body: Some(vec![print(vec![Expression::String(
+                        "finally".to_string(),
+                    )])]),
+                },
+                print(vec![Expression::String("after".to_string())]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "caught\nfinally\nafter");
+    }
+
+    #[test]
+    fn runs_finally_before_returning_from_function() {
+        let program = Program {
+            statements: vec![
+                Statement::FunctionDef {
+                    name: "f".to_string(),
+                    params: vec![],
+                    body: vec![Statement::Try {
+                        body: vec![Statement::Return(Some(int(1)))],
+                        except_body: None,
+                        finally_body: Some(vec![print(vec![Expression::String(
+                            "cleanup".to_string(),
+                        )])]),
+                    }],
+                },
+                print(vec![call("f", vec![])]),
+            ],
+        };
+
+        let interpreter = Interpreter::new();
+        let output = run_program(&interpreter, &program).expect("run failed");
+        assert_eq!(output, "cleanup\n1");
+    }
+
+    #[test]
     fn returns_from_function_without_executing_remaining_body() {
         let program = Program {
             statements: vec![

@@ -60,8 +60,10 @@ impl<'a> Parser<'a> {
             TokenKind::Class => self.parse_class_def(),
             TokenKind::Def => self.parse_function_def(),
             TokenKind::If => self.parse_if(),
+            TokenKind::Try => self.parse_try(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
+            TokenKind::Raise => self.parse_raise(),
             TokenKind::Return => self.parse_return(),
             TokenKind::Pass => self.parse_pass(),
             TokenKind::Identifier(_) => self.parse_identifier_led_statement(),
@@ -215,6 +217,46 @@ impl<'a> Parser<'a> {
             iterable,
             body,
         })
+    }
+
+    /// Parse a `try` statement with catch-all `except` and/or `finally` blocks.
+    fn parse_try(&mut self) -> ParseResult<Statement> {
+        self.expect_token(TokenKind::Try, "try")?;
+        self.expect_token(TokenKind::Colon, ":")?;
+        self.expect_token(TokenKind::Newline, "newline")?;
+        let body = self.parse_indented_block()?;
+
+        let mut except_body = None;
+        if self.try_consume(TokenKind::Except) {
+            self.expect_token(TokenKind::Colon, ":")?;
+            self.expect_token(TokenKind::Newline, "newline")?;
+            except_body = Some(self.parse_indented_block()?);
+        }
+
+        let mut finally_body = None;
+        if self.try_consume(TokenKind::Finally) {
+            self.expect_token(TokenKind::Colon, ":")?;
+            self.expect_token(TokenKind::Newline, "newline")?;
+            finally_body = Some(self.parse_indented_block()?);
+        }
+
+        if except_body.is_none() && finally_body.is_none() {
+            return Err(self.error("except or finally"));
+        }
+
+        Ok(Statement::Try {
+            body,
+            except_body,
+            finally_body,
+        })
+    }
+
+    /// Parse a `raise` statement with a required expression argument.
+    fn parse_raise(&mut self) -> ParseResult<Statement> {
+        self.expect_token(TokenKind::Raise, "raise")?;
+        let value = self.parse_expression()?;
+        self.expect_statement_terminator()?;
+        Ok(Statement::Raise(value))
     }
 
     /// Parse a `return` statement.
@@ -764,6 +806,65 @@ mod tests {
                         callee: Box::new(Expression::Identifier("print".to_string())),
                         args: vec![Expression::Identifier("x".to_string())],
                     })],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_raise_statement() {
+        let tokens = vec![
+            tok(TokenKind::Raise),
+            tok(TokenKind::String("boom")),
+            tok(TokenKind::Newline),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse failed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Raise(Expression::String("boom".to_string()))],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_try_except_finally() {
+        let tokens = vec![
+            tok(TokenKind::Try),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Raise),
+            tok(TokenKind::String("boom")),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Except),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Pass),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::Finally),
+            tok(TokenKind::Colon),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Indent),
+            tok(TokenKind::Pass),
+            tok(TokenKind::Newline),
+            tok(TokenKind::Dedent),
+            tok(TokenKind::EOF),
+        ];
+
+        let program = parse_tokens(tokens).expect("parse failed");
+        assert_eq!(
+            program,
+            Program {
+                statements: vec![Statement::Try {
+                    body: vec![Statement::Raise(Expression::String("boom".to_string()))],
+                    except_body: Some(vec![Statement::Pass]),
+                    finally_body: Some(vec![Statement::Pass]),
                 }],
             }
         );
