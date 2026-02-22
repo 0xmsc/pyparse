@@ -1,3 +1,0 @@
-- [x] Add runtime fixture program covering `raise` + `try/except/finally`
-- [x] Add fixture metadata (`case.yaml`) and expected output
-- [x] Run `just test`
