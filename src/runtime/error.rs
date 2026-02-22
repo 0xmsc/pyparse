@@ -1,3 +1,4 @@
+use crate::runtime::exception::RaisedException;
 use thiserror::Error;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -48,9 +49,7 @@ pub(crate) enum RuntimeError {
     #[error("Object of type {type_name} is not callable")]
     ObjectNotCallable { type_name: String },
     #[error("Unhandled exception: {exception}")]
-    Raised { exception: String },
-    #[error("StopIteration")]
-    StopIteration,
+    Raised { exception: RaisedException },
     #[error("No active unwind to resume")]
     NoActiveUnwind,
     #[error("Nested function definitions are not supported")]

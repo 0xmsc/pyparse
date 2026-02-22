@@ -1,4 +1,5 @@
 use crate::runtime::error::RuntimeError;
+use crate::runtime::exception::RaisedException;
 use crate::runtime::method::bound_method;
 use crate::runtime::object::{ObjectRef, RuntimeObject};
 use crate::runtime::value::Value;
@@ -195,7 +196,9 @@ impl ListIteratorObject {
                 self.index += 1;
                 Ok(value)
             }
-            Err(RuntimeError::IndexOutOfBounds { .. }) => Err(RuntimeError::StopIteration),
+            Err(RuntimeError::IndexOutOfBounds { .. }) => Err(RuntimeError::Raised {
+                exception: RaisedException::stop_iteration(),
+            }),
             Err(error) => Err(error),
         }
     }

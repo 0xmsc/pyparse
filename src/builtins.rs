@@ -3,8 +3,6 @@ pub enum BuiltinFunction {
     Print,
     Len,
     Range,
-    Exception,
-    StopIteration,
 }
 
 impl BuiltinFunction {
@@ -13,8 +11,6 @@ impl BuiltinFunction {
             Self::Print => "print",
             Self::Len => "len",
             Self::Range => "range",
-            Self::Exception => "Exception",
-            Self::StopIteration => "StopIteration",
         }
     }
 
@@ -23,8 +19,6 @@ impl BuiltinFunction {
             Self::Print => 1,
             Self::Len => 2,
             Self::Range => 3,
-            Self::Exception => 4,
-            Self::StopIteration => 5,
         }
     }
 }

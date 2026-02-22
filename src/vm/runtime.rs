@@ -4,6 +4,7 @@ use crate::builtins::BuiltinFunction;
 use crate::bytecode::{CompiledCallable, CompiledProgram, ExceptionHandlerKind, Instruction};
 use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::exception::RaisedException;
 use crate::runtime::execution::{Environment, call_builtin_with_output, seed_builtin_globals};
 use crate::runtime::object::{CallContext, CallableId};
 use crate::runtime::value::Value;
@@ -110,7 +111,7 @@ struct VmRuntime<'a> {
 #[derive(Debug)]
 enum UnwindReason {
     Return(Value),
-    Exception(RuntimeError),
+    Exception(RaisedException),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -152,8 +153,6 @@ impl<'a> VmRuntime<'a> {
             BuiltinFunction::Print,
             BuiltinFunction::Len,
             BuiltinFunction::Range,
-            BuiltinFunction::Exception,
-            BuiltinFunction::StopIteration,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -211,9 +210,9 @@ impl<'a> VmRuntime<'a> {
                         return self.finish_unwind(reason);
                     }
                 }
-                Err(VmError::Runtime(error)) => {
+                Err(VmError::Runtime(RuntimeError::Raised { exception })) => {
                     if let Some(reason) =
-                        self.start_unwind(UnwindReason::Exception(error), &mut ip)?
+                        self.start_unwind(UnwindReason::Exception(exception), &mut ip)?
                     {
                         return self.finish_unwind(reason);
                     }
@@ -373,7 +372,7 @@ impl<'a> VmRuntime<'a> {
                         self.stack.push(iterator);
                         self.stack.push(value);
                     }
-                    Err(RuntimeError::StopIteration) => {
+                    Err(RuntimeError::Raised { exception }) if exception.is_stop_iteration() => {
                         *ip = resolve_jump_target(*ip, *target, code.len())?;
                     }
                     Err(error) => return Err(error.into()),
@@ -406,7 +405,11 @@ impl<'a> VmRuntime<'a> {
             }
             Instruction::Raise => {
                 let exception = self.pop_stack()?;
-                return Err(exception.to_raised_runtime_error().into());
+                let mut context = VmCallContext {
+                    runtime: self,
+                    environment,
+                };
+                return Err(exception.to_raised_runtime_error(&mut context)?.into());
             }
             Instruction::ResumeUnwind => {
                 let reason = self
@@ -416,8 +419,8 @@ impl<'a> VmRuntime<'a> {
                 if let Some(reason) = self.start_unwind(reason, ip)? {
                     return Ok(match reason {
                         UnwindReason::Return(value) => VmStepOutcome::Return(value),
-                        UnwindReason::Exception(error) => {
-                            return Err(error.into());
+                        UnwindReason::Exception(exception) => {
+                            return Err(RuntimeError::Raised { exception }.into());
                         }
                     });
                 }
@@ -472,7 +475,7 @@ impl<'a> VmRuntime<'a> {
     fn finish_unwind(&mut self, reason: UnwindReason) -> VmResult<Value> {
         match reason {
             UnwindReason::Return(value) => Ok(value),
-            UnwindReason::Exception(error) => Err(error.into()),
+            UnwindReason::Exception(exception) => Err(RuntimeError::Raised { exception }.into()),
         }
     }
 

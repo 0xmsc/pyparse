@@ -109,8 +109,6 @@ impl InterpreterRuntime {
             BuiltinFunction::Print,
             BuiltinFunction::Len,
             BuiltinFunction::Range,
-            BuiltinFunction::Exception,
-            BuiltinFunction::StopIteration,
         ] {
             call_registry
                 .register_with_id(builtin.callable_id(), RegisteredFunction::builtin(builtin));
@@ -277,7 +275,11 @@ impl InterpreterRuntime {
                     };
                     let item = match next_item {
                         Ok(item) => item,
-                        Err(RuntimeError::StopIteration) => break,
+                        Err(RuntimeError::Raised { exception })
+                            if exception.is_stop_iteration() =>
+                        {
+                            break;
+                        }
                         Err(error) => return Err(error.into()),
                     };
                     environment.store(target.clone(), item);
@@ -295,13 +297,16 @@ impl InterpreterRuntime {
             } => {
                 let mut outcome = match self.exec_block(body, environment) {
                     Ok(result) => Ok(result),
-                    Err(InterpreterError::Runtime(error)) => {
+                    Err(InterpreterError::Runtime(RuntimeError::Raised { exception })) => {
                         if let Some(except_body) = except_body {
                             self.exec_block(except_body, environment)
                         } else {
-                            Err(InterpreterError::Runtime(error))
+                            Err(InterpreterError::Runtime(RuntimeError::Raised {
+                                exception,
+                            }))
                         }
                     }
+                    Err(error) => Err(error),
                 };
 
                 if let Some(finally_body) = finally_body {
@@ -317,7 +322,11 @@ impl InterpreterRuntime {
             }
             Statement::Raise(value) => {
                 let exception = self.eval_expression(value, environment)?;
-                Err(exception.to_raised_runtime_error().into())
+                let mut context = InterpreterCallContext {
+                    runtime: self,
+                    environment,
+                };
+                Err(exception.to_raised_runtime_error(&mut context)?.into())
             }
             Statement::Return(value) => {
                 let value = if let Some(value) = value {

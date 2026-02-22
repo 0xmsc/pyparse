@@ -3,6 +3,7 @@ use crate::runtime::callable::{BuiltinFunctionObject, CallableObject, FunctionOb
 use crate::runtime::class::{ClassObject, InstanceObject};
 use crate::runtime::dict::DictObject;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::exception::{exception_type_kind, raised_exception};
 use crate::runtime::list::ListObject;
 use crate::runtime::object::{
     BoundMethodCallable, CallContext, CallableId, ObjectRef, new_list_object,
@@ -105,14 +106,31 @@ impl Value {
         }
     }
 
-    pub(crate) fn to_raised_runtime_error(&self) -> RuntimeError {
-        let rendered = self.to_output();
-        if rendered == "StopIteration" || rendered.starts_with("StopIteration: ") {
-            return RuntimeError::StopIteration;
+    pub(crate) fn to_raised_runtime_error(
+        &self,
+        context: &mut dyn CallContext,
+    ) -> Result<RuntimeError, RuntimeError> {
+        if let Some(exception) = raised_exception(self) {
+            return Ok(RuntimeError::Raised { exception });
         }
-        RuntimeError::Raised {
-            exception: rendered,
+
+        if exception_type_kind(self).is_some() {
+            let instance = self.call(context, Vec::new())?;
+            if let Some(exception) = raised_exception(&instance) {
+                return Ok(RuntimeError::Raised { exception });
+            }
+            return Err(RuntimeError::UnsupportedOperation {
+                operation: "raise".to_string(),
+                type_name: instance.type_name().to_string(),
+            });
         }
+
+        Err(RuntimeError::InvalidArgumentType {
+            operation: "raise".to_string(),
+            argument: "exception".to_string(),
+            expected: "exception class or instance".to_string(),
+            got: self.type_name().to_string(),
+        })
     }
 
     pub(crate) fn is_truthy(&self) -> bool {

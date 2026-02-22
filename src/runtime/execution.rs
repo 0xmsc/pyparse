@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::builtins::BuiltinFunction;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::exception::{ExceptionTypeKind, exception_type_value};
 use crate::runtime::value::Value;
 
 /// Name-resolution scope used by interpreter and VM execution.
@@ -98,42 +99,6 @@ pub(crate) fn call_builtin_with_output(
             }
             Ok(Value::list_object(values))
         }
-        BuiltinFunction::Exception => {
-            let message = match args.len() {
-                0 => String::new(),
-                1 => args[0].to_output(),
-                _ => format!(
-                    "({})",
-                    args.iter()
-                        .map(Value::to_output)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            };
-            if message.is_empty() {
-                Ok(Value::string_object("Exception".to_string()))
-            } else {
-                Ok(Value::string_object(format!("Exception: {message}")))
-            }
-        }
-        BuiltinFunction::StopIteration => {
-            let message = match args.len() {
-                0 => String::new(),
-                1 => args[0].to_output(),
-                _ => format!(
-                    "({})",
-                    args.iter()
-                        .map(Value::to_output)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            };
-            if message.is_empty() {
-                Ok(Value::string_object("StopIteration".to_string()))
-            } else {
-                Ok(Value::string_object(format!("StopIteration: {message}")))
-            }
-        }
     }
 }
 
@@ -143,11 +108,18 @@ pub(crate) fn seed_builtin_globals(globals: &mut HashMap<String, Value>) {
         BuiltinFunction::Print,
         BuiltinFunction::Len,
         BuiltinFunction::Range,
-        BuiltinFunction::Exception,
-        BuiltinFunction::StopIteration,
     ] {
         globals
             .entry(builtin.name().to_string())
             .or_insert_with(|| Value::builtin_function_object(builtin));
     }
+    globals
+        .entry("BaseException".to_string())
+        .or_insert_with(|| exception_type_value(ExceptionTypeKind::BaseException));
+    globals
+        .entry("Exception".to_string())
+        .or_insert_with(|| exception_type_value(ExceptionTypeKind::Exception));
+    globals
+        .entry("StopIteration".to_string())
+        .or_insert_with(|| exception_type_value(ExceptionTypeKind::StopIteration));
 }

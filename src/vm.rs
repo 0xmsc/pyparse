@@ -208,7 +208,10 @@ mod tests {
         let program = Program {
             statements: vec![
                 Statement::Try {
-                    body: vec![Statement::Raise(Expression::String("boom".to_string()))],
+                    body: vec![Statement::Raise(Expression::Call {
+                        callee: Box::new(Expression::Identifier("Exception".to_string())),
+                        args: vec![Expression::String("boom".to_string())],
+                    })],
                     except_body: Some(vec![Statement::Expr(call(
                         "print",
                         vec![Expression::String("caught".to_string())],
