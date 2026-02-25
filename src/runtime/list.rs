@@ -28,16 +28,7 @@ impl ListObject {
     }
 
     pub(crate) fn __setitem__(&mut self, index: i64, value: Value) -> Result<(), RuntimeError> {
-        if index < 0 {
-            return Err(RuntimeError::NegativeIndex { index });
-        }
-        let index = index as usize;
-        if index >= self.values.len() {
-            return Err(RuntimeError::IndexOutOfBounds {
-                index,
-                len: self.values.len(),
-            });
-        }
+        let index = self.checked_index(index)?;
         self.values[index] = value;
         Ok(())
     }
@@ -51,10 +42,7 @@ impl ListObject {
     }
 
     pub(crate) fn __getitem__(&self, index: i64) -> Result<Value, RuntimeError> {
-        if index < 0 {
-            return Err(RuntimeError::NegativeIndex { index });
-        }
-        let index = index as usize;
+        let index = self.checked_index(index)?;
         self.values
             .get(index)
             .cloned()
@@ -62,6 +50,20 @@ impl ListObject {
                 index,
                 len: self.values.len(),
             })
+    }
+
+    fn checked_index(&self, index: i64) -> Result<usize, RuntimeError> {
+        if index < 0 {
+            return Err(RuntimeError::NegativeIndex { index });
+        }
+        let index = index as usize;
+        if index >= self.values.len() {
+            return Err(RuntimeError::IndexOutOfBounds {
+                index,
+                len: self.values.len(),
+            });
+        }
+        Ok(index)
     }
 }
 
@@ -246,7 +248,7 @@ fn with_list<R>(receiver: &ObjectRef, f: impl FnOnce(&ListObject) -> R) -> R {
     let list = object
         .as_any()
         .downcast_ref::<ListObject>()
-        .expect("list get_attribute receiver must be ListObject");
+        .expect("list helper receiver must be ListObject");
     f(list)
 }
 
@@ -255,7 +257,7 @@ fn with_list_mut<R>(receiver: &ObjectRef, f: impl FnOnce(&mut ListObject) -> R) 
     let list = object
         .as_any_mut()
         .downcast_mut::<ListObject>()
-        .expect("list get_attribute receiver must be ListObject");
+        .expect("list helper receiver must be ListObject");
     f(list)
 }
 

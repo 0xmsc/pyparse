@@ -13,7 +13,6 @@ use crate::runtime::execution::{Environment, seed_builtin_globals};
 
 mod error;
 mod runtime;
-mod value;
 
 use error::InterpreterError;
 use runtime::{ExecResult, InterpreterRuntime};

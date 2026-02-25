@@ -6,8 +6,9 @@ use crate::runtime::call_registry::CallRegistry;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::execution::{Environment, call_builtin_with_output};
 use crate::runtime::object::{CallContext, CallableId};
+use crate::runtime::value::Value;
 
-use super::{InterpreterError, value::Value};
+use super::InterpreterError;
 
 #[derive(Clone)]
 struct RegisteredFunction {
@@ -280,7 +281,7 @@ impl InterpreterRuntime {
                         {
                             break;
                         }
-                        Err(error) => return Err(error.into()),
+                        Err(error) => return Err(InterpreterError::from(error)),
                     };
                     environment.store(target.clone(), item);
 

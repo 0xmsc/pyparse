@@ -3,16 +3,16 @@ use std::collections::HashMap;
 
 use crate::ast::{AssignTarget, BinaryOperator, Expression, Program, Statement};
 
-/// Stack-machine instruction set consumed by the VM backend.
-///
-/// Instructions follow a Python-like operand-stack model where expression
-/// evaluation pushes values and operators/calls consume them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExceptionHandlerKind {
     Except,
     Finally,
 }
 
+/// Stack-machine instruction set consumed by the VM backend.
+///
+/// Instructions follow a Python-like operand-stack model where expression
+/// evaluation pushes values and operators/calls consume them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instruction {
     PushInt(i64),
@@ -314,6 +314,11 @@ fn compile_try_statement(
             let except_len = except_code.len();
             let finally_len = finally_code.len();
 
+            // Layout (relative jumps are measured from the next instruction):
+            // [push finally][push except][try][pop except][jump over except]
+            // [except][pop finally][jump over finally+resume]
+            // [finally for unwind][ResumeUnwind]
+            // [finally for normal path]
             code.push(Instruction::PushExceptionHandler {
                 target: (try_len + except_len + 5) as isize,
                 kind: ExceptionHandlerKind::Finally,
@@ -336,6 +341,7 @@ fn compile_try_statement(
             let try_len = try_code.len();
             let except_len = except_code.len();
 
+            // Layout: [push except][try][pop except][jump over except][except]
             code.push(Instruction::PushExceptionHandler {
                 target: (try_len + 2) as isize,
                 kind: ExceptionHandlerKind::Except,
@@ -349,6 +355,10 @@ fn compile_try_statement(
             let try_len = try_code.len();
             let finally_len = finally_code.len();
 
+            // Layout:
+            // [push finally][try][pop finally][jump over unwind-finally+resume]
+            // [finally for unwind][ResumeUnwind]
+            // [finally for normal path]
             code.push(Instruction::PushExceptionHandler {
                 target: (try_len + 2) as isize,
                 kind: ExceptionHandlerKind::Finally,

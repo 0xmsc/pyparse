@@ -189,6 +189,131 @@ impl<'a> VmRuntime<'a> {
         self.output.join("\n")
     }
 
+    fn call_context<'runtime, 'env>(
+        &'runtime mut self,
+        environment: &'runtime mut Environment<'env>,
+    ) -> VmCallContext<'runtime, 'a, 'env> {
+        VmCallContext {
+            runtime: self,
+            environment,
+        }
+    }
+
+    fn pop_call_args(&mut self, argc: usize) -> VmResult<Vec<Value>> {
+        let mut args = Vec::with_capacity(argc);
+        for _ in 0..argc {
+            args.push(self.pop_stack()?);
+        }
+        args.reverse();
+        Ok(args)
+    }
+
+    fn execute_binary_op(
+        &mut self,
+        environment: &mut Environment<'_>,
+        op: impl FnOnce(&Value, &mut dyn CallContext, Value) -> Result<Value, RuntimeError>,
+    ) -> VmResult<()> {
+        let right = self.pop_stack()?;
+        let left = self.pop_stack()?;
+        let result = {
+            let mut context = self.call_context(environment);
+            op(&left, &mut context, right)?
+        };
+        self.stack.push(result);
+        Ok(())
+    }
+
+    fn build_dict_from_stack(
+        &mut self,
+        count: usize,
+        environment: &mut Environment<'_>,
+    ) -> VmResult<()> {
+        let mut entries = Vec::with_capacity(count);
+        for _ in 0..count {
+            let value = self.pop_stack()?;
+            let key = self.pop_stack()?;
+            entries.push((key, value));
+        }
+        entries.reverse();
+        let dict = {
+            let mut context = self.call_context(environment);
+            Value::dict_object_with_context(entries, &mut context)?
+        };
+        self.stack.push(dict);
+        Ok(())
+    }
+
+    fn load_index(&mut self, environment: &mut Environment<'_>) -> VmResult<()> {
+        let index_value = self.pop_stack()?;
+        let object_value = self.pop_stack()?;
+        let value = {
+            let mut context = self.call_context(environment);
+            object_value.get_item_with_context(&mut context, index_value)?
+        };
+        self.stack.push(value);
+        Ok(())
+    }
+
+    fn store_index(&mut self, name: &str, environment: &mut Environment<'_>) -> VmResult<()> {
+        let value = self.pop_stack()?;
+        let index_value = self.pop_stack()?;
+        let target =
+            environment
+                .load_cloned(name)
+                .ok_or_else(|| RuntimeError::UndefinedVariable {
+                    name: name.to_string(),
+                })?;
+        {
+            let mut context = self.call_context(environment);
+            target.set_item_with_context(&mut context, index_value, value)?;
+        }
+        Ok(())
+    }
+
+    fn get_iter(&mut self, environment: &mut Environment<'_>) -> VmResult<()> {
+        let iterable = self.pop_stack()?;
+        let iterator = {
+            let mut context = self.call_context(environment);
+            iterable.iter_with_context(&mut context)?
+        };
+        self.stack.push(iterator);
+        Ok(())
+    }
+
+    fn step_for_iter(
+        &mut self,
+        target: isize,
+        ip: &mut usize,
+        code_len: usize,
+        environment: &mut Environment<'_>,
+    ) -> VmResult<()> {
+        let iterator = self.pop_stack()?;
+        let next_result = {
+            let mut context = self.call_context(environment);
+            iterator.next_with_context(&mut context)
+        };
+        match next_result {
+            Ok(value) => {
+                self.stack.push(iterator);
+                self.stack.push(value);
+            }
+            Err(RuntimeError::Raised { exception }) if exception.is_stop_iteration() => {
+                *ip = resolve_jump_target(*ip, target, code_len)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    fn raise_from_stack(&mut self, environment: &mut Environment<'_>) -> VmResult<VmStepOutcome> {
+        let exception = self.pop_stack()?;
+        let mut context = self.call_context(environment);
+        let error = match exception.to_raised_runtime_error(&mut context) {
+            Ok(error) | Err(error) => error,
+        };
+        Err(error.into())
+    }
+
     /// Executes stack bytecode and returns the function result value.
     fn execute_code(
         &mut self,
@@ -243,19 +368,7 @@ impl<'a> VmRuntime<'a> {
                 self.stack.push(Value::list_object(values));
             }
             Instruction::BuildDict(count) => {
-                let mut entries = Vec::with_capacity(*count);
-                for _ in 0..*count {
-                    let value = self.pop_stack()?;
-                    let key = self.pop_stack()?;
-                    entries.push((key, value));
-                }
-                entries.reverse();
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let dict = Value::dict_object_with_context(entries, &mut context)?;
-                self.stack.push(dict);
+                self.build_dict_from_stack(*count, environment)?;
             }
             Instruction::PushNone => self.stack.push(Value::none_object()),
             Instruction::LoadName(name) => {
@@ -301,82 +414,25 @@ impl<'a> VmRuntime<'a> {
                 object.set_attribute(attribute, value)?;
             }
             Instruction::Add => {
-                let right = self.pop_stack()?;
-                let left = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let result = left.add(&mut context, right)?;
-                self.stack.push(result);
+                self.execute_binary_op(environment, Value::add)?;
             }
             Instruction::Sub => {
-                let right = self.pop_stack()?;
-                let left = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let result = left.sub(&mut context, right)?;
-                self.stack.push(result);
+                self.execute_binary_op(environment, Value::sub)?;
             }
             Instruction::LessThan => {
-                let right = self.pop_stack()?;
-                let left = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let result = left.less_than(&mut context, right)?;
-                self.stack.push(result);
+                self.execute_binary_op(environment, Value::less_than)?;
             }
             Instruction::LoadIndex => {
-                let index_value = self.pop_stack()?;
-                let object_value = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let value = object_value.get_item_with_context(&mut context, index_value)?;
-                self.stack.push(value);
+                self.load_index(environment)?;
             }
             Instruction::StoreIndex(name) => {
-                let value = self.pop_stack()?;
-                let index_value = self.pop_stack()?;
-                let target = environment
-                    .load_cloned(name)
-                    .ok_or_else(|| RuntimeError::UndefinedVariable { name: name.clone() })?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                target.set_item_with_context(&mut context, index_value, value)?;
+                self.store_index(name, environment)?;
             }
             Instruction::GetIter => {
-                let iterable = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                let iterator = iterable.iter_with_context(&mut context)?;
-                self.stack.push(iterator);
+                self.get_iter(environment)?;
             }
             Instruction::ForIter(target) => {
-                let iterator = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                match iterator.next_with_context(&mut context) {
-                    Ok(value) => {
-                        self.stack.push(iterator);
-                        self.stack.push(value);
-                    }
-                    Err(RuntimeError::Raised { exception }) if exception.is_stop_iteration() => {
-                        *ip = resolve_jump_target(*ip, *target, code.len())?;
-                    }
-                    Err(error) => return Err(error.into()),
-                }
+                self.step_for_iter(*target, ip, code.len(), environment)?;
             }
             Instruction::PushExceptionHandler { target, kind } => {
                 let target_ip = resolve_jump_target(*ip, *target, code.len())?;
@@ -393,23 +449,13 @@ impl<'a> VmRuntime<'a> {
                     .expect("exception handler stack must not underflow");
             }
             Instruction::Call { argc } => {
-                let mut args = Vec::with_capacity(*argc);
-                for _ in 0..*argc {
-                    let value = self.pop_stack()?;
-                    args.push(value);
-                }
-                args.reverse();
+                let args = self.pop_call_args(*argc)?;
                 let callee = self.pop_stack()?;
                 let value = self.call_value(callee, args, environment)?;
                 self.stack.push(value);
             }
             Instruction::Raise => {
-                let exception = self.pop_stack()?;
-                let mut context = VmCallContext {
-                    runtime: self,
-                    environment,
-                };
-                return Err(exception.to_raised_runtime_error(&mut context)?.into());
+                return self.raise_from_stack(environment);
             }
             Instruction::ResumeUnwind => {
                 let reason = self

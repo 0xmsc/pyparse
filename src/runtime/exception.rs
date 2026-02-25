@@ -1,3 +1,9 @@
+//! Built-in exception type/instance runtime objects.
+//!
+//! The runtime models exception classes as callable objects that construct
+//! `ExceptionInstanceObject` values. Raising stores a normalized
+//! `RaisedException` for backend-agnostic unwinding.
+
 use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;

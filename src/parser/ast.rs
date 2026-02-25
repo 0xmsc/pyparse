@@ -1,3 +1,8 @@
+//! Shared syntax tree used by all execution backends.
+//!
+//! The parser builds these nodes once, then the interpreter walks them directly
+//! while the VM lowers them into bytecode.
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Integer(i64),
@@ -72,6 +77,11 @@ pub enum Statement {
     Expr(Expression),
 }
 
+/// Assignment target forms accepted by the parser.
+///
+/// Note: `Index` currently stores only a base variable name (`name[index]`), not
+/// an arbitrary expression (`expr[index] = value`). This matches the parser's
+/// current assignment-target restriction.
 #[derive(Debug, PartialEq, Clone)]
 pub enum AssignTarget {
     Name(String),

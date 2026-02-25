@@ -1,3 +1,8 @@
+//! Runtime dictionary object with Python-like key semantics.
+//!
+//! Storage preserves insertion order (`entries`) while `buckets` accelerates
+//! lookup by hash. Bucket collisions are resolved by checking key equality.
+
 use crate::runtime::error::RuntimeError;
 use crate::runtime::method::bound_method;
 use crate::runtime::object::{CallContext, ObjectRef, RuntimeObject};
@@ -36,17 +41,16 @@ impl DictObject {
         self.entries.len()
     }
 
-    fn candidate_indices(&self, hash: i64) -> Vec<usize> {
-        self.buckets.get(&hash).cloned().unwrap_or_default()
-    }
-
     fn find_index(
         &self,
         context: &mut dyn CallContext,
         hash: i64,
         key: &Value,
     ) -> Result<Option<usize>, RuntimeError> {
-        for index in self.candidate_indices(hash) {
+        let Some(indices) = self.buckets.get(&hash) else {
+            return Ok(None);
+        };
+        for &index in indices {
             let entry = self.entries.get(index).expect("bucket index must be valid");
             if entry.key.key_equals(context, key)? {
                 return Ok(Some(index));
@@ -75,6 +79,8 @@ impl DictObject {
         key: Value,
         value: Value,
     ) -> Result<(), RuntimeError> {
+        // Hash first, then confirm equality inside the collision bucket to
+        // preserve Python-like key aliasing (e.g. `True` and `1`).
         let hash = key.hash_key(context)?;
         if let Some(index) = self.find_index(context, hash, &key)? {
             self.entries[index].value = value;
@@ -162,7 +168,7 @@ fn with_dict<R>(receiver: &ObjectRef, f: impl FnOnce(&DictObject) -> R) -> R {
     let dict = object
         .as_any()
         .downcast_ref::<DictObject>()
-        .expect("dict get_attribute receiver must be DictObject");
+        .expect("dict helper receiver must be DictObject");
     f(dict)
 }
 
@@ -171,7 +177,7 @@ fn with_dict_mut<R>(receiver: &ObjectRef, f: impl FnOnce(&mut DictObject) -> R) 
     let dict = object
         .as_any_mut()
         .downcast_mut::<DictObject>()
-        .expect("dict get_attribute receiver must be DictObject");
+        .expect("dict helper receiver must be DictObject");
     f(dict)
 }
 

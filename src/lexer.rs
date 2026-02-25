@@ -15,12 +15,17 @@ enum StepOutcome<'a> {
     Continue,
 }
 
+/// Stateful lexer for the Python-like frontend.
+///
+/// `next_token` is the primary API. The `Iterator` impl is a convenience layer
+/// and stops after yielding the first `EOF` token (or the first error).
 pub struct Lexer<'a> {
     input: &'a str,
     pos: usize,
     indent_stack: Vec<usize>,
     pending_tokens: Vec<Token<'a>>,
     state: LexerState,
+    finished: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -31,6 +36,7 @@ impl<'a> Lexer<'a> {
             indent_stack: vec![0],
             pending_tokens: Vec::new(),
             state: LexerState::LineBegin,
+            finished: false,
         }
     }
 
@@ -344,9 +350,21 @@ impl<'a> Iterator for Lexer<'a> {
     type Item = LexResult<Token<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
         match self.next_token() {
-            Ok(token) => Some(Ok(token)),
-            Err(e) => Some(Err(e)),
+            Ok(token) => {
+                if matches!(token.kind, TokenKind::EOF) {
+                    self.finished = true;
+                }
+                Some(Ok(token))
+            }
+            Err(e) => {
+                self.finished = true;
+                Some(Err(e))
+            }
         }
     }
 }
@@ -513,6 +531,21 @@ mod tests {
         ];
 
         assert_eq!(kinds, expected);
+    }
+
+    #[test]
+    fn iterator_stops_after_eof() {
+        let mut lexer = Lexer::new("x = 1\n");
+        loop {
+            let token = lexer
+                .next()
+                .expect("iterator should yield tokens through EOF")
+                .expect("lexing should succeed");
+            if matches!(token.kind, TokenKind::EOF) {
+                break;
+            }
+        }
+        assert!(lexer.next().is_none());
     }
 
     #[test]

@@ -260,6 +260,8 @@ impl Value {
         }
 
         if let Some((has_eq, has_hash)) = instance_hash_policy(self) {
+            // Match Python's common rule: defining equality without a matching
+            // hash disables hashing for instances of that class.
             if has_hash {
                 return call_hash_method(self, context);
             }
@@ -517,6 +519,8 @@ fn expect_bool_return(operation: &str, value: &Value) -> Result<bool, RuntimeErr
 }
 
 fn numeric_key_value(value: &Value) -> Option<i64> {
+    // `bool` is a subclass of `int` in Python, so dict hashing/equality must
+    // treat `True == 1` and `False == 0`.
     if let Some(boolean) = value.as_bool() {
         return Some(if boolean { 1 } else { 0 });
     }
@@ -553,6 +557,8 @@ fn instance_hash_policy(value: &Value) -> Option<(bool, bool)> {
         .as_any()
         .downcast_ref::<ClassObject>()
         .expect("instance class must be ClassObject");
+    // Return just the policy bits so callers can apply backend-independent
+    // hashing rules without keeping borrows of the class object alive.
     Some((class.has_method("__eq__"), class.has_method("__hash__")))
 }
 
